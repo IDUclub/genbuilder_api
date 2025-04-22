@@ -1,0 +1,13 @@
+fastapi
+pydantic
+geojson-pydantic
+starlette
+uvicorn
+aiohttp
+IDU-config
+loguru
+Pillow
+numpy
+geopandas
+opencv-python-headless
+python-multipart

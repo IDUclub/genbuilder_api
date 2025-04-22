@@ -1,0 +1,14 @@
+*.ipynb
+__pycache__/
+/__pycache__
+__pycache__
+/.venv
+*.pkl
+/.vscode
+/.idea
+/venv
+.env.*
+/.vs
+gpu_access
+*Identifier
+*.log
