@@ -7,6 +7,8 @@ jobs:
   build:
     runs-on: self-hosted
     steps:
+      - name: Set current date as env variable
+        run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_ENV
       - name: checkout
         uses: actions/checkout@v4
       - name: copy_keys
@@ -18,9 +20,9 @@ jobs:
           ENV_PATH: ${{secrets.ENV_PATH}}
         run: cp "$ENV_PATH"/.env.development ./
       - name: build
-        run: docker build -t "$IMAGE_NAME":"$(date +'%Y-%m-%dT%H-%M-%S')" .
+        run: docker build -t "$IMAGE_NAME":"$NOW" .
       - name: push_to_registry
-        run: docker push "$IMAGE_NAME"
+        run: docker push "$IMAGE_NAME":"$NOW"
   stop_container:
     runs-on: self-hosted
     needs: build
@@ -32,4 +34,4 @@ jobs:
     needs: [build, stop_container]
     steps:
       - name: run
-        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME"
+        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
