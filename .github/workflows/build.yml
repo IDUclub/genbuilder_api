@@ -1,7 +1,7 @@
 name: build
 on: workflow_dispatch
 env:
-  IMAGE_NAME: ${{secrets.REGISTRY}}/genbuilder:"$(date +'%Y-%m-%dT%H-%M-%S')"
+  IMAGE_NAME: ${{secrets.REGISTRY}}/genbuilder
   CONTAINER_NAME: genbuilder_api
 jobs:
   build:
@@ -18,7 +18,7 @@ jobs:
           ENV_PATH: ${{secrets.ENV_PATH}}
         run: cp "$ENV_PATH"/.env.development ./
       - name: build
-        run: docker build -t "$IMAGE_NAME" .
+        run: docker build -t "$IMAGE_NAME":"$(date +'%Y-%m-%dT%H-%M-%S')" .
       - name: push_to_registry
         run: docker push "$IMAGE_NAME"
   stop_container:
