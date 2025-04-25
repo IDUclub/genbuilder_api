@@ -1,0 +1,35 @@
+name: build
+on: workflow_dispatch
+env:
+  IMAGE_NAME: ${{secrets.REGISTRY}}/genbuilder:"NOW=$(date +'%Y-%m-%dT%H:%M:%S')"
+  CONTAINER_NAME: genbuilder_api
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: copy_keys
+        env:
+          KEYS_PATH: ${{secrets.KEYS_PATH}}
+        run: cp "$KEYS_PATH" ./app/
+      - name: copy_env
+        env:
+          ENV_PATH: ${{secrets.ENV_PATH}}
+        run: cp "$ENV_PATH"/.env.development ./
+      - name: build
+        run: docker build -t "$IMAGE_NAME" .
+      - name: push_to_registry
+        run: docker push "$IMAGE_NAME"
+  stop_container:
+    runs-on: self-hosted
+    steps:
+      - name: stop_container
+        run: docker rm -f "$CONTAINER_NAME"
+  run_container:
+    runs-on: self-hosted
+    needs: build
+    if: always()
+    steps:
+      - name: run
+        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME"
