@@ -7,9 +7,11 @@ env:
 jobs:
   build:
     runs-on: self-hosted
+    outputs:
+      now: ${{steps.build.outputs.now}}
     steps:
       - name: Set current date as env variable
-        run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_ENV
+        run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_OUTPUT
       - name: checkout
         uses: actions/checkout@v4
       - name: copy_keys
@@ -34,7 +36,7 @@ jobs:
     runs-on: self-hosted
     needs: [build, stop_container]
     env:
-      NOW: ${{needs.build.env.NOW}}
+      NOW: ${{needs.build.outputs.now}}
     steps:
       - name: run
         run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
