@@ -42,9 +42,8 @@ jobs:
     needs: [build, stop_container]
     env:
       NOW: ${{needs.build.outputs.now}}
+      IMAGE: "$IMAGE_NAME":"$NOW"
     steps:
-      - name: set_image_var
-        run: export IMAGE="$IMAGE_NAME":"$NOW"
       - name: run
 #        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
         run: docker compose -f docker-compose.actions.yml up -d
