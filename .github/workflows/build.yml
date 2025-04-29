@@ -42,8 +42,9 @@ jobs:
     needs: [build, stop_container]
     env:
       NOW: ${{needs.build.outputs.now}}
-      IMAGE: "$IMAGE_NAME":"$NOW"
     steps:
+      - name: set env
+        run: echo "IMAGE=$IMAGE_NAME:$NOW" >> $GITHUB_ENV
       - name: run
 #        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
         run: docker compose -f docker-compose.actions.yml up -d
