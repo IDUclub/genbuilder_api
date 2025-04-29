@@ -43,5 +43,8 @@ jobs:
     env:
       NOW: ${{needs.build.outputs.now}}
     steps:
+      - name: set_image_var
+        run: export IMAGE= "$IMAGE_NAME":"$NOW"
       - name: run
-        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
+#        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
+        run: docker compose -f  docker-compose.ations.yml up -d

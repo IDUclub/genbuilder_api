@@ -1,0 +1,10 @@
+services:
+  genbuilder:
+#    build:
+#      context: .
+#      dockerfile: Dockerfile
+    image: ${IMAGE}
+    ports:
+      - "8200:8000"
+    env_file:
+      - .env.development
