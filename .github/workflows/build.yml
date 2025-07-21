@@ -6,7 +6,7 @@ env:
   
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: 46_runner
     outputs:
       now: ${{steps.date.outputs.NOW}}
     steps:
@@ -32,13 +32,13 @@ jobs:
           NOW: ${{steps.date.outputs.now}}
         run: docker push "$IMAGE_NAME":"$NOW"
   stop_container:
-    runs-on: self-hosted
+    runs-on: 46_runner
     needs: build
     steps:
       - name: stop_container
         run: docker rm -f "$CONTAINER_NAME"
   run_container:
-    runs-on: self-hosted
+    runs-on: 46_runner
     needs: [build, stop_container]
     env:
       NOW: ${{needs.build.outputs.now}}
