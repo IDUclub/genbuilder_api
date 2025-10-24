@@ -1,13 +1,14 @@
+from __future__ import annotations
+
 from loguru import logger
-import pandas as pd
+from typing import Any, Dict, Optional
 import aiohttp
-import os
 import ssl
-from io import BytesIO
-from PIL import Image
+
 from iduconfig import Config
 from app.api.api_error_handler import APIHandler
 from app.dependencies import config
+
 
 class GenbuilderInference:
     def __init__(self, config: Config):
@@ -15,8 +16,8 @@ class GenbuilderInference:
         self.client_cert = config.get("GPU_CLIENT_CERTIFICATE")
         self.client_key = config.get("GPU_CLIENT_KEY")
         self.ca_cert = config.get("GPU_CERTIFICATE")
-        self.session = None
-        self.handler = None
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.handler: Optional[APIHandler] = None
         self.config = config
 
     async def init(self):
@@ -32,55 +33,43 @@ class GenbuilderInference:
             self.session = None
             logger.info("GenbuilderInference session closed.")
 
-    @staticmethod
-    def pil_to_buffer(img: Image.Image, fmt="PNG"):
-        buf = BytesIO()
-        img.save(buf, format=fmt)
-        buf.seek(0)
-        return buf
-    
-    async def generate(self,
-                    prompt: str,
-                    image: Image.Image,
-                    mask: Image.Image,
-                    negative_prompt: str = "",
-                    num_steps: int = 20,
-                    guidance_scale: float = 7.5
-                    ):
+    async def generate_centroids(
+        self,
+        *,
+        feature: Dict[str, Any],
+        zone_label: str,
+        infer_params: Optional[Dict[str, Any]] = None,
+        la_target: float,          
+        floors_avg: float,        
+    ) -> Dict[str, Any]:
+        if self.session is None or self.handler is None:
+            await self.init()
 
-        api_url = self.url
-        logger.info(f"Sending inpainting request to API: {api_url}")
+        endpoint = self.url.rstrip("/") + "/centroids"
 
-        form = aiohttp.FormData()
-        form.add_field("prompt", prompt)
-        form.add_field("negative_prompt", negative_prompt)
-        form.add_field("num_steps", str(num_steps))
-        form.add_field("guidance_scale", str(guidance_scale))
+        if infer_params is None:
+            infer_params = {"slots": 1, "knn": 1, "e_thr": 0.0, "il_thr": 0.0, "sv1_thr": 0.0}
 
-        img_buf = genbuilder_inference.pil_to_buffer(image, fmt="PNG")
-        form.add_field(
-            name="image",
-            value=img_buf,
-            filename="base.png",
-            content_type="image/png",
-        )
-
-        mask_buf = genbuilder_inference.pil_to_buffer(mask, fmt="PNG")
-        form.add_field(
-            name="mask",
-            value=mask_buf,
-            filename="mask.png",
-            content_type="image/png",
-        )
+        payload = {
+            "zone_label": zone_label,
+            "feature": feature,
+            "infer_params": infer_params,
+            "la_target": la_target,         
+            "floors_avg": floors_avg,       
+        }
 
         response = await self.handler.request(
             method="POST",
-            url=api_url,
+            url=endpoint,
             session=self.session,
-            data=form,
-            expect_json=False
+            json=payload,
+            expect_json=True,
         )
-        logger.info("Inpainting response received.")
-        return Image.open(BytesIO(response))
+        return response
+
+    @staticmethod
+    def to_feature_collection(resp: Dict[str, Any]) -> Dict[str, Any]:
+        return {"type": "FeatureCollection", "features": resp.get("features", [])}
+
 
 genbuilder_inference = GenbuilderInference(config)

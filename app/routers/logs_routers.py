@@ -5,11 +5,8 @@ from app.logic.logs_logic import create_temp_log_copy, clear_log_file, cleanup_t
 
 logs_router = APIRouter()
 
-@logs_router.get("/logs", summary="Получить файл логов приложения")
+@logs_router.get("/logs", summary="Get logs")
 async def get_logs():
-    """
-    Отдает файл логов.
-    """
     temp_file, original_filename = create_temp_log_copy()
     return FileResponse(
         path=temp_file,
@@ -18,9 +15,6 @@ async def get_logs():
         background=BackgroundTask(cleanup_temp_file, temp_file)
     )
 
-@logs_router.delete("/logs", summary="Удалить содержимое файла логов приложения")
+@logs_router.delete("/logs", summary="Remove logs")
 async def clear_logs():
-    """
-    Очищает содержимое файла логов.
-    """
     return clear_log_file()

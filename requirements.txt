@@ -6,8 +6,9 @@ uvicorn
 aiohttp
 IDU-config
 loguru
-Pillow
 numpy
 geopandas
-opencv-python-headless
-python-multipart
+pandas
+shapely
+scipy
+scikit-image
