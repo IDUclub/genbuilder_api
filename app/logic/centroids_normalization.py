@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
+
 import geopandas as gpd
-from shapely.geometry import (
-    Point, Polygon, MultiPolygon, LineString, MultiLineString
-)
+from shapely.geometry import (LineString, MultiLineString, MultiPolygon, Point,
+                              Polygon)
 from shapely.ops import unary_union
 
 
@@ -17,7 +17,7 @@ class Snapper:
         - `ring2`: the zone between `ring2_inner` and `ring2_outer` meters inward.
         - `midline`: the intersection of `boundary(buffer(-mid_offset))` with `ring2`.
 
-    The result provides a median alignment curve (midline) representing an outer border within a block. 
+    The result provides a median alignment curve (midline) representing an outer border within a block.
     Centroids located within ring1 or ring2 are snapped to the nearest point on this midline.
 
     **Assumptions:**
@@ -31,10 +31,11 @@ class Snapper:
         - `ring2_outer` (float): outer distance of the second ring (meters).
         - `mid_offset` (float): offset distance used to generate the median line (meters).
     """
-    ring1_width: float = 10.0   
-    ring2_inner: float = 10.0  
+
+    ring1_width: float = 10.0
+    ring2_inner: float = 10.0
     ring2_outer: float = 30.0
-    mid_offset: float = 20.0    
+    mid_offset: float = 20.0
 
     @staticmethod
     def _lines_of(geom) -> List[LineString]:
@@ -47,7 +48,9 @@ class Snapper:
         return []
 
     @staticmethod
-    def _nearest_on_lines(lines: List[LineString], p: Point) -> Tuple[int, Point, float]:
+    def _nearest_on_lines(
+        lines: List[LineString], p: Point
+    ) -> Tuple[int, Point, float]:
         best_i = -1
         best_q = None
         best_d = float("inf")
@@ -73,7 +76,11 @@ class Snapper:
 
     def _build_rings(
         self, block_geom: Union[Polygon, MultiPolygon]
-    ) -> Tuple[Union[Polygon, MultiPolygon], Union[Polygon, MultiPolygon], Union[LineString, MultiLineString]]:
+    ) -> Tuple[
+        Union[Polygon, MultiPolygon],
+        Union[Polygon, MultiPolygon],
+        Union[LineString, MultiLineString],
+    ]:
 
         if block_geom is None or block_geom.is_empty:
             return Polygon(), Polygon(), LineString()
@@ -81,7 +88,11 @@ class Snapper:
         block = block_geom.buffer(0)
 
         inner_r1 = self._safe_buffer(block, -max(self.ring1_width, 0.0))
-        ring1 = block if (inner_r1 is None or inner_r1.is_empty) else block.difference(inner_r1)
+        ring1 = (
+            block
+            if (inner_r1 is None or inner_r1.is_empty)
+            else block.difference(inner_r1)
+        )
 
         inner_in = self._safe_buffer(block, -max(self.ring2_inner, 0.0))
         inner_out = self._safe_buffer(block, -max(self.ring2_outer, 0.0))
@@ -110,7 +121,11 @@ class Snapper:
     ) -> Dict[str, object]:
 
         if centroids.empty:
-            return {"centroids": centroids.copy(), "midlines": gpd.GeoSeries([], crs=blocks.crs), "midline": LineString()}
+            return {
+                "centroids": centroids.copy(),
+                "midlines": gpd.GeoSeries([], crs=blocks.crs),
+                "midline": LineString(),
+            }
 
         blocks_gdf = blocks.copy()
         cents = centroids.copy()
@@ -124,13 +139,29 @@ class Snapper:
             blocks_gdf[block_id_col] = blocks_gdf.index.astype("int64")
 
         if block_id_col not in cents.columns:
-            joined = gpd.sjoin(cents, blocks_gdf[[block_id_col, "geometry"]], predicate="within", how="left")
+            joined = gpd.sjoin(
+                cents,
+                blocks_gdf[[block_id_col, "geometry"]],
+                predicate="within",
+                how="left",
+            )
             if joined[block_id_col].isna().all():
-                joined = gpd.sjoin(cents, blocks_gdf[[block_id_col, "geometry"]], predicate="intersects", how="left")
-            cents = joined.drop(columns=[c for c in joined.columns if c.startswith("index_")], errors="ignore")
+                joined = gpd.sjoin(
+                    cents,
+                    blocks_gdf[[block_id_col, "geometry"]],
+                    predicate="intersects",
+                    how="left",
+                )
+            cents = joined.drop(
+                columns=[c for c in joined.columns if c.startswith("index_")],
+                errors="ignore",
+            )
 
         block_geoms: Dict[object, Union[Polygon, MultiPolygon]] = dict(
-            zip(blocks_gdf[block_id_col].values.tolist(), blocks_gdf.geometry.values.tolist())
+            zip(
+                blocks_gdf[block_id_col].values.tolist(),
+                blocks_gdf.geometry.values.tolist(),
+            )
         )
         rings_cache: Dict[object, Tuple[object, object, object]] = {}
         midline_items: List[Tuple[object, Union[LineString, MultiLineString]]] = []
@@ -167,7 +198,11 @@ class Snapper:
                     in_r1 = ring1.contains(p) or ring1.touches(p)
                     in_r2 = ring2.contains(p) or ring2.touches(p)
                     if in_r1 or in_r2:
-                        status = "first" if (in_r1 and not in_r2) else ("second" if in_r2 else "first")
+                        status = (
+                            "first"
+                            if (in_r1 and not in_r2)
+                            else ("second" if in_r2 else "first")
+                        )
                         li, q_on, _ = self._nearest_on_lines(lines, p)
                         if li >= 0:
                             q = q_on
@@ -189,8 +224,9 @@ class Snapper:
 
         return {
             "centroids": snapped,
-            "midlines": midlines,   
-            "midline": union_mid,   
+            "midlines": midlines,
+            "midline": union_mid,
         }
-    
+
+
 snapper = Snapper()

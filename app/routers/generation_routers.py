@@ -1,46 +1,47 @@
 # app/routers/generation_routers.py
-from fastapi import APIRouter, HTTPException, Body
-from app.schema.dto import ScenarioRequest, TerritoryRequest, PIPELINE_EXAMPLE
+from fastapi import APIRouter, Body, HTTPException
+
 from app.logic.generation import builder
+from app.schema.dto import PIPELINE_EXAMPLE, ScenarioRequest, TerritoryRequest
 
 generation_router = APIRouter()
 
+
 @generation_router.post(
-    f"/generate/by_scenario",
-    summary="Generate buildings for target scenario"
+    f"/generate/by_scenario", summary="Generate buildings for target scenario"
 )
 async def pipeline_route(
     payload: ScenarioRequest = Body(
         ...,
         description="Body for request",
         examples={
-            "scenario_id":198, 
-            "functional_zone_types":["residential"], 
-            "targets_by_zone": {
-                "residential": {"la": 20000, "floors_avg": 12}
-            },
+            "scenario_id": 198,
+            "functional_zone_types": ["residential"],
+            "targets_by_zone": {"residential": {"la": 20000, "floors_avg": 12}},
             "params": {
                 "infer_knn": 8,
                 "infer_e_thr": 0.8,
                 "infer_il_thr": 0.5,
                 "infer_sv1_thr": 0.5,
                 "infer_slots": 5000,
-            }
             },
+        },
     )
 ):
     try:
-        return await builder.run(scenario_id=payload.scenario_id,
-                                functional_zone_types=payload.functional_zone_types,
-                                targets_by_zone=payload.targets_by_zone, 
-                                infer_params=payload.params)
-                         
+        return await builder.run(
+            scenario_id=payload.scenario_id,
+            functional_zone_types=payload.functional_zone_types,
+            targets_by_zone=payload.targets_by_zone,
+            infer_params=payload.params,
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
 
+
 @generation_router.post(
-    "/generate/by_territory",
-    summary="Generate buildings for target territories"
+    "/generate/by_territory", summary="Generate buildings for target territories"
 )
 async def pipeline_route(
     payload: TerritoryRequest = Body(
@@ -55,9 +56,11 @@ async def pipeline_route(
     )
 ):
     try:
-        return await builder.run(blocks=payload.blocks, 
-                                targets_by_zone=payload.targets_by_zone, 
-                                infer_params=payload.params)
-                         
+        return await builder.run(
+            blocks=payload.blocks,
+            targets_by_zone=payload.targets_by_zone,
+            infer_params=payload.params,
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")

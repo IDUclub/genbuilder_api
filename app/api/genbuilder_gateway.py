@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from loguru import logger
-from typing import Any, Dict, Optional
-import aiohttp
 import ssl
+from typing import Any, Dict, Optional
 
+import aiohttp
 from iduconfig import Config
+from loguru import logger
+
 from app.api.api_error_handler import APIHandler
 from app.dependencies import config
 
@@ -39,8 +40,8 @@ class GenbuilderInference:
         feature: Dict[str, Any],
         zone_label: str,
         infer_params: Optional[Dict[str, Any]] = None,
-        la_target: float,          
-        floors_avg: float,        
+        la_target: float,
+        floors_avg: float,
     ) -> Dict[str, Any]:
         if self.session is None or self.handler is None:
             await self.init()
@@ -48,14 +49,20 @@ class GenbuilderInference:
         endpoint = self.url.rstrip("/") + "/centroids"
 
         if infer_params is None:
-            infer_params = {"slots": 1, "knn": 1, "e_thr": 0.0, "il_thr": 0.0, "sv1_thr": 0.0}
+            infer_params = {
+                "slots": 1,
+                "knn": 1,
+                "e_thr": 0.0,
+                "il_thr": 0.0,
+                "sv1_thr": 0.0,
+            }
 
         payload = {
             "zone_label": zone_label,
             "feature": feature,
             "infer_params": infer_params,
-            "la_target": la_target,         
-            "floors_avg": floors_avg,       
+            "la_target": la_target,
+            "floors_avg": floors_avg,
         }
 
         response = await self.handler.request(

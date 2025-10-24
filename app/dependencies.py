@@ -1,4 +1,5 @@
 from iduconfig import Config
+
 from app.logic.logger_setup import setup_logger
 
 config = Config()

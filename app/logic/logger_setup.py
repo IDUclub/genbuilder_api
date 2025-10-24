@@ -1,6 +1,8 @@
 import sys
-from loguru import logger
+
 from iduconfig import Config
+from loguru import logger
+
 
 def setup_logger(config: Config, log_level: str = "INFO") -> None:
     logger.remove()

@@ -1,12 +1,13 @@
 import aiohttp
+import geopandas as gpd
+from iduconfig import Config
 from loguru import logger
 from shapely.geometry import shape
-import geopandas as gpd
 
-from iduconfig import Config
-from app.exceptions.http_exception_wrapper import http_exception
 from app.api.api_error_handler import APIHandler
 from app.dependencies import config
+from app.exceptions.http_exception_wrapper import http_exception
+
 
 class UrbanDBAPI:
     def __init__(self, config: Config):
@@ -26,16 +27,16 @@ class UrbanDBAPI:
             logger.info("UrbanDBAPI session closed.")
 
     async def get_territories_for_buildings(self, scenario_id: int):
-        api_url = (
-            f"{self.url}v1/scenarios/{scenario_id}/functional_zones?year=2024&source=OSM"
-        )
+        api_url = f"{self.url}v1/scenarios/{scenario_id}/functional_zones?year=2024&source=OSM"
         logger.info(f"Fetching functional zones from API: {api_url}")
 
         json_data = await self.handler.request("GET", api_url, session=self.session)
         features = json_data.get("features", [])
         if not features:
             logger.warning(f"No functional zones found for scenario {scenario_id}")
-            return gpd.GeoDataFrame(columns=["name", "functional_zone_id", "geometry"], crs=4326)
+            return gpd.GeoDataFrame(
+                columns=["name", "functional_zone_id", "geometry"], crs=4326
+            )
 
         records = []
         for feature in features:

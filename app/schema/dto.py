@@ -1,7 +1,9 @@
 from __future__ import annotations
-from typing import Dict, Optional, List, Union, Any
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+
+from typing import Any, Dict, List, Optional, Union
+
 from geojson_pydantic import Feature, FeatureCollection, Polygon
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
 
@@ -9,16 +11,20 @@ from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
 class BlockProperties(BaseModel):
     model_config = ConfigDict(extra="allow")
     block_id: Union[int, str] = Field(default=None, description="Block identifier")
-    zone: str = Field(default=None, description="Zone label (if already provided in properties)")
+    zone: str = Field(
+        default=None, description="Zone label (if already provided in properties)"
+    )
 
 
 class BlockFeature(Feature[Polygon, BlockProperties]):
     """GeoJSON Feature representing an urban block (Polygon)."""
+
     pass
 
 
 class BlockFeatureCollection(FeatureCollection[BlockFeature]):
     """GeoJSON FeatureCollection of block polygons."""
+
     pass
 
 
@@ -130,7 +136,9 @@ class TerritoryRequest(BaseModel):
     def _ensure_polygons(self):
         for f in self.blocks.features:
             if getattr(f, "geometry", None) is None or f.geometry.type != "Polygon":
-                raise ValueError("Each Feature in `blocks` must have geometry of type Polygon")
+                raise ValueError(
+                    "Each Feature in `blocks` must have geometry of type Polygon"
+                )
         return self
 
 

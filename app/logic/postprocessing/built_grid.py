@@ -1,12 +1,14 @@
 from __future__ import annotations
+
+import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-import warnings
+import geopandas as gpd
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Polygon, MultiPolygon
+from shapely.geometry import MultiPolygon, Polygon
+
 
 @dataclass
 class GridGenerator:
@@ -14,9 +16,9 @@ class GridGenerator:
     Cell tagging based on isolines.
 
     **Workflow:**
-      1) Convert isoline geometries into buffered “bands” (via `buffer`), 
+      1) Convert isoline geometries into buffered “bands” (via `buffer`),
          then evaluate their nesting depth (`iso_level`).
-      2) Construct “inner ring” polygons from closed isoline loops 
+      2) Construct “inner ring” polygons from closed isoline loops
          and compute their nesting (`fill_level`).
       3) Tag grid cells that intersect isoline bands or whose centroids fall
          inside inner polygons.
@@ -31,19 +33,19 @@ class GridGenerator:
 
     **Output:**
         The same grid GeoDataFrame with additional columns:
-        - `cell_id`: int — unique cell identifier  
-        - `iso_pids`: list[int] — IDs of intersected isoline bands  
-        - `inside_iso_raw`: bool — cell intersects a band or inner polygon  
-        - `inside_iso_closed`: bool — adjusted using the “3-side rule”  
-        - `iso_level_raw`: float — level derived from isoline bands or inner polygons  
-        - `iso_level`: float — final level after propagation  
+        - `cell_id`: int — unique cell identifier
+        - `iso_pids`: list[int] — IDs of intersected isoline bands
+        - `inside_iso_raw`: bool — cell intersects a band or inner polygon
+        - `inside_iso_closed`: bool — adjusted using the “3-side rule”
+        - `iso_level_raw`: float — level derived from isoline bands or inner polygons
+        - `iso_level`: float — final level after propagation
         - `fill_level`: float — nesting level of inner polygons, if any
 
     **Parameters:**
-        - `iso_buffer_m` (float): buffer radius (in meters) to expand isoline lines into bands  
-        - `edge_share_frac` (float): minimum shared edge length fraction for detecting neighbors  
-        - `auto_reproject` (bool): automatically reproject isolines to the grid CRS  
-        - `fallback_epsg` (int): CRS assigned to the grid if undefined  
+        - `iso_buffer_m` (float): buffer radius (in meters) to expand isoline lines into bands
+        - `edge_share_frac` (float): minimum shared edge length fraction for detecting neighbors
+        - `auto_reproject` (bool): automatically reproject isolines to the grid CRS
+        - `fallback_epsg` (int): CRS assigned to the grid if undefined
         - `verbose` (bool): print log information during processing
 
     **Notes:**
@@ -51,6 +53,7 @@ class GridGenerator:
         - Suitable for generating isoline-based zoning masks or multi-level heatmaps over regular grids.
         - The “3-side rule” ensures morphological continuity along polygon boundaries.
     """
+
     iso_buffer_m: float = 1.0
     edge_share_frac: float = 0.2
     auto_reproject: bool = True
@@ -61,22 +64,28 @@ class GridGenerator:
         self,
         grid_gdf: gpd.GeoDataFrame,
         isolines_gdf: gpd.GeoDataFrame,
-        output_crs: Optional[str | int] = None
+        output_crs: Optional[str | int] = None,
     ) -> gpd.GeoDataFrame:
 
         grid = self._ensure_grid_crs(grid_gdf)
         iso = self._align_isolines_to_grid_crs(isolines_gdf, grid.crs)
 
         iso_polys = self._isolines_to_polys(iso, buffer_m=self.iso_buffer_m)
-        iso_polys["iso_pid"] = pd.to_numeric(iso_polys["iso_pid"], errors="coerce").astype("Int64")
+        iso_polys["iso_pid"] = pd.to_numeric(
+            iso_polys["iso_pid"], errors="coerce"
+        ).astype("Int64")
         iso_polys = gpd.GeoDataFrame(iso_polys, geometry="geometry", crs=iso.crs)
-        iso_polys = self._attach_nesting_level(iso_polys, id_col="iso_pid", out_level_col="iso_level")
+        iso_polys = self._attach_nesting_level(
+            iso_polys, id_col="iso_pid", out_level_col="iso_level"
+        )
 
         iso_fill = self._rings_to_fill_polys(iso)
         if len(iso_fill) > 0:
-            iso_fill = self._attach_nesting_level(iso_fill, id_col="fill_id", out_level_col="fill_level")
+            iso_fill = self._attach_nesting_level(
+                iso_fill, id_col="fill_id", out_level_col="fill_level"
+            )
 
-        grid = grid.reset_index(drop=True) 
+        grid = grid.reset_index(drop=True)
         if "cell_id" in grid.columns:
             grid["cell_id"] = pd.to_numeric(grid["cell_id"], errors="coerce")
             mask_na = grid["cell_id"].isna()
@@ -87,25 +96,47 @@ class GridGenerator:
             grid["cell_id"] = np.arange(len(grid), dtype=int)
         cells = grid[["cell_id", "geometry"]].copy()
 
-        hit = gpd.sjoin(cells, iso_polys[["iso_pid", "iso_level", "geometry"]], predicate="intersects", how="left")
+        hit = gpd.sjoin(
+            cells,
+            iso_polys[["iso_pid", "iso_level", "geometry"]],
+            predicate="intersects",
+            how="left",
+        )
         hit_nonnull = hit[hit["iso_pid"].notna()].copy()
         agg_inter = (
             hit_nonnull.groupby("cell_id", dropna=False)
             .agg(
-                iso_pids=("iso_pid", lambda s: sorted(set(int(x) for x in pd.to_numeric(s, errors="coerce").dropna().tolist()))),
+                iso_pids=(
+                    "iso_pid",
+                    lambda s: sorted(
+                        set(
+                            int(x)
+                            for x in pd.to_numeric(s, errors="coerce").dropna().tolist()
+                        )
+                    ),
+                ),
                 iso_level_raw=("iso_level", "max"),
             )
             .reset_index()
         )
         grid = grid.merge(agg_inter, on="cell_id", how="left")
-        grid["iso_pids"] = grid["iso_pids"].apply(lambda v: v if isinstance(v, list) else [])
+        grid["iso_pids"] = grid["iso_pids"].apply(
+            lambda v: v if isinstance(v, list) else []
+        )
         grid["inside_iso_raw"] = grid["iso_pids"].apply(lambda v: len(v) > 0)
-        grid["iso_level_raw"] = pd.to_numeric(grid["iso_level_raw"], errors="coerce").astype("Float64")
+        grid["iso_level_raw"] = pd.to_numeric(
+            grid["iso_level_raw"], errors="coerce"
+        ).astype("Float64")
 
         if len(iso_fill) > 0:
             cells_pts = cells.copy()
             cells_pts["geometry"] = grid.geometry.representative_point().values
-            hit_fill = gpd.sjoin(cells_pts, iso_fill[["fill_id", "fill_level", "geometry"]], predicate="within", how="left")
+            hit_fill = gpd.sjoin(
+                cells_pts,
+                iso_fill[["fill_id", "fill_level", "geometry"]],
+                predicate="within",
+                how="left",
+            )
             hit_fill_nonnull = hit_fill[hit_fill["fill_id"].notna()].copy()
             agg_fill = (
                 hit_fill_nonnull.groupby("cell_id", dropna=False)
@@ -132,8 +163,7 @@ class GridGenerator:
                     promote.append(rid)
 
         grid["inside_iso_closed"] = grid.apply(
-            lambda r: bool(r["inside_iso_raw"] or (r["cell_id"] in promote)),
-            axis=1
+            lambda r: bool(r["inside_iso_raw"] or (r["cell_id"] in promote)), axis=1
         )
 
         level_map = dict(zip(grid["cell_id"].values, grid["iso_level_raw"].values))
@@ -150,16 +180,23 @@ class GridGenerator:
 
         grid["iso_level"] = grid["iso_level_raw"]
         need_fill = grid["inside_iso_closed"] & (~grid["inside_iso_raw"])
-        grid.loc[need_fill, "iso_level"] = grid.loc[need_fill, "cell_id"].apply(_neighbor_level_mode)
+        grid.loc[need_fill, "iso_level"] = grid.loc[need_fill, "cell_id"].apply(
+            _neighbor_level_mode
+        )
 
         cols_out = [
-            "cell_id", "geometry",
+            "cell_id",
+            "geometry",
             "iso_pids",
-            "inside_iso_raw", "inside_iso_closed",
-            "iso_level_raw", "iso_level",
+            "inside_iso_raw",
+            "inside_iso_closed",
+            "iso_level_raw",
+            "iso_level",
             "fill_level",
         ]
-        grid_out = gpd.GeoDataFrame(grid[cols_out].copy(), geometry="geometry", crs=grid.crs)
+        grid_out = gpd.GeoDataFrame(
+            grid[cols_out].copy(), geometry="geometry", crs=grid.crs
+        )
 
         if output_crs is not None:
             grid_out = grid_out.to_crs(output_crs)
@@ -180,17 +217,22 @@ class GridGenerator:
         offset_m: float = 20.0,
         output_crs: Optional[str | int] = None,
     ) -> gpd.GeoDataFrame:
-        
+
         from shapely.geometry import box as _box
 
         if blocks_gdf is None or len(blocks_gdf) == 0:
-            return gpd.GeoDataFrame({"block_id": [], "cell_id": []}, geometry=[], crs=self.fallback_epsg)
+            return gpd.GeoDataFrame(
+                {"block_id": [], "cell_id": []}, geometry=[], crs=self.fallback_epsg
+            )
 
         blocks = blocks_gdf.copy()
         blocks = self._ensure_grid_crs(blocks)
         if midlines is not None and self.auto_reproject:
             try:
-                if isinstance(midlines, (gpd.GeoDataFrame, gpd.GeoSeries)) and midlines.crs != blocks.crs:
+                if (
+                    isinstance(midlines, (gpd.GeoDataFrame, gpd.GeoSeries))
+                    and midlines.crs != blocks.crs
+                ):
                     midlines = midlines.to_crs(blocks.crs)
             except Exception:
                 pass
@@ -212,8 +254,8 @@ class GridGenerator:
 
             start_x = np.floor(minx / cell_size_m) * cell_size_m
             start_y = np.floor(miny / cell_size_m) * cell_size_m
-            end_x   = np.ceil(maxx / cell_size_m) * cell_size_m
-            end_y   = np.ceil(maxy / cell_size_m) * cell_size_m
+            end_x = np.ceil(maxx / cell_size_m) * cell_size_m
+            end_y = np.ceil(maxy / cell_size_m) * cell_size_m
 
             clip_area = None
             try:
@@ -247,9 +289,13 @@ class GridGenerator:
                             except Exception:
                                 pass
                     except Exception:
-                        clipped = cell.intersection(geom) 
+                        clipped = cell.intersection(geom)
 
-                    if clipped is not None and (not clipped.is_empty) and clipped.area > 1e-6:
+                    if (
+                        clipped is not None
+                        and (not clipped.is_empty)
+                        and clipped.area > 1e-6
+                    ):
                         out_rows.append({"block_id": bid, "cell_id": cell_id})
                         out_geoms.append(clipped)
                         cell_id += 1
@@ -264,7 +310,9 @@ class GridGenerator:
 
         if self.verbose:
             n_blocks = len(set(grid["block_id"])) if len(grid) else 0
-            print(f"GRID | blocks={n_blocks}, cells={len(grid)}, cell_size={cell_size_m} m, offset={offset_m} m")
+            print(
+                f"GRID | blocks={n_blocks}, cells={len(grid)}, cell_size={cell_size_m} m, offset={offset_m} m"
+            )
 
         return grid
 
@@ -274,7 +322,9 @@ class GridGenerator:
             return grid.set_crs(epsg=self.fallback_epsg, allow_override=True)
         return grid
 
-    def _align_isolines_to_grid_crs(self, iso: gpd.GeoDataFrame, target_crs) -> gpd.GeoDataFrame:
+    def _align_isolines_to_grid_crs(
+        self, iso: gpd.GeoDataFrame, target_crs
+    ) -> gpd.GeoDataFrame:
         if not self.auto_reproject:
             return iso
         if iso.crs != target_crs:
@@ -283,7 +333,9 @@ class GridGenerator:
             return iso.to_crs(target_crs)
         return iso
 
-    def _isolines_to_polys(self, iso_gdf: gpd.GeoDataFrame, buffer_m: float) -> gpd.GeoDataFrame:
+    def _isolines_to_polys(
+        self, iso_gdf: gpd.GeoDataFrame, buffer_m: float
+    ) -> gpd.GeoDataFrame:
 
         iso_gdf = iso_gdf.copy()
         line_mask = iso_gdf.geom_type.isin(["LineString", "MultiLineString"])
@@ -298,18 +350,29 @@ class GridGenerator:
             parts.append(iso_gdf.loc[poly_mask].copy())
 
         out = pd.concat(parts, ignore_index=True) if parts else iso_gdf.copy()
-        if not parts: 
+        if not parts:
             out["geometry"] = out.geometry.buffer(buffer_m)
 
-        out = gpd.GeoDataFrame(out, geometry="geometry", crs=iso_gdf.crs).reset_index(drop=True)
+        out = gpd.GeoDataFrame(out, geometry="geometry", crs=iso_gdf.crs).reset_index(
+            drop=True
+        )
         out["iso_pid"] = np.arange(len(out))
         return out[["iso_pid", "geometry"]]
 
-    def _attach_nesting_level(self, polys: gpd.GeoDataFrame, id_col: str, out_level_col: str) -> gpd.GeoDataFrame:
+    def _attach_nesting_level(
+        self, polys: gpd.GeoDataFrame, id_col: str, out_level_col: str
+    ) -> gpd.GeoDataFrame:
 
         pts = polys[[id_col, "geometry"]].copy()
         pts["geometry"] = pts.geometry.representative_point()
-        pairs = gpd.sjoin(pts, polys[[id_col, "geometry"]], predicate="within", how="left", lsuffix="pt", rsuffix="poly")
+        pairs = gpd.sjoin(
+            pts,
+            polys[[id_col, "geometry"]],
+            predicate="within",
+            how="left",
+            lsuffix="pt",
+            rsuffix="poly",
+        )
         cnt = pairs.groupby(f"{id_col}_pt", dropna=False).size() - 1
         levels = (
             cnt.reset_index()
@@ -340,11 +403,21 @@ class GridGenerator:
                     if getattr(ls, "is_ring", False):
                         geoms.append(Polygon(ls.coords))
         if not geoms:
-            return gpd.GeoDataFrame({"fill_id": [], "geometry": []}, geometry="geometry", crs=iso_gdf.crs)
+            return gpd.GeoDataFrame(
+                {"fill_id": [], "geometry": []}, geometry="geometry", crs=iso_gdf.crs
+            )
 
-        geoms = [g.buffer(0) if isinstance(g, (Polygon, MultiPolygon)) else g for g in geoms]
-        fill = gpd.GeoDataFrame({"geometry": geoms}, geometry="geometry", crs=iso_gdf.crs)
-        fill = fill[~fill.geometry.is_empty & fill.geometry.notna()].copy().reset_index(drop=True)
+        geoms = [
+            g.buffer(0) if isinstance(g, (Polygon, MultiPolygon)) else g for g in geoms
+        ]
+        fill = gpd.GeoDataFrame(
+            {"geometry": geoms}, geometry="geometry", crs=iso_gdf.crs
+        )
+        fill = (
+            fill[~fill.geometry.is_empty & fill.geometry.notna()]
+            .copy()
+            .reset_index(drop=True)
+        )
         fill["fill_id"] = np.arange(len(fill))
         return fill[["fill_id", "geometry"]]
 
@@ -356,9 +429,11 @@ class GridGenerator:
             predicate="touches",
             how="left",
             lsuffix="a",
-            rsuffix="b"
+            rsuffix="b",
         )
-        pairs = pairs[(pairs["cell_id_a"] != pairs["cell_id_b"]) & pairs["cell_id_b"].notna()].copy()
+        pairs = pairs[
+            (pairs["cell_id_a"] != pairs["cell_id_b"]) & pairs["cell_id_b"].notna()
+        ].copy()
         pairs["cell_id_b"] = pairs["cell_id_b"].astype(int)
 
         geom_list = list(grid.geometry.values)
@@ -372,12 +447,16 @@ class GridGenerator:
             length = getattr(inter, "length", 0.0)
             return length >= min(thr_len[ia], thr_len[ib])
 
-        pairs["edge_ok"] = pairs.apply(lambda r: _is_edge_neighbor(int(r["cell_id_a"]), int(r["cell_id_b"])), axis=1)
+        pairs["edge_ok"] = pairs.apply(
+            lambda r: _is_edge_neighbor(int(r["cell_id_a"]), int(r["cell_id_b"])),
+            axis=1,
+        )
         pairs = pairs[pairs["edge_ok"]]
 
         neighbors: Dict[int, List[int]] = {rid: [] for rid in grid["cell_id"].values}
         for ra, rb in pairs[["cell_id_a", "cell_id_b"]].itertuples(index=False):
             neighbors[int(ra)].append(int(rb))
         return neighbors
-    
+
+
 grid_generator = GridGenerator()
