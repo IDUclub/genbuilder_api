@@ -1,7 +1,6 @@
-# app/routers/generation_routers.py
 from fastapi import APIRouter, Body, HTTPException
 
-from app.logic.generation import builder
+from app.dependencies import builder
 from app.schema.dto import PIPELINE_EXAMPLE, ScenarioRequest, TerritoryRequest
 
 generation_router = APIRouter()

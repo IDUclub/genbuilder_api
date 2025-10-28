@@ -55,7 +55,7 @@ class ScenarioRequest(BaseModel):
         json_schema_extra={"examples": [["residential", "business"]]},
     )
 
-    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
+    targets_by_zone: Dict[str, Dict[str, float]] = Field(
         default=None,
         description=(
             "Target indicators by zone, e.g. "
@@ -79,7 +79,7 @@ class ScenarioRequest(BaseModel):
         },
     )
 
-    params: Optional[Dict[str, Any]] = Field(
+    params: Dict[str, Any] = Field(
         default=None,
         description="Inference hyperparameters (as a dictionary)",
         json_schema_extra={
@@ -106,7 +106,7 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
     )
 
-    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
+    targets_by_zone: Dict[str, Dict[str, float]] = Field(
         default=None,
         description=(
             "Target indicators by zone, e.g. "
@@ -130,7 +130,7 @@ class TerritoryRequest(BaseModel):
         },
     )
 
-    params: Optional[Dict[str, Any]] = Field(
+    params: Dict[str, Any] = Field(
         default=None,
         description="Inference hyperparameters (as a dictionary)",
         json_schema_extra={
@@ -148,8 +148,8 @@ class TerritoryRequest(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_polygons(self):
-        for f in self.blocks.features:
-            if getattr(f, "geometry", None) is None or f.geometry.type != "Polygon":
+        for feature in self.blocks.features:
+            if getattr(feature, "geometry", None) is None or feature.geometry.type != "Polygon":
                 raise ValueError(
                     "Each Feature in `blocks` must have geometry of type Polygon"
                 )

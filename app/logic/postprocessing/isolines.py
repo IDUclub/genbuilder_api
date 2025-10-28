@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+from loguru import logger
 
 import geopandas as gpd
 import numpy as np
@@ -115,7 +116,7 @@ class DensityIsolines:
             if self.verbose:
                 vmin = float(np.nanmin(vals_in)) if vals_in.size else float("nan")
                 vmax = float(np.nanmax(vals_in)) if vals_in.size else float("nan")
-                print(
+                logger.debug(
                     f"[zone {zid}] cells_in={int(inside_mask.sum())}, pos_cells={int(finite_pos.size)}, "
                     f"density[min,max]=({vmin:.4g}, {vmax:.4g})"
                 )
@@ -131,7 +132,7 @@ class DensityIsolines:
                     levels = [vmn + 0.5 * (vmx - vmn)]
                 else:
                     if self.verbose:
-                        print("  [skip] нет валидного диапазона плотности для изолиний")
+                        logger.debug("  [skip] нет валидного диапазона плотности для изолиний")
                     continue
 
             lines = self._contours_for_levels(density, xedges, yedges, levels)
@@ -188,7 +189,7 @@ class DensityIsolines:
             gdf_out = gdf_out.to_crs(output_crs)
 
         if self.verbose:
-            print(
+            logger.debug(
                 f"Готово: изолиний={len(gdf_out)} | GRID={self.grid_size_m} м, BANDWIDTH={self.bandwidth_m} м, "
                 f"уровни={self.level_quantiles}, USE_E_WEIGHTS={self.use_e_weights}"
             )
@@ -219,8 +220,8 @@ class DensityIsolines:
                 pgdf = pgdf.set_crs(zgdf.crs, allow_override=True)
 
         if self.verbose:
-            print(f"CRS: zones={zgdf.crs}, points={pgdf.crs}")
-            print(f"Counts: zones={len(zgdf)}, points={len(pgdf)}")
+            logger.debug(f"CRS: zones={zgdf.crs}, points={pgdf.crs}")
+            logger.debug(f"Counts: zones={len(zgdf)}, points={len(pgdf)}")
 
         return zgdf, pgdf
 
@@ -378,6 +379,3 @@ class DensityIsolines:
                 if geom.is_valid and geom.length >= self.min_line_len_m:
                     lines.append((geom, lvl))
         return lines
-
-
-density_isolines = DensityIsolines()

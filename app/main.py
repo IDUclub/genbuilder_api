@@ -2,9 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.genbuilder_gateway import genbuilder_inference
-from app.api.urbandb_api_gateway import urban_db_api
-from app.dependencies import config, setup_logger
+from app.dependencies import config, setup_logger, urban_db_api, genbuilder_inference_api
 from app.routers.generation_routers import generation_router
 from app.routers.logs_routers import logs_router
 
@@ -13,8 +11,8 @@ setup_logger(config)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await genbuilder_inference.init()
-    app.state.genbuilder_inference = genbuilder_inference
+    await genbuilder_inference_api.init()
+    app.state.genbuilder_inference = genbuilder_inference_api
 
     await urban_db_api.init()
     app.state.urban_db_api = urban_db_api

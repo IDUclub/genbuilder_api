@@ -5,7 +5,6 @@ from loguru import logger
 from shapely.geometry import shape
 
 from app.api.api_error_handler import APIHandler
-from app.dependencies import config
 from app.exceptions.http_exception_wrapper import http_exception
 
 
@@ -29,7 +28,7 @@ class UrbanDBAPI:
             logger.info("UrbanDBAPI session closed.")
 
     async def get_territories_for_buildings(self, scenario_id: int):
-        api_url = f"{self.url}v1/scenarios/{scenario_id}/functional_zones?year={self.year}&source={self.source}"
+        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones?year={self.year}&source={self.source}"
         logger.info(f"Fetching functional zones from API: {api_url}")
 
         json_data = await self.handler.request("GET", api_url, session=self.session)
@@ -54,6 +53,3 @@ class UrbanDBAPI:
         zones = gpd.GeoDataFrame(records, geometry="geometry", crs=4326)
         logger.info(f"Zones for scenario {scenario_id} collected: {len(zones)} items.")
         return zones
-
-
-urban_db_api = UrbanDBAPI(config)

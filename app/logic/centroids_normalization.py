@@ -227,6 +227,3 @@ class Snapper:
             "midlines": midlines,
             "midline": union_mid,
         }
-
-
-snapper = Snapper()

@@ -56,5 +56,3 @@ class GenParams:
     zone_id_col: str = "zone_id"
     zone_name_col: str = "zone"
     verbose: bool = True
-
-generation_parameters = GenParams()

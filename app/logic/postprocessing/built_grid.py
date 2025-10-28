@@ -3,11 +3,12 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+from loguru import logger
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Polygon, box as _box
 
 
 @dataclass
@@ -202,7 +203,7 @@ class GridGenerator:
             grid_out = grid_out.to_crs(output_crs)
 
         if self.verbose:
-            print(
+            logger.debug(
                 f"OK | cells={len(grid_out)}, raw True={int(grid_out.inside_iso_raw.sum())}, "
                 f"closed True={int(grid_out.inside_iso_closed.sum())}"
             )
@@ -217,8 +218,6 @@ class GridGenerator:
         offset_m: float = 20.0,
         output_crs: Optional[str | int] = None,
     ) -> gpd.GeoDataFrame:
-
-        from shapely.geometry import box as _box
 
         if blocks_gdf is None or len(blocks_gdf) == 0:
             return gpd.GeoDataFrame(
@@ -310,7 +309,7 @@ class GridGenerator:
 
         if self.verbose:
             n_blocks = len(set(grid["block_id"])) if len(grid) else 0
-            print(
+            logger.debug(
                 f"GRID | blocks={n_blocks}, cells={len(grid)}, cell_size={cell_size_m} m, offset={offset_m} m"
             )
 
@@ -329,7 +328,7 @@ class GridGenerator:
             return iso
         if iso.crs != target_crs:
             if self.verbose:
-                print(f"Reproject isolines: {iso.crs} → {target_crs}")
+                logger.debug(f"Reproject isolines: {iso.crs} → {target_crs}")
             return iso.to_crs(target_crs)
         return iso
 
@@ -457,6 +456,3 @@ class GridGenerator:
         for ra, rb in pairs[["cell_id_a", "cell_id_b"]].itertuples(index=False):
             neighbors[int(ra)].append(int(rb))
         return neighbors
-
-
-grid_generator = GridGenerator()

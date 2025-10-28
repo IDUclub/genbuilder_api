@@ -1,11 +1,13 @@
-from .attributes_calculation import attributes_calculator
-from .buildings_generation import buildings_generator
-from .built_grid import grid_generator
-from .isolines import density_isolines
+from .attributes_calculation import BuildingAttributes
+from .buildings_generation import BuildingGenerator
+from .built_grid import GridGenerator
+from .isolines import DensityIsolines
+from .generation_params import GenParams
 
 __all__ = [
-    "density_isolines",
-    "grid_generator",
-    "buildings_generator",
-    "attributes_calculator",
+    "BuildingAttributes",
+    "BuildingGenerator",
+    "GridGenerator",
+    "DensityIsolines",
+    "GenParams"
 ]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List
-
+from loguru import logger
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -19,13 +19,13 @@ class BuildingAttributes:
     Rules:
       1) For is_living=True:
          floors_count = round(area_m2 / area_per_floor_m2),
-         then clipped to [1, floors_cap(zname)],
-         where floors_cap is taken from targets_by_zone['floors_avg'][zname] (rounded);
+         then clipped to [1, floors_cap(zone_name)],
+         where floors_cap is taken from targets_by_zone['floors_avg'][zone_name] (rounded);
          if missing, `default_zone_max_floor` is used.
       2) Living area: living_area = K * area_m2 * floors_count, with K ∈ [K_min, K_max].
-      3) The target value targets_by_zone['la_target'][zname] is distributed by weights
+      3) The target value targets_by_zone['la_target'][zone_name] is distributed by weights
          proportional to 1 / distance_to_zone_boundary, considering cap_min/cap_max (=K_min/K_max).
-      4) If no target is defined for zname or it is ≤ 0 → living_area=0, K=NaN for all buildings in that zone.
+      4) If no target is defined for zone_name or it is ≤ 0 → living_area=0, K=NaN for all buildings in that zone.
       5) For is_living=False → living_area=0, K=NaN, _alloc_status="non_living → living=0".
 
     Returns:
@@ -71,13 +71,13 @@ class BuildingAttributes:
             )
         is_living = buildings["is_living"].astype(bool)
 
-        zid_col, zname_col = self._zone_cols(zones)
+        zid_col, zone_name_column = self._zone_cols(zones)
 
         need_zone_join = (
             (zid_col not in buildings.columns)
             or buildings.get(zid_col).isna().any()
-            or (zname_col not in buildings.columns)
-            or buildings.get(zname_col).isna().any()
+            or (zone_name_column not in buildings.columns)
+            or buildings.get(zone_name_column).isna().any()
         )
         if need_zone_join:
             cent = buildings.geometry.representative_point()
@@ -88,22 +88,22 @@ class BuildingAttributes:
                         geometry=cent,
                         crs=buildings.crs,
                     ),
-                    zones[[zid_col, zname_col, "geometry"]],
+                    zones[[zid_col, zone_name_column, "geometry"]],
                     how="left",
                     predicate="within",
                 )
                 .drop_duplicates("_i")
-                .set_index("_i")[[zid_col, zname_col]]
+                .set_index("_i")[[zid_col, zone_name_column]]
             )
             buildings = buildings.drop(
-                columns=[zid_col, zname_col], errors="ignore"
+                columns=[zid_col, zone_name_column], errors="ignore"
             ).join(j, how="left")
 
-        buildings[zname_col] = buildings[zname_col].astype(str).str.lower().str.strip()
+        buildings[zone_name_column] = buildings[zone_name_column].astype(str).str.lower().str.strip()
         buildings["area_m2"] = buildings.geometry.area.astype(float)
 
         buildings["max_floor_zone"] = (
-            buildings[zname_col]
+            buildings[zone_name_column]
             .map(
                 lambda zn: self._safe_int_round(
                     floors_avg_map.get(str(zn), self.default_zone_max_floor)
@@ -142,7 +142,7 @@ class BuildingAttributes:
         buildings["K"] = pd.Series(np.nan, index=buildings.index, dtype="float64")
         buildings["living_area"] = 0.0
 
-        zones[zname_col] = zones[zname_col].astype(str).str.lower().str.strip()
+        zones[zone_name_column] = zones[zone_name_column].astype(str).str.lower().str.strip()
         zones["_boundary"] = zones.geometry.boundary
 
         summary_rows: List[Dict[str, Any]] = []
@@ -151,19 +151,19 @@ class BuildingAttributes:
         if mask_non.any():
             buildings.loc[mask_non, "_alloc_status"] = "non_living → living=0"
 
-        liv = buildings[mask_liv & buildings[zname_col].notna()].copy()
+        liv = buildings[mask_liv & buildings[zone_name_column].notna()].copy()
         if not liv.empty:
-            for zname, sub in liv.groupby(liv[zname_col]):
-                zname_str = str(zname)
-                targ = la_target_map.get(zname_str, np.nan)
-                targ = float(targ) if pd.notna(targ) else np.nan
-                if (not np.isfinite(targ)) or targ <= 0:
+            for zone_name, sub in liv.groupby(liv[zone_name_column]):
+                zone_name_str = str(zone_name)
+                target_args = la_target_map.get(zone_name_str, np.nan)
+                target_args = float(target_args) if pd.notna(target_args) else np.nan
+                if (not np.isfinite(target_args)) or target_args <= 0:
                     buildings.loc[sub.index, "_alloc_status"] = "no_target → living=0"
                     summary_rows.append(
                         {
-                            "zone_name": zname_str,
+                            "zone_name": zone_name_str,
                             "target_requested": (
-                                None if (not np.isfinite(targ)) else float(targ)
+                                None if (not np.isfinite(target_args)) else float(target_args)
                             ),
                             "target_used": 0.0,
                             "cap_min": float(
@@ -192,8 +192,8 @@ class BuildingAttributes:
                 )
                 cap_min_tot = float(cap_min.sum())
                 cap_max_tot = float(cap_max.sum())
-                T = float(np.clip(targ, cap_min_tot, cap_max_tot))
-                Z = zones.loc[zones[zname_col] == zname_str]
+                T = float(np.clip(target_args, cap_min_tot, cap_max_tot))
+                Z = zones.loc[zones[zone_name_column] == zone_name_str]
                 if len(Z) == 0:
                     boundary = unary_union(list(zones["_boundary"].values))
                 else:
@@ -223,8 +223,8 @@ class BuildingAttributes:
 
                 summary_rows.append(
                     {
-                        "zone_name": zname_str,
-                        "target_requested": float(targ),
+                        "zone_name": zone_name_str,
+                        "target_requested": float(target_args),
                         "target_used": float(T),
                         "cap_min": cap_min_tot,
                         "cap_max": cap_max_tot,
@@ -243,7 +243,7 @@ class BuildingAttributes:
                 if len(summary_df) > 0
                 else float("nan")
             )
-            print(
+            logger.debug(
                 f"OK | objects={len(buildings)}, living_houses={int(is_living.sum())}, "
                 f"zones_with_target={summary_df.shape[0]} | mean(K)={meanK:.3f}"
             )
@@ -293,16 +293,16 @@ class BuildingAttributes:
         )
         if zid not in zones.columns:
             zones[zid] = np.arange(len(zones))
-        zname = "zone"
-        if zname not in zones.columns:
+        zone_name = "zone"
+        if zone_name not in zones.columns:
             for alt in ["zone_name", "zone_type", "functional_zone_type_name"]:
                 if alt in zones.columns:
-                    zname = alt
+                    zone_name = alt
                     break
             else:
                 zones["zone"] = "unknown"
-                zname = "zone"
-        return zid, zname
+                zone_name = "zone"
+        return zid, zone_name
 
     @staticmethod
     def _waterfill_with_caps(
@@ -332,6 +332,3 @@ class BuildingAttributes:
             D -= inc_sum
             remain = np.array([i for i in remain if (caps[i] - x[i]) > eps], dtype=int)
         return x
-
-
-attributes_calculator = BuildingAttributes()

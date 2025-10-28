@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional, List
 
 import geopandas as gpd
 from loguru import logger
 from shapely.geometry import mapping, shape
+from iduconfig import Config
 
-from app.api.genbuilder_gateway import genbuilder_inference
-from app.api.urbandb_api_gateway import urban_db_api
-from app.logic.centroids_normalization import snapper
-from app.logic.postprocessing import (attributes_calculator,
-                                      buildings_generator, density_isolines,
-                                      grid_generator)
+from app.schema.dto import BlockFeatureCollection
+
+from app.dependencies import GenbuilderInferenceAPI
+from app.dependencies import UrbanDBAPI
+from app.logic.centroids_normalization import Snapper
+from app.logic.postprocessing import (BuildingAttributes,
+                                      BuildingGenerator, DensityIsolines,
+                                      GridGenerator)
 
 
 class Genbuilder:
@@ -63,6 +66,17 @@ class Genbuilder:
         - Alternatively, `scenario_id` may be provided to automatically load blocks
           from the UrbanDB API (`urban_db_api.get_territories_for_buildings`).
     """
+    def __init__(self, config: Config, urban_api: UrbanDBAPI, genbuilder_inference_api: GenbuilderInferenceAPI, 
+                snapper: Snapper, density_isolines: DensityIsolines, grid_generator: GridGenerator, 
+                buildings_generator: BuildingGenerator, attributes_calculator: BuildingAttributes):
+        self.config = config
+        self.urban_api = urban_api
+        self.genbuilder_inference_api = genbuilder_inference_api
+        self.snapper = snapper
+        self.density_isolines = density_isolines
+        self.grid_generator = grid_generator
+        self.buildings_generator = buildings_generator
+        self.attributes_calculator = attributes_calculator
 
     async def infer_centroids_for_gdf(
         self,
@@ -85,7 +99,7 @@ class Genbuilder:
             }
 
             tasks.append(
-                genbuilder_inference.generate_centroids(
+                self.genbuilder_inference_api.generate_centroids(
                     feature=feature,
                     zone_label=zone_label,
                     infer_params=infer_params,
@@ -97,10 +111,10 @@ class Genbuilder:
         results = await asyncio.gather(*tasks)
 
         rows: list[dict] = []
-        for r in results:
-            for f in r.get("features", []):
-                props = dict(f.get("properties") or {})
-                props["geometry"] = shape(f["geometry"])
+        for result in results:
+            for feature in result.get("features", []):
+                props = dict(feature.get("properties") or {})
+                props["geometry"] = shape(feature["geometry"])
                 rows.append(props)
         if not rows:
             raise ValueError("No centroids generated")
@@ -112,11 +126,11 @@ class Genbuilder:
 
     async def run(
         self,
-        targets_by_zone,
-        infer_params,
-        blocks=None,
-        scenario_id=None,
-        functional_zone_types=None,
+        targets_by_zone: Dict[str, Dict[str, float]],
+        infer_params: Dict[str, Any],
+        blocks: Optional[BlockFeatureCollection] = None,
+        scenario_id: Optional[int] = None,
+        functional_zone_types: Optional[List[str]] = None,
     ):
         if blocks:
             gdf_blocks = blocks.model_dump()
@@ -124,14 +138,14 @@ class Genbuilder:
             if gdf_blocks.crs is None:
                 gdf_blocks.set_crs(32636, inplace=True)
         if scenario_id:
-            gdf_blocks = await urban_db_api.get_territories_for_buildings(scenario_id)
+            gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id)
             if functional_zone_types:
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
             gdf_blocks.to_crs(32636, inplace=True)
 
         if gdf_blocks.zone.isna().any():
             raise ValueError("Input blocks got empty zone values")
-        logger.info(f"{targets_by_zone}")
+
         centroids = await self.infer_centroids_for_gdf(
             gdf_blocks,
             infer_params,
@@ -139,31 +153,28 @@ class Genbuilder:
             targets_by_zone["floors_avg"],
         )
         logger.info(f"Centroids generated, {len(centroids)} total")
-        snapper_result = snapper.run(centroids, gdf_blocks)
+        snapper_result = self.snapper.run(centroids, gdf_blocks)
         logger.info("Centroids snapped")
         centroids = snapper_result["centroids"]
         midline = snapper_result["midline"]
-        empty_grid = grid_generator.make_grid_for_blocks(
+        empty_grid = self.grid_generator.make_grid_for_blocks(
             blocks_gdf=gdf_blocks,
             cell_size_m=10,
             midlines=gpd.GeoSeries([midline], crs=gdf_blocks.crs),
             block_id_col="block_id",
             offset_m=10.0,
         )
-        isolines = density_isolines.build(gdf_blocks, centroids, zone_id_col="zone")
+        isolines = self.density_isolines.build(gdf_blocks, centroids, zone_id_col="zone")
         logger.info("isolines generated")
-        grid = grid_generator.fit_transform(empty_grid, isolines)
+        grid = self.grid_generator.fit_transform(empty_grid, isolines)
         logger.info("Grid created")
-        buildings = buildings_generator.fit_transform(
+        buildings = self.buildings_generator.fit_transform(
             grid, gdf_blocks, zone_name_aliases=["zone"]
         )
         logger.info("Buildings generated")
-        buildings = attributes_calculator.fit_transform(
+        buildings = self.attributes_calculator.fit_transform(
             buildings, gdf_blocks, targets_by_zone
         )["buildings"]
         logger.info("Buildings attributes generated")
         buildings = buildings[["service", "living_area", "floors_count", "geometry"]]
         return json.loads(buildings.to_json())
-
-
-builder = Genbuilder()

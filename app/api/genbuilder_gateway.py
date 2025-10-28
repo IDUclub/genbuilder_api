@@ -8,10 +8,9 @@ from iduconfig import Config
 from loguru import logger
 
 from app.api.api_error_handler import APIHandler
-from app.dependencies import config
 
 
-class GenbuilderInference:
+class GenbuilderInferenceAPI:
     def __init__(self, config: Config):
         self.url = config.get("GPU_URL")
         self.client_cert = config.get("GPU_CLIENT_CERTIFICATE")
@@ -77,6 +76,3 @@ class GenbuilderInference:
     @staticmethod
     def to_feature_collection(resp: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": "FeatureCollection", "features": resp.get("features", [])}
-
-
-genbuilder_inference = GenbuilderInference(config)
