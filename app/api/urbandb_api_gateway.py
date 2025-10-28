@@ -13,6 +13,8 @@ class UrbanDBAPI:
     def __init__(self, config: Config):
         self.config = config
         self.url = config.get("UrbanDB_API")
+        self.source = config.get("UrbanDB_SOURCE")
+        self.year = config.get("UrbanDB_YEAR")
         self.session = None
         self.handler = None
 
@@ -27,7 +29,7 @@ class UrbanDBAPI:
             logger.info("UrbanDBAPI session closed.")
 
     async def get_territories_for_buildings(self, scenario_id: int):
-        api_url = f"{self.url}v1/scenarios/{scenario_id}/functional_zones?year=2024&source=OSM"
+        api_url = f"{self.url}v1/scenarios/{scenario_id}/functional_zones?year={self.year}&source={self.source}"
         logger.info(f"Fetching functional zones from API: {api_url}")
 
         json_data = await self.handler.request("GET", api_url, session=self.session)

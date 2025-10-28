@@ -1,19 +1,33 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Annotated
 
 from geojson_pydantic import Feature, FeatureCollection, Polygon
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
 
 
 class BlockProperties(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    block_id: Union[int, str] = Field(default=None, description="Block identifier")
-    zone: str = Field(
-        default=None, description="Zone label (if already provided in properties)"
+    model_config = ConfigDict(
+        extra="allow",
+        str_strip_whitespace=True,
     )
+
+    block_id: Union[int, str] | None = Field(
+        default=None,
+        description="Block identifier"
+    )
+
+    zone: Annotated[str, Field(description="Zone label (required)")]
+
+    @field_validator("zone")
+    @classmethod
+    def _zone_required_nonempty(cls, v: str) -> str:
+        s = str(v).strip()
+        if not s or s.lower() in {"none", "nan"}:
+            raise ValueError("`zone` обязательно в feature.properties и не может быть пустым.")
+        return s
 
 
 class BlockFeature(Feature[Polygon, BlockProperties]):

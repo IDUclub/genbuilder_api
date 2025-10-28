@@ -72,56 +72,11 @@ class Genbuilder:
         floors_avg: dict[str, float],
     ) -> gpd.GeoDataFrame:
 
-        try:
-            zones = (
-                gdf["zone"].astype(str).str.strip().replace({"None": ""}).tolist()
-                if "zone" in gdf.columns
-                else []
-            )
-        except Exception:
-            zones = []
-
-        if not zones:
-            raise ValueError("В GeoDataFrame отсутствует столбец 'zone' или он пуст.")
-
-        unique_zones = {z for z in zones if z}
-        missing_la = [z for z in unique_zones if la_target.get(z) is None]
-        missing_floors = [z for z in unique_zones if floors_avg.get(z) is None]
-
-        if missing_la or missing_floors:
-            parts = []
-            if missing_la:
-                parts.append(f"la_target отсутствует для зон: {sorted(missing_la)}")
-            if missing_floors:
-                parts.append(
-                    f"floors_avg отсутствует для зон: {sorted(missing_floors)}"
-                )
-            raise ValueError(
-                "Не заданы таргеты для некоторых зон. "
-                + " | ".join(parts)
-                + ". Добавьте значения в targets_by_zone прежде чем вызывать инференс."
-            )
-
-        def _to_float(x: Any, *, label: str, zone: str) -> float:
-            try:
-                return float(x)
-            except Exception as e:
-                raise TypeError(
-                    f"{label} для зоны '{zone}' должен быть числом, получено {x!r}"
-                ) from e
-
         tasks = []
         for _, row in gdf.iterrows():
             zone_label = str(row.get("zone", "")).strip()
-            if not zone_label:
-                raise ValueError("У квартала отсутствует корректная метка 'zone'.")
-
-            la_value = _to_float(
-                la_target.get(zone_label), label="la_target", zone=zone_label
-            )
-            floors_value = _to_float(
-                floors_avg.get(zone_label), label="floors_avg", zone=zone_label
-            )
+            la_value = la_target.get(zone_label)
+            floors_value = floors_avg.get(zone_label)
 
             feature = {
                 "type": "Feature",
@@ -173,7 +128,10 @@ class Genbuilder:
             if functional_zone_types:
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
             gdf_blocks.to_crs(32636, inplace=True)
-        logger.info(f"{gdf_blocks}")
+
+        if gdf_blocks.zone.isna().any():
+            raise ValueError("Input blocks got empty zone values")
+        logger.info(f"{targets_by_zone}")
         centroids = await self.infer_centroids_for_gdf(
             gdf_blocks,
             infer_params,
@@ -194,14 +152,12 @@ class Genbuilder:
         )
         isolines = density_isolines.build(gdf_blocks, centroids, zone_id_col="zone")
         logger.info("isolines generated")
-        logger.info(f"Isolines {isolines}")
         grid = grid_generator.fit_transform(empty_grid, isolines)
         logger.info("Grid created")
         buildings = buildings_generator.fit_transform(
             grid, gdf_blocks, zone_name_aliases=["zone"]
         )
         logger.info("Buildings generated")
-        logger.info(f"{buildings[buildings.is_living == False]}")
         buildings = attributes_calculator.fit_transform(
             buildings, gdf_blocks, targets_by_zone
         )["buildings"]

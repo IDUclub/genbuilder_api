@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import math
 import random
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, DefaultDict
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely.geometry import CAP_STYLE, JOIN_STYLE, LineString
 from shapely.ops import unary_union
+
+from app.logic.postprocessing.generation_params import generation_parameters
 
 
 @dataclass
@@ -61,48 +64,6 @@ class BuildingGenerator:
           (`service`, `capacity`, `floors_count`, `is_living`).
     """
 
-    max_run: int = 8
-    neigh_empty_thr: int = 3
-    cell_size_m: float = 15.0
-    edge_share_frac: float = 0.2
-    merge_predicate: str = "intersects"
-    merge_fix_eps: float = 0.0
-
-    max_services_per_zone: Dict[str, int] = field(
-        default_factory=lambda: {"school": 3, "kindergarten": 5, "polyclinics": 1}
-    )
-    randomize_service_forms: bool = True
-    service_random_seed: int = 42
-    gap_to_houses_cheb: int = 2
-    gap_between_sites_cheb: int = 2
-    same_type_site_gap_cheb: int = 10
-    inner_margin_cells: int = 1
-
-    service_site_rules: Dict[Tuple[str, str], Dict[str, float | int]] = field(
-        default_factory=lambda: {
-            ("school", "RECT_5x2_WITH_OPEN_3"): {
-                "capacity": 600,
-                "site_area_m2": 33000.0,
-            },
-            ("school", "H_5x4"): {"capacity": 800, "site_area_m2": 36000.0},
-            ("school", "RING_5x5_WITH_COURTYARD"): {
-                "capacity": 1100,
-                "site_area_m2": 39600.0,
-            },
-            ("kindergarten", "LINE3"): {"capacity": 60, "site_area_m2": 2640.0},
-            ("kindergarten", "W5"): {"capacity": 100, "site_area_m2": 4400.0},
-            ("kindergarten", "H7"): {"capacity": 150, "site_area_m2": 5700.0},
-            ("polyclinics", "RECT_2x4"): {"capacity": 300, "site_area_m2": 3000.0},
-        }
-    )
-
-    svc_order: List[str] = field(
-        default_factory=lambda: ["school", "kindergarten", "polyclinics"]
-    )
-    zone_id_col: str = "zone_id"
-    zone_name_col: str = "zone"
-    verbose: bool = True
-
     def fit_transform(
         self,
         cells_gdf: gpd.GeoDataFrame,
@@ -126,13 +87,13 @@ class BuildingGenerator:
         cells["row_i"], cells["col_j"] = row_i, col_j
 
         zones = zones_gdf.to_crs(cells.crs).reset_index(drop=True)
-        zid_col = self.zone_id_col
-        if self.zone_id_col not in zones.columns:
+        zid_col = generation_parameters.zone_id_col
+        if generation_parameters.zone_id_col not in zones.columns:
             if "id" in zones.columns:
                 zones[zid_col] = zones["id"]
             else:
                 zones[zid_col] = np.arange(len(zones))
-        zname_col = self.zone_name_col
+        zname_col = generation_parameters.zone_name_col
         if zname_col not in zones.columns:
             for alt in zone_name_aliases:
                 if alt in zones.columns:
@@ -171,15 +132,15 @@ class BuildingGenerator:
         for i in range(len(cells)):
             if not inside_mask[i]:
                 continue
-            is_external[i] = (empty_neighs[i] >= self.neigh_empty_thr) or (
+            is_external[i] = (empty_neighs[i] >= generation_parameters.neigh_empty_thr) or (
                 missing[i] > 0
             )
         cells["candidate_building"] = inside_mask & is_external
         cells["candidate_building"] = self._enforce_line_blocks(
-            cells, "row_i", "col_j", "candidate_building", self.max_run
+            cells, "row_i", "col_j", "candidate_building", generation_parameters.max_run
         )
         cells["is_building"] = self._enforce_line_blocks(
-            cells, "col_j", "row_i", "candidate_building", self.max_run
+            cells, "col_j", "row_i", "candidate_building", generation_parameters.max_run
         )
 
         bbox = np.array(
@@ -192,7 +153,7 @@ class BuildingGenerator:
         ).T
         w = bbox[:, 2] - bbox[:, 0]
         h = bbox[:, 3] - bbox[:, 1]
-        is_small = (w < self.cell_size_m - 1e-6) | (h < self.cell_size_m - 1e-6)
+        is_small = (w < generation_parameters.cell_size_m - 1e-6) | (h < generation_parameters.cell_size_m - 1e-6)
         external_score = empty_neighs + missing
 
         is_b = cells["is_building"].to_numpy().astype(bool)
@@ -213,10 +174,10 @@ class BuildingGenerator:
                 is_b[j] = True
             cells["is_building"] = is_b
             cells["is_building"] = self._enforce_line_blocks(
-                cells, "row_i", "col_j", "is_building", self.max_run
+                cells, "row_i", "col_j", "is_building", generation_parameters.max_run
             )
             cells["is_building"] = self._enforce_line_blocks(
-                cells, "col_j", "row_i", "is_building", self.max_run
+                cells, "col_j", "row_i", "is_building", generation_parameters.max_run
             )
 
         idx_by_rc = {
@@ -274,22 +235,19 @@ class BuildingGenerator:
                 "Lmax": Lmax,
             }
 
-        svc_count_by_zone = {
-            int(z): {s: 0 for s in self.svc_order} for z in zone_groups.keys()
-        }
-        rng = random.Random(self.service_random_seed)
+        svc_count_by_zone: DefaultDict[int, DefaultDict[str, int]] = defaultdict(lambda: defaultdict(int))
+        rng = random.Random(generation_parameters.service_random_seed)
 
         lib = self._pattern_library()
-        shape_variants: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]] = {
-            svc: [] for svc in lib.keys()
-        }
+        shape_variants: DefaultDict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]] = defaultdict(list)
+
         for svc, shapes in lib.items():
             items = list(shapes)
-            if self.randomize_service_forms:
+            if generation_parameters.randomize_service_forms:
                 rng.shuffle(items)
             for name, offsets, allow_rot in items:
                 vars_ = self._shape_variants(offsets, allow_rot)
-                if self.randomize_service_forms:
+                if generation_parameters.randomize_service_forms:
                     rng.shuffle(vars_)
                 shape_variants[svc].append((name, vars_))
 
@@ -302,9 +260,7 @@ class BuildingGenerator:
         service_polys_attrs: List[Dict] = []
 
         placed_site_sets: List[List[int]] = []
-        placed_sites_by_type: Dict[str, List[List[int]]] = {
-            s: [] for s in self.svc_order
-        }
+        placed_sites_by_type: DefaultDict[str, List[List[int]]] = defaultdict(list)
 
         for zid, meta in zone_groups.items():
             r_cen, c_cen = meta["r_center"], meta["c_center"]
@@ -313,12 +269,12 @@ class BuildingGenerator:
             z_outside = meta["outside_ids"]
 
             limits = {
-                svc: self.max_services_per_zone.get(svc, 0) for svc in self.svc_order
+                svc: generation_parameters.max_services_per_zone.get(svc, 0) for svc in generation_parameters.svc_order
             }
 
             while True:
                 progress = False
-                for svc in self.svc_order:
+                for svc in generation_parameters.svc_order:
                     if svc_count_by_zone[zid][svc] >= limits[svc]:
                         continue
                     placed_here = False
@@ -419,7 +375,7 @@ class BuildingGenerator:
         cap_style = CAP_STYLE.flat
         join_style = JOIN_STYLE.mitre
 
-        buf_dist = float(self.cell_size_m) / 2.0
+        buf_dist = float(generation_parameters.cell_size_m) / 2.0
         centroids = cells.geometry.centroid
         for k, comp in enumerate(diag_components, start=1):
             pts = np.array(
@@ -445,7 +401,7 @@ class BuildingGenerator:
                     "type": "diag_buffer",
                     "service": "living_house",
                     "n_cells": int(len(comp)),
-                    "width_m": float(self.cell_size_m),
+                    "width_m": float(generation_parameters.cell_size_m),
                 }
             )
         simple_ids = [
@@ -466,7 +422,7 @@ class BuildingGenerator:
                     "type": "cell",
                     "service": "living_house",
                     "n_cells": 1,
-                    "width_m": float(self.cell_size_m),
+                    "width_m": float(generation_parameters.cell_size_m),
                     "row_i": int(cells.at[i, "row_i"]),
                     "col_j": int(cells.at[i, "col_j"]),
                     zid_col: zid_mode,
@@ -486,7 +442,7 @@ class BuildingGenerator:
         right = (
             buildings_rects[["geometry"]].reset_index().rename(columns={"index": "j"})
         )
-        pairs = self._sjoin(left, right, predicate=self.merge_predicate)
+        pairs = self._sjoin(left, right, predicate=generation_parameters.merge_predicate)
         pairs = pairs[(pairs["i"] != pairs["j"]) & pairs["j"].notna()].copy()
         pairs["j"] = pairs["j"].astype(int)
 
@@ -504,10 +460,9 @@ class BuildingGenerator:
         pairs = pairs[
             pairs.apply(lambda r: _same_group(int(r["i"]), int(r["j"])), axis=1)
         ]
-        adj = {i: [] for i in range(len(buildings_rects))}
+        adj: DefaultDict[int, List[int]] = defaultdict(list)
         for a, b in pairs[["i", "j"]].itertuples(index=False):
-            a = int(a)
-            b = int(b)
+            a = int(a); b = int(b)
             adj[a].append(b)
             adj[b].append(a)
         groups = self._components(list(adj.keys()), adj)
@@ -515,10 +470,10 @@ class BuildingGenerator:
         merged_geoms, merged_attrs = [], []
         for gid, comp in enumerate(groups):
             geoms = buildings_rects.geometry.iloc[comp].tolist()
-            if self.merge_fix_eps and self.merge_fix_eps > 0:
+            if generation_parameters.merge_fix_eps and generation_parameters.merge_fix_eps > 0:
                 u = unary_union(
-                    [self._make_valid(g.buffer(self.merge_fix_eps)) for g in geoms]
-                ).buffer(-self.merge_fix_eps)
+                    [self._make_valid(g.buffer(generation_parameters.merge_fix_eps)) for g in geoms]
+                ).buffer(-generation_parameters.merge_fix_eps)
             else:
                 u = unary_union([self._make_valid(g) for g in geoms])
             comp_svc = list({svc_vals[i] for i in comp})
@@ -551,7 +506,7 @@ class BuildingGenerator:
             merged_attrs, geometry=merged_geoms, crs=cells.crs
         ).reset_index(drop=True)
         buildings_merged = buildings_merged[
-            buildings_merged.area > self.cell_size_m * self.cell_size_m
+            buildings_merged.area > generation_parameters.cell_size_m * generation_parameters.cell_size_m
         ]
 
         service_sites_gdf = gpd.GeoDataFrame(
@@ -580,7 +535,7 @@ class BuildingGenerator:
                     nn = np.min(np.where(dmat == 0, np.inf, dmat), axis=1)
                     min_nn = float(np.min(nn))
                     mean_nn = float(np.mean(nn))
-                    score = float(mean_nn / (self.cell_size_m))
+                    score = float(mean_nn / (generation_parameters.cell_size_m))
                 metrics_rows.append(
                     {
                         zid_col: int(zid) if pd.notna(zid) else None,
@@ -621,9 +576,9 @@ class BuildingGenerator:
 
         buildings = pd.concat([living_buildings, service_buildings])
 
-        if self.verbose:
+        if generation_parameters.verbose:
             svc_rects = buildings_rects[
-                buildings_rects.get("service").isin(self.svc_order)
+                buildings_rects.get("service").isin(generation_parameters.svc_order)
             ]
             print(
                 f"OK | cells={len(cells)}, living={int(cells['is_building'].sum())}, diag-only={int(cells['is_diag_only'].sum())}\n"
@@ -673,15 +628,15 @@ class BuildingGenerator:
             pairs = pairs.rename(columns={"index_right": "idb"})
         pairs = pairs[(pairs["ida"] != pairs["idb"]) & pairs["idb"].notna()].copy()
 
-        neighbors_all = {i: [] for i in range(len(cells))}
-        neighbors_side = {i: [] for i in range(len(cells))}
-        neighbors_diag = {i: [] for i in range(len(cells))}
+        neighbors_all:  DefaultDict[int, List[int]] = defaultdict(list)
+        neighbors_side: DefaultDict[int, List[int]] = defaultdict(list)
+        neighbors_diag: DefaultDict[int, List[int]] = defaultdict(list)
 
         if len(pairs) > 0:
             pairs["idb"] = pairs["idb"].astype(int)
             geom_list = list(cells.geometry.values)
             edge_len_est = np.sqrt(np.maximum(cells.geometry.area.values, 1e-9))
-            thr_len = self.edge_share_frac * edge_len_est
+            thr_len = generation_parameters.edge_share_frac * edge_len_est
 
             def _is_edge_neighbor(a: int, b: int) -> bool:
                 try:
@@ -847,7 +802,7 @@ class BuildingGenerator:
         return max(max(rs) - min(rs) + 1, max(cs) - min(cs) + 1)
 
     def _site_cells_required(self, area_m2: float) -> int:
-        return int(math.ceil(max(area_m2, 1.0) / (self.cell_size_m * self.cell_size_m)))
+        return int(math.ceil(max(area_m2, 1.0) / (generation_parameters.cell_size_m * generation_parameters.cell_size_m)))
 
     def _rect_variants_for_cells(
         self,
@@ -879,7 +834,7 @@ class BuildingGenerator:
         return self._rect_variants_for_cells(ncells, max_variants=12)
 
     def _service_site_spec(self, svc: str, pattern_name: str) -> Tuple[float, int]:
-        spec = self.service_site_rules.get((svc, pattern_name))
+        spec = generation_parameters.service_site_rules.get((svc, pattern_name))
         if spec:
             return float(spec["site_area_m2"]), int(
                 spec["capacity"]
@@ -1006,7 +961,7 @@ class BuildingGenerator:
 
         for (pat_name, variants) in shape_variants.get(svc, []):
             vars_iter = list(variants)
-            if self.randomize_service_forms:
+            if generation_parameters.randomize_service_forms:
                 rng.shuffle(vars_iter)
             vars_iter = self._sort_variants_by_core_fit(vars_iter, core_h, core_w)
             for var in vars_iter:
@@ -1052,7 +1007,7 @@ class BuildingGenerator:
         if len(H) == 0 or len(candidate_idxs) == 0:
             return True
         d = self._min_cheb_between_sets(cells, candidate_idxs, list(H))
-        return d >= self.gap_to_houses_cheb
+        return d >= generation_parameters.gap_to_houses_cheb
 
     def _cheb_gap_ok_to_sites(
         self,
@@ -1065,13 +1020,13 @@ class BuildingGenerator:
         for S in placed_site_sets:
             if (
                 self._min_cheb_between_sets(cells, candidate_idxs, S)
-                < self.gap_between_sites_cheb
+                < generation_parameters.gap_between_sites_cheb
             ):
                 return False
         for S in placed_sites_by_type.get(svc, []):
             if (
                 self._min_cheb_between_sets(cells, candidate_idxs, S)
-                < self.same_type_site_gap_cheb
+                < generation_parameters.same_type_site_gap_cheb
             ):
                 return False
         return True
@@ -1112,13 +1067,13 @@ class BuildingGenerator:
         )
 
         service_variants = list(shape_variants.get(svc, []))
-        if self.randomize_service_forms:
+        if generation_parameters.randomize_service_forms:
             rng.shuffle(service_variants)
 
         for (pat_name, _service_vars) in service_variants:
             site_area_m2, capacity = self._service_site_spec(svc, pat_name)
             territory_variants = self._territory_shape_variants(site_area_m2)
-            if self.randomize_service_forms:
+            if generation_parameters.randomize_service_forms:
                 rng.shuffle(territory_variants)
 
             for (site_form_name, site_offsets) in territory_variants:
@@ -1169,7 +1124,7 @@ class BuildingGenerator:
                         reserved_service_cells=reserved_service_cells,
                         rng=rng,
                         idx_by_rc=idx_by_rc,
-                        inner_margin_cells=self.inner_margin_cells,
+                        inner_margin_cells=generation_parameters.inner_margin_cells,
                     )
                     if not ok_svc:
                         continue
@@ -1219,7 +1174,7 @@ class BuildingGenerator:
                             "pattern": chosen_pat,
                             "zone_id": int(zid),
                             "n_cells": int(len(svc_cell_idxs)),
-                            "width_m": float(self.cell_size_m),
+                            "width_m": float(generation_parameters.cell_size_m),
                         }
                     )
 
@@ -1271,17 +1226,17 @@ class BuildingGenerator:
         )
 
         service_variants = list(shape_variants.get(svc, []))
-        if self.randomize_service_forms:
+        if generation_parameters.randomize_service_forms:
             rng.shuffle(service_variants)
 
         for (pat_name, _service_vars) in service_variants:
             site_area_m2, capacity = self._service_site_spec(svc, pat_name)
             min_cells = self._min_site_cells_for_service_with_margin(
-                svc, shape_variants, self.inner_margin_cells
+                svc, shape_variants, generation_parameters.inner_margin_cells
             )
             ncells = max(self._site_cells_required(site_area_m2), min_cells)
             territory_variants = self._rect_variants_for_cells(ncells, max_variants=12)
-            if self.randomize_service_forms:
+            if generation_parameters.randomize_service_forms:
                 rng.shuffle(territory_variants)
 
             for (site_form_name, site_offsets) in territory_variants:
@@ -1332,7 +1287,7 @@ class BuildingGenerator:
                         reserved_service_cells=reserved_service_cells,
                         rng=rng,
                         idx_by_rc=idx_by_rc,
-                        inner_margin_cells=self.inner_margin_cells,
+                        inner_margin_cells=generation_parameters.inner_margin_cells,
                     )
                     if not ok_svc:
                         continue
@@ -1383,7 +1338,7 @@ class BuildingGenerator:
                             "pattern": chosen_pat,
                             "zone_id": int(zid),
                             "n_cells": int(len(svc_cell_idxs)),
-                            "width_m": float(self.cell_size_m),
+                            "width_m": float(generation_parameters.cell_size_m),
                             "fallback_outside": True,
                         }
                     )

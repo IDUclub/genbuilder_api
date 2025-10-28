@@ -14,18 +14,6 @@ async def pipeline_route(
     payload: ScenarioRequest = Body(
         ...,
         description="Body for request",
-        examples={
-            "scenario_id": 198,
-            "functional_zone_types": ["residential"],
-            "targets_by_zone": {"residential": {"la": 20000, "floors_avg": 12}},
-            "params": {
-                "infer_knn": 8,
-                "infer_e_thr": 0.8,
-                "infer_il_thr": 0.5,
-                "infer_sv1_thr": 0.5,
-                "infer_slots": 5000,
-            },
-        },
     )
 ):
     try:
