@@ -14,9 +14,10 @@ from app.schema.dto import BlockFeatureCollection
 from app.dependencies import GenbuilderInferenceAPI
 from app.dependencies import UrbanDBAPI
 from app.logic.centroids_normalization import Snapper
-from app.logic.postprocessing import (BuildingAttributes,
-                                      BuildingGenerator, DensityIsolines,
-                                      GridGenerator)
+from app.logic.postprocessing.buildings_generation import BuildingGenerator
+from app.logic.postprocessing.attributes_calculation import BuildingAttributes
+from app.logic.postprocessing.isolines import DensityIsolines
+from app.logic.postprocessing.built_grid import GridGenerator
 
 
 class Genbuilder:

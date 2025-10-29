@@ -22,7 +22,7 @@ class APIHandler:
                     return await response.json()
                 except Exception as e:
                     logger.error(f"JSON decode error from {url}: {e}")
-                    raise http_exception(500, "Invalid JSON response", url, str(e))
+                    raise http_exception(500, "Error in the request:", url, str(e))
 
             logger.error(f"Request to {url} failed with status {response.status}")
             detail = await response.text()
