@@ -153,7 +153,7 @@ class Genbuilder:
             targets_by_zone["la_target"],
             targets_by_zone["floors_avg"])
         logger.info(f"Centroids generated, {len(centroids)} total")
-        snapper_result = self.snapper.run(centroids, gdf_blocks)
+        snapper_result = await asyncio.to_thread(self.snapper.run, centroids, gdf_blocks)
         logger.info("Centroids snapped")
         centroids = snapper_result["centroids"]
         midline = snapper_result["midline"]
