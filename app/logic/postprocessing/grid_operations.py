@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import DefaultDict, Dict, List, Tuple
 
 import geopandas as gpd
@@ -11,7 +10,6 @@ from shapely.geometry.base import BaseGeometry
 from app.logic.postprocessing.generation_params import GenParams
 
 
-@dataclass
 class GridOperations:
     """
     Универсальные операции над регулярной сеткой и её топологией.

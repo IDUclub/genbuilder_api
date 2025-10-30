@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
 from typing import Dict, List, Tuple, Set
 
 import geopandas as gpd
@@ -13,7 +12,6 @@ from app.logic.postprocessing.shapes_library import ShapesLibrary
 from app.logic.postprocessing.grid_operations import GridOperations
 
 
-@dataclass
 class SitePlanner:
     """
     Планировщик площадок и размещения сервисных зданий внутри площадок.

@@ -147,35 +147,31 @@ class Genbuilder:
         if gdf_blocks.zone.isna().any():
             raise ValueError("Input blocks got empty zone values")
 
-        centroids = await self.infer_centroids_for_gdf(
+        centroids = await self.infer_centroids_for_gdf( 
             gdf_blocks,
             infer_params,
             targets_by_zone["la_target"],
-            targets_by_zone["floors_avg"],
-        )
+            targets_by_zone["floors_avg"])
         logger.info(f"Centroids generated, {len(centroids)} total")
         snapper_result = self.snapper.run(centroids, gdf_blocks)
         logger.info("Centroids snapped")
         centroids = snapper_result["centroids"]
         midline = snapper_result["midline"]
-        empty_grid = self.grid_generator.make_grid_for_blocks(
+        empty_grid = await asyncio.to_thread(self.grid_generator.make_grid_for_blocks,
             blocks_gdf=gdf_blocks,
             cell_size_m=10,
             midlines=gpd.GeoSeries([midline], crs=gdf_blocks.crs),
             block_id_col="block_id",
-            offset_m=10.0,
-        )
-        isolines = self.density_isolines.build(gdf_blocks, centroids, zone_id_col="zone")
+            offset_m=10.0)
+        isolines = await asyncio.to_thread(self.density_isolines.build, gdf_blocks, centroids, zone_id_col="zone")
         logger.info("isolines generated")
-        grid = self.grid_generator.fit_transform(empty_grid, isolines)
+        grid = await asyncio.to_thread(self.grid_generator.fit_transform, empty_grid, isolines) 
         logger.info("Grid created")
-        buildings = self.buildings_generator.fit_transform(
-            grid, gdf_blocks, zone_name_aliases=["zone"]
-        )
+        buildings = await  self.buildings_generator.fit_transform(grid, gdf_blocks, zone_name_aliases=["zone"])
         logger.info("Buildings generated")
-        buildings = self.attributes_calculator.fit_transform(
-            buildings, gdf_blocks, targets_by_zone
-        )["buildings"]
+        attributes_result = await asyncio.to_thread(self.attributes_calculator.fit_transform, buildings, gdf_blocks, targets_by_zone
+        )
+        buildings = attributes_result["buildings"]
         logger.info("Buildings attributes generated")
         buildings = buildings[["service", "living_area", "floors_count", "geometry"]]
         return json.loads(buildings.to_json())

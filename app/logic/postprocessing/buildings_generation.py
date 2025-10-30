@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+import asyncio
 from typing import DefaultDict, Dict, List, Optional, Set
 
 from loguru import logger
+from tqdm.auto import tqdm
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -16,7 +17,6 @@ from app.logic.postprocessing.site_panner import SitePlanner
 from app.logic.postprocessing.buildings_postprocessing import BuildingsPostProcessor
 
 
-@dataclass
 class BuildingGenerator:
     """
     Оркестратор генерации зданий и площадок сервисов на регулярной сетке.
@@ -33,15 +33,15 @@ class BuildingGenerator:
         При необходимости легко расширяется до возврата словаря промежуточных результатов.
     """
     def __init__(self, grid_operations: GridOperations, shapes_library: ShapesLibrary, 
-                buildings_postprocessor: BuildingsPostProcessor, planner: SitePlanner, 
-                generation_parameters: GenParams):
+                 buildings_postprocessor: BuildingsPostProcessor, planner: SitePlanner, 
+                 generation_parameters: GenParams):
         self.generation_parameters = generation_parameters
         self.grid_operations = grid_operations
         self.shapes_library = shapes_library
         self.planner = planner
         self.buildings_postprocessor = buildings_postprocessor
 
-    def fit_transform(
+    async def fit_transform(
         self,
         cells_gdf: gpd.GeoDataFrame,
         zones_gdf: gpd.GeoDataFrame,
@@ -57,7 +57,7 @@ class BuildingGenerator:
         cells["inside_iso_closed"] = cells["inside_iso_closed"].fillna(False).astype(bool)
         cells["iso_level"] = pd.to_numeric(cells.get("iso_level"), errors="coerce")
         cells["service"] = None
-        row_i, col_j, x0, y0, step_est = self.grid_operations.grid_indices(cells)
+        row_i, col_j, x0, y0, step_est = await asyncio.to_thread(self.grid_operations.grid_indices, cells)
         cells["row_i"], cells["col_j"] = row_i, col_j
         zones = zones_gdf.to_crs(cells.crs).reset_index(drop=True)
         zid_col = self.generation_parameters.zone_id_col
@@ -71,7 +71,6 @@ class BuildingGenerator:
                     break
         if zname_col not in zones.columns:
             zones[zname_col] = "unknown"
-
         cells_zone = self.grid_operations.sjoin(
             cells[["geometry"]].reset_index().rename(columns={"index": "cell_idx"}),
             zones[[zid_col, zname_col, "geometry"]],
@@ -89,7 +88,10 @@ class BuildingGenerator:
         cells[zname_col] = cells[zname_col].astype(str).str.lower().str.strip()
         cells["is_residential_zone"] = cells[zname_col].eq("residential")
 
-        neighbors_all, neighbors_side, neighbors_diag, empty_neighs, missing = self.grid_operations.compute_neighbors(cells)
+        assigned = cells[zid_col].notna().sum()
+        neighbors_all, neighbors_side, neighbors_diag, empty_neighs, missing = await asyncio.to_thread(self.grid_operations.compute_neighbors, cells)
+        avg_side = np.mean([len(v) for v in neighbors_side.values()]) if neighbors_side else 0.0
+        avg_diag = np.mean([len(v) for v in neighbors_diag.values()]) if neighbors_diag else 0.0
 
         inside_mask = cells["inside_iso_closed"].values
         is_external = np.zeros(len(cells), dtype=bool)
@@ -99,10 +101,10 @@ class BuildingGenerator:
             is_external[i] = (empty_neighs[i] >= self.generation_parameters.neigh_empty_thr) or (missing[i] > 0)
         cells["candidate_building"] = inside_mask & is_external
 
-        cells["candidate_building"] = self.grid_operations.enforce_line_blocks(
+        cells["candidate_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
             cells, line_key="row_i", order_key="col_j", mask_key="candidate_building", max_run=self.generation_parameters.max_run
         )
-        cells["is_building"] = self.grid_operations.enforce_line_blocks(
+        cells["is_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
             cells, line_key="col_j", order_key="row_i", mask_key="candidate_building", max_run=self.generation_parameters.max_run
         )
 
@@ -130,14 +132,20 @@ class BuildingGenerator:
                 continue
             j_best = min(cand, key=lambda j: (external_score[j], -empty_neighs[j]))
             promote_targets.append(j_best)
+
         if promote_targets:
-            for j in promote_targets:
+            for j in tqdm(
+                promote_targets,
+                desc="Promote neighbor cells",
+                unit="cell",
+                leave=False,
+            ):
                 is_b[j] = True
             cells["is_building"] = is_b
-            cells["is_building"] = self.grid_operations.enforce_line_blocks(
+            cells["is_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
                 cells, line_key="row_i", order_key="col_j", mask_key="is_building", max_run=self.generation_parameters.max_run
             )
-            cells["is_building"] = self.grid_operations.enforce_line_blocks(
+            cells["is_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
                 cells, line_key="col_j", order_key="row_i", mask_key="is_building", max_run=self.generation_parameters.max_run
             )
 
@@ -170,7 +178,7 @@ class BuildingGenerator:
             }
         svc_count_by_zone: DefaultDict[int, DefaultDict[str, int]] = DefaultDict(lambda: DefaultDict(int))
         rng = random.Random(self.generation_parameters.service_random_seed)
-        shape_variants = self.shapes_library.build_shape_variants_from_library(rng=rng)
+        shape_variants = await asyncio.to_thread(self.shapes_library.build_shape_variants_from_library, rng=rng)
 
         reserved_site_cells: Set[int] = set()
         reserved_service_cells: Set[int] = set()
@@ -187,8 +195,20 @@ class BuildingGenerator:
             z_inside = meta["inside_ids"]
             z_outside = meta["outside_ids"]
 
-            limits = {svc: self.generation_parameters.max_services_per_zone.get(svc, 0) for svc in self.generation_parameters.svc_order}
+            limits = {svc: self.generation_parameters.max_services_per_zone.get(svc, 0)
+                      for svc in self.generation_parameters.svc_order}
+            total_targets = sum(limits.values())
+            if total_targets == 0:
+                continue
 
+            placed_any = False
+            pbar = tqdm(
+                total=total_targets,
+                desc=f"Zone {zid} service placement",
+                unit="svc",
+                disable=not getattr(self.generation_parameters, "verbose", True),
+                leave=False,
+            )
             while True:
                 progress = False
                 for svc in self.generation_parameters.svc_order:
@@ -205,7 +225,7 @@ class BuildingGenerator:
                         ]
                         if not allowed_ids:
                             continue
-                        ok = self.planner.try_place_site_and_service_in_zone_level(
+                        ok = await asyncio.to_thread(self.planner.try_place_site_and_service_in_zone_level,
                             cells, zid, svc, allowed_ids, r_cen, c_cen,
                             placed_site_sets, placed_sites_by_type, rng,
                             shape_variants, idx_by_rc,
@@ -216,11 +236,13 @@ class BuildingGenerator:
                         )
                         if ok:
                             svc_count_by_zone[zid][svc] += 1
+                            pbar.update(1)
                             placed_here = True
+                            placed_any = True
                             break
 
                     if (not placed_here) and z_outside:
-                        ok = self.planner.try_place_site_and_service_fallback_outside(
+                        ok = await asyncio.to_thread(self.planner.try_place_site_and_service_fallback_outside,
                             cells, zid, svc, z_outside, r_cen, c_cen,
                             placed_site_sets, placed_sites_by_type, rng,
                             shape_variants, idx_by_rc, reserved_site_cells, reserved_service_cells,
@@ -230,29 +252,33 @@ class BuildingGenerator:
                         )
                         if ok:
                             svc_count_by_zone[zid][svc] += 1
+                            pbar.update(1)
                             placed_here = True
+                            placed_any = True
 
                     if placed_here:
                         progress = True
 
                 if not progress:
                     break
+            pbar.close()
 
-        diag_components, diag_rects = self.buildings_postprocessor.mark_diag_only_and_buffers(
+        diag_components, diag_rects = await asyncio.to_thread(self.buildings_postprocessor.mark_diag_only_and_buffers,
             cells, neighbors_side=neighbors_side, neighbors_diag=neighbors_diag
         )
         cells["is_diag_only"] = False
         if diag_components:
             idx = [i for comp in diag_components for i in comp]
             cells.loc[idx, "is_diag_only"] = True
-        living_rects = self.buildings_postprocessor.living_cell_rects(cells, zid_col=zid_col)
-        buildings_rects = self.buildings_postprocessor.concat_rects(
+
+        living_rects = await asyncio.to_thread(self.buildings_postprocessor.living_cell_rects, cells, zid_col=zid_col)
+        buildings_rects = await asyncio.to_thread(self.buildings_postprocessor.concat_rects, 
             living_rects, diag_rects, service_polys_attrs, service_polys_geom, crs=cells.crs
         )
-        buildings_merged = self.buildings_postprocessor.merge_by_service(buildings_rects, zid_col=zid_col)
+
+        buildings_merged = await asyncio.to_thread(self.buildings_postprocessor.merge_by_service, buildings_rects, zid_col=zid_col)
         service_sites_gdf = gpd.GeoDataFrame(service_sites_attrs, geometry=service_sites_geom, crs=cells.crs).reset_index(drop=True)
-        metrics_df = self.buildings_postprocessor.sites_uniformity_metrics(service_sites_gdf, zid_col=zid_col)
-        buildings = self.buildings_postprocessor.finalize_buildings(cells, buildings_merged, service_sites_gdf)
+        buildings = await asyncio.to_thread(self.buildings_postprocessor.finalize_buildings, cells, buildings_merged, service_sites_gdf)
         if self.generation_parameters.verbose:
             svc_rects = buildings_rects[buildings_rects.get("service").isin(self.generation_parameters.svc_order)]
             logger.debug(
@@ -266,7 +292,6 @@ class BuildingGenerator:
                 "buildings_rects": buildings_rects,
                 "buildings_merged": buildings_merged,
                 "service_sites": service_sites_gdf,
-                "metrics": metrics_df,
                 "buildings": buildings,
             }
         return buildings

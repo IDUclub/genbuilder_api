@@ -12,3 +12,4 @@ pandas~=2.3
 shapely~=2.1
 scipy~=1.15
 scikit-image~=0.25
+tqdm~=4.66

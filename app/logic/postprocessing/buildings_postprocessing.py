@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import DefaultDict, Dict, List, Tuple
 
 import geopandas as gpd
@@ -14,7 +13,6 @@ from app.logic.postprocessing.generation_params import GenParams
 from app.logic.postprocessing.grid_operations import GridOperations
 
 
-@dataclass
 class BuildingsPostProcessor:
     """
     Пост‑процессинг построек и сервисов:
