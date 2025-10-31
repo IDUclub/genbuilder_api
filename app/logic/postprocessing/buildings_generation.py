@@ -57,7 +57,7 @@ class BuildingGenerator:
         cells["inside_iso_closed"] = cells["inside_iso_closed"].fillna(False).astype(bool)
         cells["iso_level"] = pd.to_numeric(cells.get("iso_level"), errors="coerce")
         cells["service"] = None
-        row_i, col_j, x0, y0, step_est = await asyncio.to_thread(self.grid_operations.grid_indices, cells)
+        row_i, col_j, x0, y0, step_est = self.grid_operations.grid_indices(cells)
         cells["row_i"], cells["col_j"] = row_i, col_j
         zones = zones_gdf.to_crs(cells.crs).reset_index(drop=True)
         zid_col = self.generation_parameters.zone_id_col
@@ -89,7 +89,7 @@ class BuildingGenerator:
         cells["is_residential_zone"] = cells[zname_col].eq("residential")
 
         assigned = cells[zid_col].notna().sum()
-        neighbors_all, neighbors_side, neighbors_diag, empty_neighs, missing = await asyncio.to_thread(self.grid_operations.compute_neighbors, cells)
+        neighbors_all, neighbors_side, neighbors_diag, empty_neighs, missing = self.grid_operations.compute_neighbors(cells)
         avg_side = np.mean([len(v) for v in neighbors_side.values()]) if neighbors_side else 0.0
         avg_diag = np.mean([len(v) for v in neighbors_diag.values()]) if neighbors_diag else 0.0
 
@@ -101,10 +101,10 @@ class BuildingGenerator:
             is_external[i] = (empty_neighs[i] >= self.generation_parameters.neigh_empty_thr) or (missing[i] > 0)
         cells["candidate_building"] = inside_mask & is_external
 
-        cells["candidate_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
+        cells["candidate_building"] = self.grid_operations.enforce_line_blocks(
             cells, line_key="row_i", order_key="col_j", mask_key="candidate_building", max_run=self.generation_parameters.max_run
         )
-        cells["is_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
+        cells["is_building"] = self.grid_operations.enforce_line_blocks(
             cells, line_key="col_j", order_key="row_i", mask_key="candidate_building", max_run=self.generation_parameters.max_run
         )
 
@@ -142,10 +142,10 @@ class BuildingGenerator:
             ):
                 is_b[j] = True
             cells["is_building"] = is_b
-            cells["is_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
+            cells["is_building"] = self.grid_operations.enforce_line_blocks(
                 cells, line_key="row_i", order_key="col_j", mask_key="is_building", max_run=self.generation_parameters.max_run
             )
-            cells["is_building"] = await asyncio.to_thread(self.grid_operations.enforce_line_blocks,
+            cells["is_building"] = self.grid_operations.enforce_line_blocks(
                 cells, line_key="col_j", order_key="row_i", mask_key="is_building", max_run=self.generation_parameters.max_run
             )
 
@@ -178,7 +178,7 @@ class BuildingGenerator:
             }
         svc_count_by_zone: DefaultDict[int, DefaultDict[str, int]] = DefaultDict(lambda: DefaultDict(int))
         rng = random.Random(self.generation_parameters.service_random_seed)
-        shape_variants = await asyncio.to_thread(self.shapes_library.build_shape_variants_from_library, rng=rng)
+        shape_variants = self.shapes_library.build_shape_variants_from_library(rng=rng)
 
         reserved_site_cells: Set[int] = set()
         reserved_service_cells: Set[int] = set()
@@ -225,7 +225,7 @@ class BuildingGenerator:
                         ]
                         if not allowed_ids:
                             continue
-                        ok = await asyncio.to_thread(self.planner.try_place_site_and_service_in_zone_level,
+                        ok = self.planner.try_place_site_and_service_in_zone_level(
                             cells, zid, svc, allowed_ids, r_cen, c_cen,
                             placed_site_sets, placed_sites_by_type, rng,
                             shape_variants, idx_by_rc,
@@ -242,7 +242,7 @@ class BuildingGenerator:
                             break
 
                     if (not placed_here) and z_outside:
-                        ok = await asyncio.to_thread(self.planner.try_place_site_and_service_fallback_outside,
+                        ok = self.planner.try_place_site_and_service_fallback_outside(
                             cells, zid, svc, z_outside, r_cen, c_cen,
                             placed_site_sets, placed_sites_by_type, rng,
                             shape_variants, idx_by_rc, reserved_site_cells, reserved_service_cells,
@@ -263,7 +263,7 @@ class BuildingGenerator:
                     break
             pbar.close()
 
-        diag_components, diag_rects = await asyncio.to_thread(self.buildings_postprocessor.mark_diag_only_and_buffers,
+        diag_components, diag_rects = self.buildings_postprocessor.mark_diag_only_and_buffers(
             cells, neighbors_side=neighbors_side, neighbors_diag=neighbors_diag
         )
         cells["is_diag_only"] = False
@@ -271,14 +271,14 @@ class BuildingGenerator:
             idx = [i for comp in diag_components for i in comp]
             cells.loc[idx, "is_diag_only"] = True
 
-        living_rects = await asyncio.to_thread(self.buildings_postprocessor.living_cell_rects, cells, zid_col=zid_col)
-        buildings_rects = await asyncio.to_thread(self.buildings_postprocessor.concat_rects, 
+        living_rects = self.buildings_postprocessor.living_cell_rects(cells, zid_col=zid_col)
+        buildings_rects = self.buildings_postprocessor.concat_rects( 
             living_rects, diag_rects, service_polys_attrs, service_polys_geom, crs=cells.crs
         )
 
-        buildings_merged = await asyncio.to_thread(self.buildings_postprocessor.merge_by_service, buildings_rects, zid_col=zid_col)
+        buildings_merged = self.buildings_postprocessor.merge_by_service(buildings_rects, zid_col=zid_col)
         service_sites_gdf = gpd.GeoDataFrame(service_sites_attrs, geometry=service_sites_geom, crs=cells.crs).reset_index(drop=True)
-        buildings = await asyncio.to_thread(self.buildings_postprocessor.finalize_buildings, cells, buildings_merged, service_sites_gdf)
+        buildings = self.buildings_postprocessor.finalize_buildings(cells, buildings_merged, service_sites_gdf)
         if self.generation_parameters.verbose:
             svc_rects = buildings_rects[buildings_rects.get("service").isin(self.generation_parameters.svc_order)]
             logger.debug(

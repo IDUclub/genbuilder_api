@@ -14,24 +14,13 @@ class UrbanDBAPI:
         self.url = config.get("UrbanDB_API")
         self.source = config.get("UrbanDB_SOURCE")
         self.year = config.get("UrbanDB_YEAR")
-        self.session = None
-        self.handler = None
-
-    async def init(self):
-        self.session = aiohttp.ClientSession()
         self.handler = APIHandler()
-
-    async def close(self):
-        if self.session:
-            await self.handler.close_session(self.session)
-            self.session = None
-            logger.info("UrbanDBAPI session closed.")
 
     async def get_territories_for_buildings(self, scenario_id: int):
         api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones?year={self.year}&source={self.source}"
         logger.info(f"Fetching functional zones from API: {api_url}")
-
-        json_data = await self.handler.request("GET", api_url, session=self.session)
+        async with aiohttp.ClientSession() as session:
+            json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)
         features = json_data.get("features", [])
         if not features:
             logger.warning(f"No functional zones found for scenario {scenario_id}")
