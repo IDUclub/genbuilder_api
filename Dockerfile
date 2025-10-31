@@ -1,6 +1,10 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM python:3.10-slim
 
-RUN apt-get update && apt-get install -y python3-pip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 #add pyppi mirror to config
 COPY pip.conf /etc/xdg/pip/pip.conf

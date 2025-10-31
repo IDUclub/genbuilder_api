@@ -1,92 +1,181 @@
-from typing import Any, Dict, Optional, List, Literal
-from pydantic import BaseModel, Field, model_validator
-from geojson_pydantic import Feature, FeatureCollection, MultiPolygon, Polygon
-from app.schema._blocks_example import blocks
+from __future__ import annotations
 
-class ZonePrompt(BaseModel):
-    prompt: Optional[str] = Field(
-        default=None,
-        example="best quality, white background",
-        description="Positive prompt for this zone"
+from typing import Any, Dict, List, Optional, Union, Annotated
+
+from geojson_pydantic import Feature, FeatureCollection, Polygon
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
+
+from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
+
+
+class BlockProperties(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        str_strip_whitespace=True,
     )
-    negative_prompt: Optional[str] = Field(
+
+    block_id: Union[int, str] | None = Field(
         default=None,
-        example="cropped buildings, bad geometry, complex geometry",
-        description="Negative prompt for this zone"
+        description="Block identifier"
     )
 
-class ZoneProperties(BaseModel):
-    zone_id: int = Field(..., example=0, description="Уникальный идентификатор зоны")
-    func_zone: str = Field(..., examples=["residential", "industrial", "transport"], description="Функциональная зона")
-    storey_category: Optional[Literal["low_rise", "medium_rise", "high_rise"]] = Field(default=None, example="high_rise", description="Категория этажности")
-    construction_period: Optional[Literal["historic", "soviet", "modern"]] = Field(default=None, example="soviet", description="Период строительства")
-    population: Optional[Literal["density_1", "density_2", "density_3", "density_4", "density_5"]] = Field(default=None, example="density_1", description="Численность населения, выше значение - больше")
-    objects: Optional[str] = Field(default=None, examples=["Park", "School", "School, Hospital"], description="Описание объектов в зоне")
+    zone: Annotated[str, Field(description="Zone label (required)")]
 
-class ZoneFeature(Feature[Polygon | MultiPolygon, ZoneProperties]):
+    @field_validator("zone")
+    @classmethod
+    def _zone_required_nonempty(cls, v: str) -> str:
+        s = str(v).strip()
+        if not s or s.lower() in {"none", "nan"}:
+            raise ValueError("`zone` обязательно в feature.properties и не может быть пустым.")
+        return s
+
+
+class BlockFeature(Feature[Polygon, BlockProperties]):
+    """GeoJSON Feature representing an urban block (Polygon)."""
+
     pass
 
-class ZoneFeatureCollection(FeatureCollection[ZoneFeature]):
+
+class BlockFeatureCollection(FeatureCollection[BlockFeature]):
+    """GeoJSON FeatureCollection of block polygons."""
+
     pass
 
-class GenerateBuildingsRequest(BaseModel):
-    input_zones: ZoneFeatureCollection = Field(
+
+class ScenarioRequest(BaseModel):
+    scenario_id: int = Field(
+        ...,
+        description="Scenario ID",
+        json_schema_extra={"examples": [198]},
+    )
+
+    functional_zone_types: List[str] = Field(
+        ...,
+        description="List of target functional zone types",
+        json_schema_extra={"examples": [["residential", "business"]]},
+    )
+
+    targets_by_zone: Dict[str, Dict[str, float]] = Field(
         default=None,
-        examples=[blocks],
-        description="GeoJSON FeatureCollection of zones"
+        description=(
+            "Target indicators by zone, e.g. "
+            "{'residential': {'la': 20000, 'floors_avg': 12}}"
+        ),
+        json_schema_extra={
+            "examples": [
+                {
+                    "la_target": {
+                        "residential": 20000,
+                        "business": 6000,
+                        "industrial": 0,
+                    },
+                    "floors_avg": {
+                        "residential": 12,
+                        "business": 7,
+                        "industrial": 5,
+                    },
+                }
+            ]
+        },
     )
-    image_size: int = Field(
-        default=1024,
-        example=[512, 1024],
-        description="Width/height of the square output image"
-    )
-    prompt_dict: Optional[Dict[int, ZonePrompt]] = Field(
+
+    params: Dict[str, Any] = Field(
         default=None,
-        example={
-            63:{
-            "prompt": "best quality, white background",
-            "negative_prompt": "cropped buildings, bad geometry, complex geometry"
-            }, 
-            65:{
-            "prompt": "best quality, white background",
-            "negative_prompt": "cropped buildings, bad geometry, complex geometry"
-            }, 
-            68:{
-            "prompt": "best quality, white background",
-            "negative_prompt": "cropped buildings, bad geometry, complex geometry"
-            }},
-        description="Mapping from zone keys to their prompt settings"
+        description="Inference hyperparameters (as a dictionary)",
+        json_schema_extra={
+            "examples": [
+                {
+                    "knn": 8,
+                    "e_thr": 0.8,
+                    "il_thr": 0.5,
+                    "sv1_thr": 0.5,
+                    "slots": 5000,
+                }
+            ]
+        },
     )
-    num_steps: int = Field(
-        default=40,
-        description="Number of diffusion/inpainting steps"
+
+
+class TerritoryRequest(BaseModel):
+    blocks: BlockFeatureCollection = Field(
+        ...,
+        description=(
+            "GeoJSON FeatureCollection of blocks. "
+            "Each Feature must include `properties.zone`."
+        ),
+        json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
     )
-    guidance_scale: float = Field(
-        default=8.5,
-        description="Classifier-free guidance scale")
-    
+
+    targets_by_zone: Dict[str, Dict[str, float]] = Field(
+        default=None,
+        description=(
+            "Target indicators by zone, e.g. "
+            "{'residential': {'la': 20000, 'floors_avg': 12}}"
+        ),
+        json_schema_extra={
+            "examples": [
+                {
+                    "la_target": {
+                        "residential": 20000,
+                        "business": 6000,
+                        "industrial": 0,
+                    },
+                    "floors_avg": {
+                        "residential": 12,
+                        "business": 7,
+                        "industrial": 5,
+                    },
+                }
+            ]
+        },
+    )
+
+    params: Dict[str, Any] = Field(
+        default=None,
+        description="Inference hyperparameters (as a dictionary)",
+        json_schema_extra={
+            "examples": [
+                {
+                    "knn": 8,
+                    "e_thr": 0.8,
+                    "il_thr": 0.5,
+                    "sv1_thr": 0.5,
+                    "slots": 5000,
+                }
+            ]
+        },
+    )
+
     @model_validator(mode="after")
-    def ensure_no_extra_prompt_keys(self):
-        expected = {
-            feature.properties.zone_id
-            for feature in self.input_zones.features
-        }
-        prompt_ids = set(self.prompt_dict.keys())
-        extra = prompt_ids - expected
-        if extra:
-            raise ValueError(
-                f"Unexpected prompt_dict keys not in input_zones: {sorted(extra)}"
-            )
+    def _ensure_polygons(self):
+        for feature in self.blocks.features:
+            if getattr(feature, "geometry", None) is None or feature.geometry.type != "Polygon":
+                raise ValueError(
+                    "Each Feature in `blocks` must have geometry of type Polygon"
+                )
         return self
 
 
-class VectorizeBuildingsRequest(BaseModel):
-    input_zones: ZoneFeatureCollection = Field(
-        default=None,
-        examples=[blocks],
-        description="GeoJSON FeatureCollection of zones"
-    )
+PIPELINE_EXAMPLE = {
+    "blocks": EXAMPLE_BLOCKS,
+    "targets_by_zone": {
+        "residential": {"la": 20000, "floors_avg": 12},
+        "business": {"la": 6000, "floors_avg": 7},
+        "industrial": {"la": 0, "floors_avg": 5},
+    },
+    "params": {
+        "infer_knn": 8,
+        "infer_e_thr": 0.8,
+        "infer_il_thr": 0.5,
+        "infer_sv1_thr": 0.5,
+        "infer_slots": 5000,
+    },
+}
 
 
-class ProcessBuildingsRequest(BaseModel):
-    buildings_geojson: Dict[str, Any]
+__all__ = [
+    "BlockFeatureCollection",
+    "TerritoryRequest",
+    "PIPELINE_EXAMPLE",
+    "ScenarioRequest",
+]
