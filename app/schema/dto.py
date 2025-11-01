@@ -42,57 +42,16 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
     pass
 
 
-class ScenarioRequest(BaseModel):
-    scenario_id: int = Field(
-        ...,
-        description="Scenario ID",
-        json_schema_extra={"examples": [198]},
-    )
-
-    functional_zone_types: List[str] = Field(
-        ...,
-        description="List of target functional zone types",
-        json_schema_extra={"examples": [["residential", "business"]]},
-    )
-
-    targets_by_zone: Dict[str, Dict[str, float]] = Field(
+class ScenarioBody(BaseModel):
+    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
         default=None,
-        description=(
-            "Target indicators by zone, e.g. "
-            "{'residential': {'la': 20000, 'floors_avg': 12}}"
-        ),
-        json_schema_extra={
-            "examples": [
-                {
-                    "la_target": {
-                        "residential": 20000,
-                        "business": 6000,
-                        "industrial": 0,
-                    },
-                    "floors_avg": {
-                        "residential": 12,
-                        "business": 7,
-                        "industrial": 5,
-                    },
-                }
-            ]
-        },
+        description="Sum of living area and mean of floors count for functional zone types",
+        json_schema_extra={ "examples": [ { "la_target": { "residential": 20000, "business": 6000, "industrial": 0, }, "floors_avg": { "residential": 12, "business": 7, "industrial": 5, }, } ] }
     )
-
-    params: Dict[str, Any] = Field(
+    params: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Inference hyperparameters (as a dictionary)",
-        json_schema_extra={
-            "examples": [
-                {
-                    "knn": 8,
-                    "e_thr": 0.8,
-                    "il_thr": 0.5,
-                    "sv1_thr": 0.5,
-                    "slots": 5000,
-                }
-            ]
-        },
+        description="Inference hyperparameters",
+        json_schema_extra={ "examples": [ { "knn": 8, "e_thr": 0.8, "il_thr": 0.5, "sv1_thr": 0.5, "slots": 5000, } ] }
     )
 
 
@@ -173,9 +132,47 @@ PIPELINE_EXAMPLE = {
 }
 
 
+class BuildingFeatureCollection(BaseModel):
+    type: str = Field(...)
+    features: list = Field(..., description="List of building features, service optional (else - null)")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "id": "0",
+                            "type": "Feature",
+                            "properties": {
+                                "living_area": 10636.33,
+                                "floors_count": 7,
+                                "service": [{"school": 350}]
+                            },
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [
+                                    [
+                                        [31.03664649794203, 59.920231764344585],
+                                        [31.04196685516627, 59.920231764344585],
+                                        [31.04196685516627, 59.922346520462526],
+                                        [31.03664649794203, 59.922346520462526],
+                                        [31.03664649794203, 59.920231764344585]
+                                    ]
+                                ]
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
 __all__ = [
     "BlockFeatureCollection",
     "TerritoryRequest",
     "PIPELINE_EXAMPLE",
     "ScenarioRequest",
+    "BuildingFeatureCollection"
 ]

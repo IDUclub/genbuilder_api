@@ -17,7 +17,7 @@ class GenParams:
     '''merge_fix_eps - fix for bad geometry'''
 
     max_services_per_zone: Dict[str, int] = field(
-        default_factory=lambda: {"school": 3, "kindergarten": 5, "polyclinics": 1}
+        default_factory=lambda: {"school": 1, "kindergarten": 1, "polyclinics": 1}
     )
     '''max_services_per_zone - number of service building per zone'''
     randomize_service_forms: bool = True

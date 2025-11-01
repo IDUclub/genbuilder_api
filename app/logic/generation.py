@@ -131,6 +131,8 @@ class Genbuilder:
         infer_params: Dict[str, Any],
         blocks: Optional[BlockFeatureCollection] = None,
         scenario_id: Optional[int] = None,
+        year: Optional[int] = None,
+        source: Optional[str] = None,
         functional_zone_types: Optional[List[str]] = None,
     ):
         if blocks:
@@ -139,7 +141,7 @@ class Genbuilder:
             if gdf_blocks.crs is None:
                 gdf_blocks.set_crs(32636, inplace=True)
         if scenario_id:
-            gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id)
+            gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id, year, source)
             if functional_zone_types:
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
             gdf_blocks.to_crs(32636, inplace=True)
@@ -159,10 +161,8 @@ class Genbuilder:
         midline = snapper_result["midline"]
         empty_grid = await asyncio.to_thread(self.grid_generator.make_grid_for_blocks,
             blocks_gdf=gdf_blocks,
-            cell_size_m=10,
             midlines=gpd.GeoSeries([midline], crs=gdf_blocks.crs),
-            block_id_col="block_id",
-            offset_m=10.0)
+            block_id_col="block_id")
         isolines = await asyncio.to_thread(self.density_isolines.build, gdf_blocks, centroids, zone_id_col="zone")
         logger.info("isolines generated")
         grid = await asyncio.to_thread(self.grid_generator.fit_transform, empty_grid, isolines) 
@@ -173,5 +173,5 @@ class Genbuilder:
         )
         buildings = attributes_result["buildings"]
         logger.info("Buildings attributes generated")
-        buildings = buildings[["service", "living_area", "floors_count", "geometry"]]
+        buildings = buildings[["living_area", "floors_count", "service","geometry"]].to_crs(4326)
         return json.loads(buildings.to_json())
