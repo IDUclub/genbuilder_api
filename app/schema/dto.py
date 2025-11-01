@@ -132,9 +132,47 @@ PIPELINE_EXAMPLE = {
 }
 
 
+class BuildingFeatureCollection(BaseModel):
+    type: str = Field(...)
+    features: list = Field(..., description="List of building features, service optional (else - null)")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "id": "0",
+                            "type": "Feature",
+                            "properties": {
+                                "living_area": 10636.33,
+                                "floors_count": 7,
+                                "service": [{"school": 350}]
+                            },
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [
+                                    [
+                                        [358250, 6647140],
+                                        [358250, 6647220],
+                                        [358430, 6647220],
+                                        [358430, 6647140],
+                                        [358250, 6647140]
+                                    ]
+                                ]
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
 __all__ = [
     "BlockFeatureCollection",
     "TerritoryRequest",
     "PIPELINE_EXAMPLE",
     "ScenarioRequest",
+    "BuildingFeatureCollection"
 ]

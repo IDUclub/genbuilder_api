@@ -2,12 +2,12 @@ from typing import Annotated, List
 from fastapi import APIRouter, Body, Query, HTTPException
 
 from app.dependencies import builder
-from app.schema.dto import PIPELINE_EXAMPLE, ScenarioBody, TerritoryRequest
+from app.schema.dto import PIPELINE_EXAMPLE, ScenarioBody, TerritoryRequest, BuildingFeatureCollection
 
 generation_router = APIRouter()
 
 
-@generation_router.post("/generate/by_scenario", summary="Generate buildings for target scenario")
+@generation_router.post("/generate/by_scenario", summary="Generate buildings for target scenario", response_model=BuildingFeatureCollection)
 async def pipeline_route(
     scenario_id: Annotated[int,  Query(..., description="Scenario ID", example=198)],
     year:       Annotated[int,  Query(..., description="Data year", example=2024)],
@@ -31,8 +31,7 @@ async def pipeline_route(
 
 
 @generation_router.post(
-    "/generate/by_territory", summary="Generate buildings for target territories"
-)
+    "/generate/by_territory", summary="Generate buildings for target territories", response_model=BuildingFeatureCollection)
 async def pipeline_route(
     payload: TerritoryRequest = Body(
         ...,
