@@ -32,7 +32,7 @@ shapes_library = ShapesLibrary(generation_parameters)
 buildings_postprocessor = BuildingsPostProcessor(grid_operations, generation_parameters)
 planner = SitePlanner(grid_operations, shapes_library, generation_parameters)
 buildings_generator = BuildingGenerator(grid_operations, shapes_library, buildings_postprocessor, planner, generation_parameters)
-grid_generator = GridGenerator()
+grid_generator = GridGenerator(generation_parameters)
 density_isolines = DensityIsolines()
 
 builder = Genbuilder(config, urban_db_api, genbuilder_inference_api, 

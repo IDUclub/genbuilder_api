@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import MultiPolygon, Polygon, box as _box
 
+from app.logic.postprocessing.generation_params import GenParams
+
 
 @dataclass
 class GridGenerator:
@@ -54,12 +56,13 @@ class GridGenerator:
         - Suitable for generating isoline-based zoning masks or multi-level heatmaps over regular grids.
         - The “3-side rule” ensures morphological continuity along polygon boundaries.
     """
-
-    iso_buffer_m: float = 1.0
-    edge_share_frac: float = 0.2
-    auto_reproject: bool = True
-    fallback_epsg: int = 32636
-    verbose: bool = True
+    def __init__(self, generation_parameters: GenParams):
+        self.generation_parameters = generation_parameters
+        self.iso_buffer_m: float = 1.0
+        self.edge_share_frac: float = 0.2
+        self.auto_reproject: bool = True
+        self.fallback_epsg: int = 32636
+        self.verbose: bool = True
 
     def fit_transform(
         self,
@@ -212,12 +215,13 @@ class GridGenerator:
     def make_grid_for_blocks(
         self,
         blocks_gdf: gpd.GeoDataFrame,
-        cell_size_m: float = 15.0,
         midlines: Optional[gpd.GeoDataFrame | gpd.GeoSeries | List] = None,
         block_id_col: Optional[str] = None,
-        offset_m: float = 20.0,
         output_crs: Optional[str | int] = None,
     ) -> gpd.GeoDataFrame:
+
+        cell_size_m = self.generation_parameters.cell_size_m
+        offset_m = self.generation_parameters.cell_size_m
 
         if blocks_gdf is None or len(blocks_gdf) == 0:
             return gpd.GeoDataFrame(

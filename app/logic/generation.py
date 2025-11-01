@@ -161,10 +161,8 @@ class Genbuilder:
         midline = snapper_result["midline"]
         empty_grid = await asyncio.to_thread(self.grid_generator.make_grid_for_blocks,
             blocks_gdf=gdf_blocks,
-            cell_size_m=10,
             midlines=gpd.GeoSeries([midline], crs=gdf_blocks.crs),
-            block_id_col="block_id",
-            offset_m=10.0)
+            block_id_col="block_id")
         isolines = await asyncio.to_thread(self.density_isolines.build, gdf_blocks, centroids, zone_id_col="zone")
         logger.info("isolines generated")
         grid = await asyncio.to_thread(self.grid_generator.fit_transform, empty_grid, isolines) 
@@ -175,5 +173,5 @@ class Genbuilder:
         )
         buildings = attributes_result["buildings"]
         logger.info("Buildings attributes generated")
-        buildings = buildings[["living_area", "floors_count", "service","geometry"]]
+        buildings = buildings[["living_area", "floors_count", "service","geometry"]].to_crs(4326)
         return json.loads(buildings.to_json())
