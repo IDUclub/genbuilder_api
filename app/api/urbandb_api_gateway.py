@@ -12,12 +12,10 @@ class UrbanDBAPI:
     def __init__(self, config: Config):
         self.config = config
         self.url = config.get("UrbanDB_API")
-        self.source = config.get("UrbanDB_SOURCE")
-        self.year = config.get("UrbanDB_YEAR")
         self.handler = APIHandler()
 
-    async def get_territories_for_buildings(self, scenario_id: int):
-        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones?year={self.year}&source={self.source}"
+    async def get_territories_for_buildings(self, scenario_id: int, year: int, source: str):
+        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones?year={year}&source={source}"
         logger.info(f"Fetching functional zones from API: {api_url}")
         async with aiohttp.ClientSession() as session:
             json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)

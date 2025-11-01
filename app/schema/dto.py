@@ -42,57 +42,16 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
     pass
 
 
-class ScenarioRequest(BaseModel):
-    scenario_id: int = Field(
-        ...,
-        description="Scenario ID",
-        json_schema_extra={"examples": [198]},
-    )
-
-    functional_zone_types: List[str] = Field(
-        ...,
-        description="List of target functional zone types",
-        json_schema_extra={"examples": [["residential", "business"]]},
-    )
-
-    targets_by_zone: Dict[str, Dict[str, float]] = Field(
+class ScenarioBody(BaseModel):
+    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
         default=None,
-        description=(
-            "Target indicators by zone, e.g. "
-            "{'residential': {'la': 20000, 'floors_avg': 12}}"
-        ),
-        json_schema_extra={
-            "examples": [
-                {
-                    "la_target": {
-                        "residential": 20000,
-                        "business": 6000,
-                        "industrial": 0,
-                    },
-                    "floors_avg": {
-                        "residential": 12,
-                        "business": 7,
-                        "industrial": 5,
-                    },
-                }
-            ]
-        },
+        description="Sum of living area and mean of floors count for functional zone types",
+        json_schema_extra={ "examples": [ { "la_target": { "residential": 20000, "business": 6000, "industrial": 0, }, "floors_avg": { "residential": 12, "business": 7, "industrial": 5, }, } ] }
     )
-
-    params: Dict[str, Any] = Field(
+    params: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Inference hyperparameters (as a dictionary)",
-        json_schema_extra={
-            "examples": [
-                {
-                    "knn": 8,
-                    "e_thr": 0.8,
-                    "il_thr": 0.5,
-                    "sv1_thr": 0.5,
-                    "slots": 5000,
-                }
-            ]
-        },
+        description="Inference hyperparameters",
+        json_schema_extra={ "examples": [ { "knn": 8, "e_thr": 0.8, "il_thr": 0.5, "sv1_thr": 0.5, "slots": 5000, } ] }
     )
 
 

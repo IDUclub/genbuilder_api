@@ -131,6 +131,8 @@ class Genbuilder:
         infer_params: Dict[str, Any],
         blocks: Optional[BlockFeatureCollection] = None,
         scenario_id: Optional[int] = None,
+        year: Optional[int] = None,
+        source: Optional[str] = None,
         functional_zone_types: Optional[List[str]] = None,
     ):
         if blocks:
@@ -139,7 +141,7 @@ class Genbuilder:
             if gdf_blocks.crs is None:
                 gdf_blocks.set_crs(32636, inplace=True)
         if scenario_id:
-            gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id)
+            gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id, year, source)
             if functional_zone_types:
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
             gdf_blocks.to_crs(32636, inplace=True)
@@ -173,5 +175,5 @@ class Genbuilder:
         )
         buildings = attributes_result["buildings"]
         logger.info("Buildings attributes generated")
-        buildings = buildings[["service", "living_area", "floors_count", "geometry"]]
+        buildings = buildings[["living_area", "floors_count", "service","geometry"]]
         return json.loads(buildings.to_json())
