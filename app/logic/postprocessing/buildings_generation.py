@@ -10,7 +10,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.grid_operations import GridOperations
 from app.logic.postprocessing.shapes_library import ShapesLibrary
 from app.logic.postprocessing.site_panner import SitePlanner
@@ -34,12 +34,16 @@ class BuildingGenerator:
     """
     def __init__(self, grid_operations: GridOperations, shapes_library: ShapesLibrary, 
                  buildings_postprocessor: BuildingsPostProcessor, planner: SitePlanner, 
-                 generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+                 params_provider: ParamsProvider):
+        self._params = params_provider
         self.grid_operations = grid_operations
         self.shapes_library = shapes_library
         self.planner = planner
         self.buildings_postprocessor = buildings_postprocessor
+
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
 
     async def fit_transform(
         self,

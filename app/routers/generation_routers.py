@@ -24,7 +24,8 @@ async def pipeline_route(
             source=source,
             functional_zone_types=functional_zone_types,
             targets_by_zone=body.targets_by_zone,
-            infer_params=body.params,
+            infer_params=body.inference_parameters,
+            generation_parameters_override=body.generation_parameters
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
@@ -48,7 +49,8 @@ async def pipeline_route(
         return await builder.run(
             blocks=payload.blocks,
             targets_by_zone=payload.targets_by_zone,
-            infer_params=payload.params,
+            infer_params=payload.inference_parameters,
+            generation_parameters_override=payload.generation_parameters
         )
 
     except Exception as e:

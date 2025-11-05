@@ -7,7 +7,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.ops import unary_union
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.shapes_library import ShapesLibrary
 from app.logic.postprocessing.grid_operations import GridOperations
 
@@ -27,10 +27,14 @@ class SitePlanner:
       • GridOps — make_valid, вспомогательная топология (опционально)
       • ServiceShapes — библиотека форм и нормативы площадок
     """
-    def __init__(self, grid_operations: GridOperations, shapes_library: ShapesLibrary, generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+    def __init__(self, grid_operations: GridOperations, shapes_library: ShapesLibrary, params_provider: ParamsProvider):
+        self._params = params_provider
         self.grid_operations = grid_operations
         self.shapes_library = shapes_library
+
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
 
     @staticmethod
     def _min_cheb_between_sets(

@@ -9,7 +9,7 @@ from shapely.geometry import LineString
 from shapely.geometry import CAP_STYLE, JOIN_STYLE
 from shapely.ops import unary_union
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.grid_operations import GridOperations
 
 
@@ -26,9 +26,13 @@ class BuildingsPostProcessor:
       • GenParams — численные параметры
       • GridOps — sjoin/make_valid/components/pca_order
     """
-    def __init__(self, grid_operations: GridOperations, generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+    def __init__(self, grid_operations: GridOperations, params_provider: ParamsProvider):
+        self._params = params_provider
         self.grid_operations = grid_operations
+
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
 
     def mark_diag_only_and_buffers(
         self,

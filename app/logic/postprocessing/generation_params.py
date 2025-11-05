@@ -1,8 +1,13 @@
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+import contextvars
+import contextlib
 
-@dataclass(frozen=True)
-class GenParams:
+from dataclasses import field
+from typing import Dict, List, Tuple, Any, Iterator
+from pydantic import BaseModel, ConfigDict
+
+
+class GenParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
     max_run: int = 8
     ''' max_run - maximal length of living building'''
     neigh_empty_thr: int = 3
@@ -54,3 +59,32 @@ class GenParams:
     '''zone_name_col - name of zone type column'''
     verbose: bool = True
     '''verbose - if True, prints stats for generation results'''
+
+    def patched(self, patch: Dict[str, Any]) -> "GenParams":
+        def deep_merge(a, b):
+            if isinstance(a, dict) and isinstance(b, dict):
+                c = dict(a)
+                for k, v in b.items():
+                    c[k] = deep_merge(c.get(k), v)
+                return c
+            return b if b is not None else a
+
+        data = self.model_dump()
+        merged = deep_merge(data, patch)
+        return self.__class__.model_validate(merged)
+    
+
+class ParamsProvider:
+    def __init__(self, base: GenParams):
+        self._var: contextvars.ContextVar[GenParams] = contextvars.ContextVar("gen_params", default=base)
+
+    def current(self) -> GenParams:
+        return self._var.get()
+
+    @contextlib.contextmanager
+    def override(self, new_params: GenParams) -> Iterator[None]:
+        token = self._var.set(new_params)
+        try:
+            yield
+        finally:
+            self._var.reset(token)

@@ -4,7 +4,7 @@ import math
 import random
 from typing import Dict, List, Tuple
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 
 
 class ShapesLibrary:
@@ -22,8 +22,12 @@ class ShapesLibrary:
     Параметры берутся из GenParams (cell_size_m, service_site_rules,
     randomize_service_forms, inner_margin_cells и др.).
     """
-    def __init__(self, generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+    def __init__(self, params_provider: ParamsProvider):
+        self._params = params_provider
+
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
 
     @staticmethod
     def pattern_library() -> Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]]:

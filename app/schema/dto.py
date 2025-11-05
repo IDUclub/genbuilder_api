@@ -48,10 +48,15 @@ class ScenarioBody(BaseModel):
         description="Sum of living area and mean of floors count for functional zone types",
         json_schema_extra={ "examples": [ { "la_target": { "residential": 20000, "business": 6000, "industrial": 0, }, "floors_avg": { "residential": 12, "business": 7, "industrial": 5, }, } ] }
     )
-    params: Optional[Dict[str, Any]] = Field(
+    inference_parameters: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Inference hyperparameters",
         json_schema_extra={ "examples": [ { "knn": 8, "e_thr": 0.8, "il_thr": 0.5, "sv1_thr": 0.5, "slots": 5000, } ] }
+    )
+    generation_parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Generation parameters, override base ones",
+        json_schema_extra={ "examples": [ { "cell_size_m": 10 }] }
     )
 
 
@@ -89,9 +94,9 @@ class TerritoryRequest(BaseModel):
         },
     )
 
-    params: Dict[str, Any] = Field(
+    inference_parameters: Dict[str, Any] = Field(
         default=None,
-        description="Inference hyperparameters (as a dictionary)",
+        description="Inference hyperparameters",
         json_schema_extra={
             "examples": [
                 {
@@ -103,6 +108,12 @@ class TerritoryRequest(BaseModel):
                 }
             ]
         },
+    )
+
+    generation_parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Generation parameters, override base ones",
+        json_schema_extra={ "examples": [ { "cell_size_m": 10 }] }
     )
 
     @model_validator(mode="after")
