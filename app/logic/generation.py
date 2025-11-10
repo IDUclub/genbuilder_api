@@ -10,6 +10,7 @@ from shapely.geometry import mapping, shape
 from iduconfig import Config
 
 from app.schema.dto import BlockFeatureCollection
+from app.exceptions.http_exception_wrapper import http_exception
 
 from app.dependencies import GenbuilderInferenceAPI
 from app.dependencies import UrbanDBAPI
@@ -118,7 +119,10 @@ class Genbuilder:
                 props["geometry"] = shape(feature["geometry"])
                 rows.append(props)
         if not rows:
-            raise ValueError("No centroids generated")
+            raise http_exception(
+                404,
+                f"No centroids generated with current parameters"
+            )
         else:
             gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs=gdf.crs)
             gdf.geometry = gdf.centroid
@@ -144,6 +148,8 @@ class Genbuilder:
             gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id, year, source)
             if functional_zone_types:
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
+            if len(gdf_blocks) == 0:
+                raise http_exception(404, f"No blocks for zone(s): {', '.join(functional_zone_types)}")
             gdf_blocks.to_crs(32636, inplace=True)
 
         if gdf_blocks.zone.isna().any():
