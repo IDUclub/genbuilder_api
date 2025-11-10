@@ -1,5 +1,5 @@
 from typing import Annotated, List
-from fastapi import APIRouter, Body, Query, HTTPException
+from fastapi import APIRouter, Body, Query
 
 from app.dependencies import builder
 from app.schema.dto import PIPELINE_EXAMPLE, ScenarioBody, TerritoryRequest, BuildingFeatureCollection
@@ -19,18 +19,15 @@ async def pipeline_route(
         default_factory=ScenarioBody,
         description="Targets and hyperparameters as JSON (optional)"
     )
-):
-    try:
-        return await builder.run(
-            scenario_id=scenario_id,
-            year=year,
-            source=source,
-            functional_zone_types=functional_zone_types,
-            targets_by_zone=body.targets_by_zone,
-            infer_params=body.params,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
+    ):
+    return await builder.run(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        functional_zone_types=functional_zone_types,
+        targets_by_zone=body.targets_by_zone,
+        infer_params=body.params,
+    )
 
 
 @generation_router.post(
@@ -46,13 +43,9 @@ async def pipeline_route(
             }
         },
     )
-):
-    try:
-        return await builder.run(
-            blocks=payload.blocks,
-            targets_by_zone=payload.targets_by_zone,
-            infer_params=payload.params,
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
+    ):
+    return await builder.run(
+        blocks=payload.blocks,
+        targets_by_zone=payload.targets_by_zone,
+        infer_params=payload.params,
+    )
