@@ -15,7 +15,10 @@ async def pipeline_route(
     functional_zone_types: Annotated[List[str], Query(
         ..., description="Target functional zone types"
     , example=['residential', 'business', 'industrial'])],
-    body: Annotated[ScenarioBody, Body(..., description="Targets and hyperparameters as json")]
+    body: ScenarioBody = Body(
+        default_factory=ScenarioBody,
+        description="Targets and hyperparameters as JSON (optional)"
+    )
 ):
     try:
         return await builder.run(

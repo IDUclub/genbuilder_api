@@ -44,14 +44,57 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
 
 class ScenarioBody(BaseModel):
     targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
-        default=None,
+        default={
+            "la_target": {
+                "residential": 20000,
+                "business": 10000,
+                "industrial": 0,
+                "transport": 0,
+                "special": 0,
+                "agriculture": 5000,
+                "recreation": 0
+            },
+            "floors_avg": {
+                "residential": 12,
+                "business": 7,
+                "industrial": 5,
+                "transport": 1,
+                "special": 3,
+                "agriculture": 3,
+                "recreation": 1
+            }
+        },
         description="Sum of living area and mean of floors count for functional zone types",
-        json_schema_extra={ "examples": [ { "la_target": { "residential": 20000, "business": 6000, "industrial": 0, }, "floors_avg": { "residential": 12, "business": 7, "industrial": 5, }, } ] }
+        json_schema_extra={
+            "examples": [
+                {
+                    "la_target": {"residential": 20000, "business": 6000, "industrial": 0},
+                    "floors_avg": {"residential": 12, "business": 7, "industrial": 5},
+                }
+            ]
+        }
     )
+
     params: Optional[Dict[str, Any]] = Field(
-        default=None,
+        default={
+            "knn": 8,
+            "e_thr": 0.8,
+            "il_thr": 0.5,
+            "sv1_thr": 0.5,
+            "slots": 5000
+        },
         description="Inference hyperparameters",
-        json_schema_extra={ "examples": [ { "knn": 8, "e_thr": 0.8, "il_thr": 0.5, "sv1_thr": 0.5, "slots": 5000, } ] }
+        json_schema_extra={
+            "examples": [
+                {
+                    "knn": 8,
+                    "e_thr": 0.8,
+                    "il_thr": 0.5,
+                    "sv1_thr": 0.5,
+                    "slots": 5000
+                }
+            ]
+        }
     )
 
 
