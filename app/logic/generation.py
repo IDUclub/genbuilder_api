@@ -199,5 +199,5 @@ class Genbuilder:
             )
             buildings = attributes_result["buildings"]
             logger.info("Buildings attributes generated")
-            buildings = buildings[["living_area", "floors_count", "service","geometry"]].to_crs(4326)
+            buildings = buildings[["living_area", "floors_count", "service", "capacity", "geometry"]].to_crs(4326)
             return json.loads(buildings.to_json())

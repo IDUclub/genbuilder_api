@@ -9,7 +9,7 @@ from app.logic.centroids_normalization import Snapper
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.grid_operations import GridOperations
 from app.logic.postprocessing.shapes_library import ShapesLibrary
-from app.logic.postprocessing.site_panner import SitePlanner
+from app.logic.postprocessing.site_planner import SitePlanner
 from app.logic.postprocessing.buildings_postprocessing import BuildingsPostProcessor
 from app.logic.postprocessing.attributes_calculation import BuildingAttributes
 from app.logic.postprocessing.isolines import DensityIsolines

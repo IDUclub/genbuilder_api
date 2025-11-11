@@ -13,7 +13,7 @@ import pandas as pd
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.grid_operations import GridOperations
 from app.logic.postprocessing.shapes_library import ShapesLibrary
-from app.logic.postprocessing.site_panner import SitePlanner
+from app.logic.postprocessing.site_planner import SitePlanner
 from app.logic.postprocessing.buildings_postprocessing import BuildingsPostProcessor
 
 
@@ -172,13 +172,11 @@ class BuildingGenerator:
             sub_res = sub_all.index[is_res[idxs]].to_list()
             r_center = float(cells.loc[sub_res, "row_i"].median()) if len(sub_res) else float(sub_all["row_i"].median())
             c_center = float(cells.loc[sub_res, "col_j"].median()) if len(sub_res) else float(sub_all["col_j"].median())
-            Lmax = int(pd.to_numeric(cells.loc[in_ids, "iso_level"], errors="coerce").fillna(0).max()) if in_ids else 0
             zone_groups[zid_int] = {
                 "inside_ids": in_ids,
                 "outside_ids": out_ids,
                 "r_center": r_center,
-                "c_center": c_center,
-                "Lmax": Lmax,
+                "c_center": c_center
             }
         svc_count_by_zone: DefaultDict[int, DefaultDict[str, int]] = DefaultDict(lambda: DefaultDict(int))
         rng = random.Random(self.generation_parameters.service_random_seed)
@@ -195,12 +193,11 @@ class BuildingGenerator:
 
         for zid, meta in zone_groups.items():
             r_cen, c_cen = meta["r_center"], meta["c_center"]
-            Lmax = meta["Lmax"]
             z_inside = meta["inside_ids"]
             z_outside = meta["outside_ids"]
 
             limits = {svc: self.generation_parameters.max_services_per_zone.get(svc, 0)
-                      for svc in self.generation_parameters.svc_order}
+                    for svc in self.generation_parameters.svc_order}
             total_targets = sum(limits.values())
             if total_targets == 0:
                 continue
@@ -218,55 +215,55 @@ class BuildingGenerator:
                 for svc in self.generation_parameters.svc_order:
                     if svc_count_by_zone[zid][svc] >= limits[svc]:
                         continue
-                    placed_here = False
+                    cand_inside = [i for i in z_inside if not_house[i] and ok_iso[i]]
+                    cand_outside = [i for i in z_outside if not_house[i]]
+                    candidate_ids = cand_inside + cand_outside
+                    if not candidate_ids:
+                        continue
 
-                    for L in range(Lmax, -1, -1):
-                        allowed_ids = [
-                            i for i in z_inside
-                            if (i not in reserved_site_cells)
-                            and (not bool(cells.at[i, "is_building"]))
-                            and pd.notna(cells.at[i, "iso_level"]) and (int(cells.at[i, "iso_level"]) >= L)
-                        ]
-                        if not allowed_ids:
-                            continue
-                        ok = self.planner.try_place_site_and_service_in_zone_level(
-                            cells, zid, svc, allowed_ids, r_cen, c_cen,
-                            placed_site_sets, placed_sites_by_type, rng,
-                            shape_variants, idx_by_rc,
-                            reserved_site_cells, reserved_service_cells,
-                            neighbors_all,
-                            service_sites_geom, service_sites_attrs,
-                            service_polys_geom, service_polys_attrs,
-                        )
-                        if ok:
-                            svc_count_by_zone[zid][svc] += 1
-                            pbar.update(1)
-                            placed_here = True
-                            placed_any = True
-                            break
+                    ok = self.planner.place_service(
+                        cells=cells,
+                        zid=zid,
+                        svc=svc,
+                        candidate_ids=candidate_ids,
+                        r_cen=r_cen,
+                        c_cen=c_cen,
+                        placed_site_sets=placed_site_sets,
+                        placed_sites_by_type=placed_sites_by_type,
+                        rng=rng,
+                        shape_variants_by_svc=shape_variants,
+                        idx_by_rc=idx_by_rc,
+                        reserved_site_cells=reserved_site_cells,
+                        reserved_service_cells=reserved_service_cells,
+                        service_sites_geom=service_sites_geom,
+                        service_sites_attrs=service_sites_attrs,
+                        service_polys_geom=service_polys_geom,
+                        service_polys_attrs=service_polys_attrs,
+                        prefer_center=True
+                    )
 
-                    if (not placed_here) and z_outside:
-                        ok = self.planner.try_place_site_and_service_fallback_outside(
-                            cells, zid, svc, z_outside, r_cen, c_cen,
-                            placed_site_sets, placed_sites_by_type, rng,
-                            shape_variants, idx_by_rc, reserved_site_cells, reserved_service_cells,
-                            neighbors_all,
-                            service_sites_geom, service_sites_attrs,
-                            service_polys_geom, service_polys_attrs,
-                        )
-                        if ok:
-                            svc_count_by_zone[zid][svc] += 1
-                            pbar.update(1)
-                            placed_here = True
-                            placed_any = True
-
-                    if placed_here:
+                    if ok:
+                        svc_count_by_zone[zid][svc] += 1
+                        pbar.update(1)
                         progress = True
+                        placed_any = True
 
                 if not progress:
                     break
+
             pbar.close()
 
+        logger.info(f"[check] service placements: polys={len(service_polys_attrs)}, sites={len(service_sites_geom)}")
+        if service_polys_attrs:
+            _svc_counts = pd.Series([a.get("service") for a in service_polys_attrs]).value_counts(dropna=False).to_dict()
+            logger.debug(f"[check] service types placed: {_svc_counts}")
+        logger.info(f"Services len {len(service_polys_attrs)}, {service_polys_attrs}")
+        logger.info(f"Sites len {len(service_sites_attrs)}, {service_sites_attrs}")
+        service_rects = gpd.GeoDataFrame(service_polys_attrs, geometry=service_polys_geom, crs=cells.crs)
+        floors_mapping = {"school": 3, "kindergarten": 2, "polyclinics": 4} #move it to gen params
+        service_rects["floors_count"] = service_rects.service.map(floors_mapping)
+        service_rects['is_living'] = False
+        service_rects.to_file('service_polygons.geojson')
         diag_components, diag_rects = self.buildings_postprocessor.mark_diag_only_and_buffers(
             cells, neighbors_side=neighbors_side, neighbors_diag=neighbors_diag
         )
@@ -276,26 +273,16 @@ class BuildingGenerator:
             cells.loc[idx, "is_diag_only"] = True
 
         living_rects = self.buildings_postprocessor.living_cell_rects(cells, zid_col=zid_col)
-        buildings_rects = self.buildings_postprocessor.concat_rects( 
-            living_rects, diag_rects, service_polys_attrs, service_polys_geom, crs=cells.crs
+        buildings_rects =  gpd.GeoDataFrame(pd.concat([living_rects, diag_rects], ignore_index=True), geometry='geometry', crs=cells.crs)
+        buildings_rects.to_file('buildings_rects.geojson')
+        buildings_merged = (
+            buildings_rects[["geometry"]]    
+                .dissolve()                   
+                .explode(index_parts=False)   
+                .reset_index(drop=True)
         )
+        buildings_merged['is_living'] = True
+        buildings = pd.concat([buildings_merged, service_rects])
+        buildings = buildings[['service', 'capacity', 'is_living', 'floors_count', 'geometry']]
 
-        buildings_merged = self.buildings_postprocessor.merge_by_service(buildings_rects, zid_col=zid_col)
-        service_sites_gdf = gpd.GeoDataFrame(service_sites_attrs, geometry=service_sites_geom, crs=cells.crs).reset_index(drop=True)
-        buildings = self.buildings_postprocessor.finalize_buildings(cells, buildings_merged, service_sites_gdf)
-        if self.generation_parameters.verbose:
-            svc_rects = buildings_rects[buildings_rects.get("service").isin(self.generation_parameters.svc_order)]
-            logger.debug(
-                f"OK | cells={len(cells)}, living={int(cells['is_building'].sum())}, diag-only={int(cells.get('is_diag_only', False).sum() if 'is_diag_only' in cells.columns else 0)}\n"
-                f"Rects={len(buildings_rects)} (service rects: {len(svc_rects)}) | Merged={len(buildings_merged)} | Sites={len(service_sites_gdf)}"
-            )
-
-        if return_all:
-            return {
-                "cells": cells,
-                "buildings_rects": buildings_rects,
-                "buildings_merged": buildings_merged,
-                "service_sites": service_sites_gdf,
-                "buildings": buildings,
-            }
         return buildings

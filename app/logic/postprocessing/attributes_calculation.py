@@ -58,36 +58,33 @@ class BuildingAttributes:
         floors_avg_map = self._normalize_zone_map(targets_by_zone.get("floors_avg", {}))
 
         buildings = buildings_gdf.copy()
-        zones = self._to_metric_crs(
-            zones_gdf.copy(), like=buildings, fallback_epsg=self.fallback_epsg
-        )
-        buildings = self._to_metric_crs(
-            buildings, like=zones, fallback_epsg=self.fallback_epsg
-        )
-
+        zones = self._to_metric_crs(zones_gdf.copy(), like=buildings, fallback_epsg=self.fallback_epsg)
+        buildings = self._to_metric_crs(buildings, like=zones, fallback_epsg=self.fallback_epsg)
         if "is_living" not in buildings.columns:
-            raise KeyError(
-                "Column 'is_living' is required in buildings_gdf when using is_living-only mode."
-            )
+            raise KeyError("Column 'is_living' is required in buildings_gdf when using is_living-only mode.")
+        zid_col, zone_name_column = self._zone_cols(zones)
+        if not buildings.index.is_unique:
+            logger.warning("Buildings index has duplicates; resetting to RangeIndex.")
+        if not zones.index.is_unique:
+            logger.warning("Zones index has duplicates; resetting to RangeIndex.")
+        buildings = buildings.reset_index(drop=True)
+        zones = zones.reset_index(drop=True)
         is_living = buildings["is_living"].astype(bool)
 
-        zid_col, zone_name_column = self._zone_cols(zones)
+        def _missing_or_na(df: pd.DataFrame, col: str) -> bool:
+            return (col not in df.columns) or df[col].isna().any()
 
-        need_zone_join = (
-            (zid_col not in buildings.columns)
-            or buildings.get(zid_col).isna().any()
-            or (zone_name_column not in buildings.columns)
-            or buildings.get(zone_name_column).isna().any()
-        )
+        need_zone_join = _missing_or_na(buildings, zid_col) or _missing_or_na(buildings, zone_name_column)
         if need_zone_join:
             cent = buildings.geometry.representative_point()
+            points = gpd.GeoDataFrame(
+                {"_i": np.arange(len(buildings)), "geometry": cent.to_numpy()},
+                crs=buildings.crs,
+            ).set_geometry("geometry")
+
             j = (
                 gpd.sjoin(
-                    gpd.GeoDataFrame(
-                        {"_i": np.arange(len(buildings))},
-                        geometry=cent,
-                        crs=buildings.crs,
-                    ),
+                    points,
                     zones[[zid_col, zone_name_column, "geometry"]],
                     how="left",
                     predicate="within",
@@ -95,33 +92,21 @@ class BuildingAttributes:
                 .drop_duplicates("_i")
                 .set_index("_i")[[zid_col, zone_name_column]]
             )
-            buildings = buildings.drop(
-                columns=[zid_col, zone_name_column], errors="ignore"
-            ).join(j, how="left")
+
+            buildings = buildings.drop(columns=[zid_col, zone_name_column], errors="ignore").join(j, how="left")
 
         buildings[zone_name_column] = buildings[zone_name_column].astype(str).str.lower().str.strip()
         buildings["area_m2"] = buildings.geometry.area.astype(float)
 
         buildings["max_floor_zone"] = (
             buildings[zone_name_column]
-            .map(
-                lambda zn: self._safe_int_round(
-                    floors_avg_map.get(str(zn), self.default_zone_max_floor)
-                )
-            )
+            .map(lambda zn: self._safe_int_round(floors_avg_map.get(str(zn), self.default_zone_max_floor)))
             .astype(int)
         )
 
-        prev_floors = (
-            buildings["floors_count"].copy()
-            if "floors_count" in buildings.columns
-            else None
-        )
-
+        prev_floors = buildings["floors_count"].copy() if "floors_count" in buildings.columns else None
         if "floors_count" not in buildings.columns:
-            buildings["floors_count"] = pd.Series(
-                pd.NA, index=buildings.index, dtype="Float64"
-            )
+            buildings["floors_count"] = pd.Series(pd.NA, index=buildings.index, dtype="Float64")
 
         mask_liv = is_living
         if mask_liv.any():
@@ -162,20 +147,10 @@ class BuildingAttributes:
                     summary_rows.append(
                         {
                             "zone_name": zone_name_str,
-                            "target_requested": (
-                                None if (not np.isfinite(target_args)) else float(target_args)
-                            ),
+                            "target_requested": (None if (not np.isfinite(target_args)) else float(target_args)),
                             "target_used": 0.0,
-                            "cap_min": float(
-                                (
-                                    self.K_min * sub["area_m2"] * sub["floors_count"]
-                                ).sum()
-                            ),
-                            "cap_max": float(
-                                (
-                                    self.K_max * sub["area_m2"] * sub["floors_count"]
-                                ).sum()
-                            ),
+                            "cap_min": float((self.K_min * sub["area_m2"] * sub["floors_count"]).sum()),
+                            "cap_max": float((self.K_max * sub["area_m2"] * sub["floors_count"]).sum()),
                             "n_buildings": int(len(sub)),
                             "mean_K": np.nan,
                             "sum_living_area": 0.0,
@@ -184,32 +159,21 @@ class BuildingAttributes:
                     )
                     continue
 
-                cap_min = (self.K_min * sub["area_m2"] * sub["floors_count"]).astype(
-                    float
-                )
-                cap_max = (self.K_max * sub["area_m2"] * sub["floors_count"]).astype(
-                    float
-                )
+                cap_min = (self.K_min * sub["area_m2"] * sub["floors_count"]).astype(float)
+                cap_max = (self.K_max * sub["area_m2"] * sub["floors_count"]).astype(float)
                 cap_min_tot = float(cap_min.sum())
                 cap_max_tot = float(cap_max.sum())
                 T = float(np.clip(target_args, cap_min_tot, cap_max_tot))
                 Z = zones.loc[zones[zone_name_column] == zone_name_str]
-                if len(Z) == 0:
-                    boundary = unary_union(list(zones["_boundary"].values))
-                else:
-                    boundary = unary_union(list(Z["_boundary"].values))
-                dists = (
-                    sub.geometry.representative_point().distance(boundary).astype(float)
-                )
+                boundary = unary_union(list((Z if len(Z) else zones)["_boundary"].values))
+                dists = sub.geometry.representative_point().distance(boundary).astype(float)
                 weights = 1.0 / (self.dist_eps + dists)
                 if (not np.isfinite(weights).any()) or (weights.sum() == 0):
                     weights = pd.Series(1.0, index=sub.index)
 
                 deltas = (cap_max - cap_min).astype(float)
                 D = T - cap_min_tot
-                x = self._waterfill_with_caps(
-                    weights.to_numpy(), deltas.to_numpy(), float(D)
-                )
+                x = self._waterfill_with_caps(weights.to_numpy(), deltas.to_numpy(), float(D))
 
                 living = cap_min.values + x
                 denom = sub["area_m2"].values * sub["floors_count"].values
@@ -238,11 +202,7 @@ class BuildingAttributes:
         summary_df = pd.DataFrame(summary_rows)
         zones.drop(columns=["_boundary"], inplace=True, errors="ignore")
         if self.verbose:
-            meanK = (
-                summary_df["mean_K"].mean(skipna=True)
-                if len(summary_df) > 0
-                else float("nan")
-            )
+            meanK = summary_df["mean_K"].mean(skipna=True) if len(summary_df) > 0 else float("nan")
             logger.debug(
                 f"OK | objects={len(buildings)}, living_houses={int(is_living.sum())}, "
                 f"zones_with_target={summary_df.shape[0]} | mean(K)={meanK:.3f}"

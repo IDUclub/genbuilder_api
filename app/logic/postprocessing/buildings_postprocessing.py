@@ -129,19 +129,6 @@ class BuildingsPostProcessor:
             )
         return gpd.GeoDataFrame(rec_attr, geometry=rec_geom, crs=cells.crs)
 
-    @staticmethod
-    def concat_rects(
-        living_rects: gpd.GeoDataFrame,
-        diag_rects: gpd.GeoDataFrame,
-        service_polys_attrs: List[Dict],
-        service_polys_geom: List,
-        *,
-        crs,
-    ) -> gpd.GeoDataFrame:
-        svc_rects = gpd.GeoDataFrame(service_polys_attrs, geometry=service_polys_geom, crs=crs)
-        out = pd.concat([living_rects, diag_rects, svc_rects], ignore_index=True)
-        return gpd.GeoDataFrame(out, geometry="geometry", crs=crs)
-
     def merge_by_service(
         self,
         buildings_rects: gpd.GeoDataFrame,
