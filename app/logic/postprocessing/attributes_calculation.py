@@ -63,10 +63,6 @@ class BuildingAttributes:
         if "is_living" not in buildings.columns:
             raise KeyError("Column 'is_living' is required in buildings_gdf when using is_living-only mode.")
         zid_col, zone_name_column = self._zone_cols(zones)
-        if not buildings.index.is_unique:
-            logger.warning("Buildings index has duplicates; resetting to RangeIndex.")
-        if not zones.index.is_unique:
-            logger.warning("Zones index has duplicates; resetting to RangeIndex.")
         buildings = buildings.reset_index(drop=True)
         zones = zones.reset_index(drop=True)
         is_living = buildings["is_living"].astype(bool)

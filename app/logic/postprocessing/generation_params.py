@@ -3,7 +3,7 @@ import contextlib
 
 from dataclasses import field
 from typing import Dict, List, Tuple, Any, Iterator
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GenParams(BaseModel):
@@ -37,6 +37,50 @@ class GenParams(BaseModel):
     '''same_type_site_gap_cheb - minimal distance between service territories of same type to improve even distribution of services in block'''
     inner_margin_cells: int = 1
     '''inner_margin_cells - distance between border of service territory and service building'''
+
+    service_patterns: Dict[Tuple[str, str], Dict[str, Any]] = Field(
+        default_factory=lambda: {
+            ("kindergarten", "H7"): {
+                "offsets": [(-1,-1),(0,-1),(1,-1),(0,0),(-1,1),(0,1),(1,1)],
+                "allow_rotations": True,
+                "floors": 2,                     
+            },
+            ("kindergarten", "W5"): {
+                "offsets": [(0,0),(1,1),(0,2),(1,3),(0,4)],
+                "allow_rotations": True,
+                "floors": 2,                     
+            },
+            ("kindergarten", "LINE3"): {
+                "offsets": [(0,0),(0,1),(0,2)],
+                "allow_rotations": True,
+                "floors": 2,                     
+            },
+
+            ("polyclinics", "RECT_2x4"): {
+                "offsets": [(r,c) for r in range(2) for c in range(4)],
+                "allow_rotations": True,
+                "floors": 4,                     
+            },
+
+            ("school", "H_5x4"): {
+                "offsets": ([(r,0) for r in range(5)] + [(r,3) for r in range(5)] + [(2,c) for c in range(4)]),
+                "allow_rotations": True,
+                "floors": 3,                     
+            },
+            ("school", "RING_5x5_WITH_COURTYARD"): {
+                "offsets": [(r,c) for r in range(5) for c in range(5)
+                            if (r in {0,4} or c in {0,4}) and not (r in {0,4} and c in {0,4})],
+                "allow_rotations": False,
+                "floors": 3,                    
+            },
+            ("school", "RECT_5x2_WITH_OPEN_3"): {
+                "offsets": ([(1,c) for c in range(5)] + [(0,0),(0,4)]),
+                "allow_rotations": True,
+                "floors": 3,                    
+            },
+        },
+    )
+    '''service_patterns - geometry for services'''
 
     service_site_rules: Dict[Tuple[str, str], Dict[str, float | int]] = field(
         default_factory=lambda: {

@@ -257,13 +257,10 @@ class BuildingGenerator:
         if service_polys_attrs:
             _svc_counts = pd.Series([a.get("service") for a in service_polys_attrs]).value_counts(dropna=False).to_dict()
             logger.debug(f"[check] service types placed: {_svc_counts}")
-        logger.info(f"Services len {len(service_polys_attrs)}, {service_polys_attrs}")
-        logger.info(f"Sites len {len(service_sites_attrs)}, {service_sites_attrs}")
+        logger.debug(f"Services len {len(service_polys_attrs)}, {service_polys_attrs}")
+        logger.debug(f"Sites len {len(service_sites_attrs)}, {service_sites_attrs}")
         service_rects = gpd.GeoDataFrame(service_polys_attrs, geometry=service_polys_geom, crs=cells.crs)
-        floors_mapping = {"school": 3, "kindergarten": 2, "polyclinics": 4} #move it to gen params
-        service_rects["floors_count"] = service_rects.service.map(floors_mapping)
         service_rects['is_living'] = False
-        service_rects.to_file('service_polygons.geojson')
         diag_components, diag_rects = self.buildings_postprocessor.mark_diag_only_and_buffers(
             cells, neighbors_side=neighbors_side, neighbors_diag=neighbors_diag
         )
@@ -274,7 +271,6 @@ class BuildingGenerator:
 
         living_rects = self.buildings_postprocessor.living_cell_rects(cells, zid_col=zid_col)
         buildings_rects =  gpd.GeoDataFrame(pd.concat([living_rects, diag_rects], ignore_index=True), geometry='geometry', crs=cells.crs)
-        buildings_rects.to_file('buildings_rects.geojson')
         buildings_merged = (
             buildings_rects[["geometry"]]    
                 .dissolve()                   

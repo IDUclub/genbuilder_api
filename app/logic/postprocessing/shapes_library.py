@@ -29,39 +29,18 @@ class ShapesLibrary:
     def generation_parameters(self) -> GenParams:
         return self._params.current()
 
-    @staticmethod
-    def pattern_library() -> Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]]:
-        lib: Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
-        # Kindergarten
-        k_h7 = [(-1, -1), (0, -1), (1, -1), (0, 0), (-1, 1), (0, 1), (1, 1)]
-        k_w5 = [(0, 0), (1, 1), (0, 2), (1, 3), (0, 4)]
-        line3 = [(0, 0), (0, 1), (0, 2)]
-        lib["kindergarten"] = [
-            ("H7", k_h7, True),
-            ("W5", k_w5, True),
-            ("LINE3", line3, True),
-        ]
-        # Polyclinics
-        rect_2x4 = [(r, c) for r in range(2) for c in range(4)]
-        lib["polyclinics"] = [("RECT_2x4", rect_2x4, True)]
-        # School
-        s_h_5x4 = (
-            [(r, 0) for r in range(5)]
-            + [(r, 3) for r in range(5)]
-            + [(2, c) for c in range(4)]
-        )
-        ring: List[Tuple[int, int]] = []
-        for r in range(5):
-            for c in range(5):
-                if (r in {0, 4} or c in {0, 4}) and not (r in {0, 4} and c in {0, 4}):
-                    ring.append((r, c))
-        s_5x2_open = [(1, c) for c in range(5)] + [(0, 0), (0, 4)]
-        lib["school"] = [
-            ("H_5x4", s_h_5x4, True),
-            ("RING_5x5_WITH_COURTYARD", ring, False),
-            ("RECT_5x2_WITH_OPEN_3", s_5x2_open, True),
-        ]
-        return lib
+    def pattern_library(self) -> Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]]:
+        service_parameters = self.generation_parameters.service_patterns
+        if not service_parameters:
+            raise ValueError("GenParams.service_patterns пуст — нет доступных форм сервисов.")
+
+        by_svc: Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
+        for (svc, pattern), rec in service_parameters.items():
+            offsets_raw = rec["offsets"]
+            offsets = [(int(dr), int(dc)) for dr, dc in offsets_raw]
+            allow = bool(rec.get("allow_rotations", True))
+            by_svc.setdefault(svc, []).append((pattern, offsets, allow))
+        return by_svc
 
     @staticmethod
     def transform_offsets(
@@ -130,17 +109,14 @@ class ShapesLibrary:
         ncells = self.site_cells_required(area_m2)
         return self.rect_variants_for_cells(ncells, max_variants=12)
 
-    def service_site_spec(self, svc: str, pattern_name: str) -> Tuple[float, int]:
-        spec = self.generation_parameters.service_site_rules.get((svc, pattern_name))
-        if spec:
-            return float(spec["site_area_m2"]), int(spec["capacity"])
-        if svc == "school":
-            return 33000.0, 600
-        if svc == "kindergarten":
-            return 4400.0, 100
-        if svc == "polyclinics":
-            return 3000.0, 300
-        return 2000.0, 0
+    def service_site_spec(self, svc: str, pattern: str | None) -> Tuple[float, int, int]:
+        rule = self.generation_parameters.service_site_rules.get((svc, pattern))
+        site_area_m2 = float(rule.get("site_area_m2", 0.0))
+        capacity     = int(rule.get("capacity", 0))
+
+        pat_meta = self.generation_parameters.service_patterns.get((svc, pattern))
+        floors = pat_meta.get("floors")
+        return site_area_m2, capacity, int(floors)
     
     def min_site_cells_for_service_with_margin(
         self,

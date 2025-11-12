@@ -15,12 +15,6 @@ from app.logic.postprocessing.grid_operations import GridOperations
 
 
 class SitePlanner:
-    """
-    Планировщик площадок и сервисных зданий на регулярной сетке, без деления на внутри/вне зоны.
-    Единый метод place_service(...) стремится соблюдать зазоры до домов/площадок и выбирает первую
-    валидную конфигурацию (жадная стратегия).
-    """
-
     def __init__(self, grid_operations: GridOperations, shapes_library: ShapesLibrary, params_provider: ParamsProvider):
         self._params = params_provider
         self.grid_operations = grid_operations
@@ -88,7 +82,7 @@ class SitePlanner:
         invert: bool = False,
     ) -> List[Tuple[int, int]]:
         pos = [(r0, c0) for r0 in range(rmin, rmax + 1) for c0 in range(cmin, cmax + 1)]
-        def d2(rc: Tuple[int, int]):  # сортировка по близости к центру
+        def d2(rc: Tuple[int, int]): 
             return (rc[0] - r_center) ** 2 + (rc[1] - c_center) ** 2
         pos.sort(key=d2, reverse=invert and (svc == "kindergarten"))
         return pos
@@ -119,7 +113,7 @@ class SitePlanner:
         cmin_core = cmin + inner_margin_cells
         cmax_core = cmax - inner_margin_cells
         if (rmin_core > rmax_core) or (cmin_core > cmax_core):
-            logger.info(f"[site:{site_id}] svc={svc} ядро не формируется: inner_margin_cells={inner_margin_cells}, "
+            logger.debug(f"[site:{site_id}] svc={svc} ядро не формируется: inner_margin_cells={inner_margin_cells}, "
                         f"r[{rmin_core},{rmax_core}] c[{cmin_core},{cmax_core}]")
             return False, [], ""
         core_h = rmax_core - rmin_core + 1
@@ -159,8 +153,6 @@ class SitePlanner:
                     return True, idxs, pat_name
         return False, [], ""
 
-    # --- ЕДИНЫЙ публичный метод размещения ---
-
     def place_service(
         self,
         cells: gpd.GeoDataFrame,
@@ -184,17 +176,12 @@ class SitePlanner:
         max_rect_variants: int = 12,
         prefer_center: bool = True,
     ) -> bool:
-        """
-        Размещает площадку и сервисное здание, используя единый список кандидатов ячеек.
-        Возвращает True при первом успешном варианте (жадный выбор).
-        """
         gp = self.generation_parameters
 
         if not candidate_ids:
-            logger.info(f"[place] zone={zid} svc={svc}: нет кандидатов для размещения")
+            logger.debug(f"[place] zone={zid} svc={svc}: нет кандидатов для размещения")
             return False
 
-        # Подготовка области поиска и быстрого индексирования
         candidate_set = set(candidate_ids)
         coord_to_idx = {(int(cells.at[i, "row_i"]), int(cells.at[i, "col_j"])): i for i in candidate_ids}
         sub = cells.loc[candidate_ids, ["row_i", "col_j"]]
@@ -204,23 +191,20 @@ class SitePlanner:
             svc, rmin, rmax, cmin, cmax, r_cen, c_cen, invert=not prefer_center
         )
 
-        # Лог параметров и старт
-        logger.info(
+        logger.debug(
             f"[place] zone={zid} svc={svc}: candidates={len(candidate_ids)}, "
             f"search_bbox=(r:{rmin}-{rmax}, c:{cmin}-{cmax}), prefer_center={prefer_center}, "
             f"gaps(houses/sites/same)={gp.gap_to_houses_cheb}/{gp.gap_between_sites_cheb}/{gp.same_type_site_gap_cheb}, "
             f"inner_margin={gp.inner_margin_cells}, cell_size={gp.cell_size_m}"
         )
 
-        # Перебор вариантов сервисов/паттернов
         service_variants = list(shape_variants_by_svc.get(svc, []))
         if not service_variants:
-            logger.info(f"[place] zone={zid} svc={svc}: нет вариантов формы сервиса в библиотеке")
+            logger.debug(f"[place] zone={zid} svc={svc}: нет вариантов формы сервиса в библиотеке")
             return False
         if gp.randomize_service_forms:
             rng.shuffle(service_variants)
 
-        # Счётчики причин отказов (для диагностики)
         fail_counts: Dict[str, int] = {
             "out_of_bounds": 0,
             "reserved": 0,
@@ -236,11 +220,7 @@ class SitePlanner:
                 examples[reason].append(msg)
 
         for (pat_name, _service_vars) in service_variants:
-            site_area_m2, capacity = self.shapes_library.service_site_spec(svc, pat_name)
-
-            # ЕДИНЫЙ набор форм площадки:
-            # 1) «территориальные» варианты по площади,
-            # 2) простые прямоугольники по числу ячеек (с учётом внутренних отступов).
+            site_area_m2, capacity, floors = self.shapes_library.service_site_spec(svc, pat_name)
             min_cells = self.shapes_library.min_site_cells_for_service_with_margin(
                 svc, shape_variants_by_svc, inner_margin_cells=int(gp.inner_margin_cells)
             )
@@ -253,7 +233,7 @@ class SitePlanner:
             if gp.randomize_service_forms:
                 rng.shuffle(territory_variants)
 
-            logger.info(
+            logger.debug(
                 f"[place] zone={zid} svc={svc} pattern={pat_name}: "
                 f"target_area≈{site_area_m2:.1f} m², min_cells={min_cells}, "
                 f"rect_cells={ncells}, variants={len(territory_variants)}"
@@ -265,13 +245,11 @@ class SitePlanner:
                 Hs, Ws = (max(vrr) - min(vrr) + 1), (max(vcc) - min(vcc) + 1)
 
                 for (r0, c0) in positions:
-                    # быстрый отсев по границе
                     if r0 + Hs - 1 > rmax or c0 + Ws - 1 > cmax:
                         fail_counts["out_of_bounds"] += 1
                         add_example("out_of_bounds", f"pos=({r0},{c0}) {Hs}x{Ws} выходит за bbox")
                         continue
 
-                    # Собираем индексы ячеек площадки
                     site_idxs: List[int] = []
                     ok = True
                     first_reason = None
@@ -290,7 +268,6 @@ class SitePlanner:
                             ok = False
                             first_reason = "not_candidate"
                             break
-                        # запрет на здания внутри площадки
                         ib_val = cells.at[idx, "is_building"] if "is_building" in cells.columns else False
                         if pd.isna(ib_val):
                             ib_val = False
@@ -305,7 +282,6 @@ class SitePlanner:
                         add_example(first_reason, f"pos=({r0},{c0}) form={site_form_name} {Hs}x{Ws}")
                         continue
 
-                    # Чебышёв-зазоры
                     if not self._cheb_gap_ok_to_houses(cells, site_idxs):
                         fail_counts["cheb_houses"] += 1
                         add_example("cheb_houses", f"pos=({r0},{c0}) form={site_form_name}")
@@ -315,7 +291,6 @@ class SitePlanner:
                         add_example("cheb_sites", f"pos=({r0},{c0}) form={site_form_name}")
                         continue
 
-                    # Вкладываем здание внутрь площадки (с учетом inner_margin)
                     ok_svc, svc_cell_idxs, chosen_pat = self.try_place_service_inside_site(
                         cells=cells,
                         svc=svc,
@@ -333,7 +308,6 @@ class SitePlanner:
                         add_example("inner_fail", f"pos=({r0},{c0}) site={site_form_name} {Hs}x{Ws}")
                         continue
 
-                    # Фиксация результата
                     site_id = f"SITE_{svc.upper()}_{str(len(service_sites_attrs) + 1).zfill(4)}"
                     service_id = f"{svc.upper()}_{str(len(service_polys_attrs) + 1).zfill(4)}"
 
@@ -373,28 +347,28 @@ class SitePlanner:
                             "zone_id": int(zid),
                             "n_cells": int(len(svc_cell_idxs)),
                             "width_m": float(gp.cell_size_m),
-                            "capacity": int(capacity)
+                            "capacity": int(capacity),
+                            "floors_count": int(floors),
                         }
                     )
 
                     placed_site_sets.append(site_idxs)
                     placed_sites_by_type.setdefault(svc, []).append(site_idxs)
 
-                    logger.info(
+                    logger.debug(
                         f"[place] SUCCESS zone={zid} svc={svc} site_id={site_id} building_id={service_id} "
                         f"pattern={pat_name}/{chosen_pat} site_form={site_form_name} "
                         f"site_cells={len(site_idxs)} bld_cells={len(svc_cell_idxs)} capacity={capacity}"
                     )
                     return True
 
-        # Итоговый отчёт об отказах
         total_fails = sum(fail_counts.values())
         if total_fails > 0:
             msg = " | ".join(
                 [f"{k}={v}{(' ex=' + '; '.join(examples[k])) if examples[k] else ''}" for k, v in fail_counts.items()]
             )
-            logger.info(f"[place] zone={zid} svc={svc}: не удалось разместить. Причины: {msg}")
+            logger.debug(f"[place] zone={zid} svc={svc}: не удалось разместить. Причины: {msg}")
         else:
-            logger.info(f"[place] zone={zid} svc={svc}: перебор вариантов не дал результата (нет явных отказов)")
+            logger.debug(f"[place] zone={zid} svc={svc}: перебор вариантов не дал результата (нет явных отказов)")
 
         return False
