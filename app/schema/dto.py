@@ -113,32 +113,46 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
     )
 
-    targets_by_zone: Dict[str, Dict[str, float]] = Field(
-        default=None,
-        description=(
-            "Target indicators by zone, e.g. "
-            "{'residential': {'la': 20000, 'floors_avg': 12}}"
-        ),
+    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
+        default={
+            "la_target": {
+                "residential": 20000,
+                "business": 10000,
+                "industrial": 0,
+                "transport": 0,
+                "special": 0,
+                "agriculture": 5000,
+                "recreation": 0
+            },
+            "floors_avg": {
+                "residential": 12,
+                "business": 7,
+                "industrial": 5,
+                "transport": 1,
+                "special": 3,
+                "agriculture": 3,
+                "recreation": 1
+            }
+        },
+        description="Sum of living area and mean of floors count for functional zone types",
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {
-                        "residential": 20000,
-                        "business": 6000,
-                        "industrial": 0,
-                    },
-                    "floors_avg": {
-                        "residential": 12,
-                        "business": 7,
-                        "industrial": 5,
-                    },
+                    "la_target": {"residential": 20000, "business": 6000, "industrial": 0},
+                    "floors_avg": {"residential": 12, "business": 7, "industrial": 5},
                 }
             ]
-        },
+        }
     )
 
-    inference_parameters: Dict[str, Any] = Field(
-        default=None,
+    params: Optional[Dict[str, Any]] = Field(
+        default={
+            "knn": 8,
+            "e_thr": 0.8,
+            "il_thr": 0.5,
+            "sv1_thr": 0.5,
+            "slots": 5000
+        },
         description="Inference hyperparameters",
         json_schema_extra={
             "examples": [
@@ -147,12 +161,11 @@ class TerritoryRequest(BaseModel):
                     "e_thr": 0.8,
                     "il_thr": 0.5,
                     "sv1_thr": 0.5,
-                    "slots": 5000,
+                    "slots": 5000
                 }
             ]
-        },
+        }
     )
-
     generation_parameters: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Generation parameters, override base ones",
@@ -167,23 +180,6 @@ class TerritoryRequest(BaseModel):
                     "Each Feature in `blocks` must have geometry of type Polygon"
                 )
         return self
-
-
-PIPELINE_EXAMPLE = {
-    "blocks": EXAMPLE_BLOCKS,
-    "targets_by_zone": {
-        "residential": {"la": 20000, "floors_avg": 12},
-        "business": {"la": 6000, "floors_avg": 7},
-        "industrial": {"la": 0, "floors_avg": 5},
-    },
-    "params": {
-        "infer_knn": 8,
-        "infer_e_thr": 0.8,
-        "infer_il_thr": 0.5,
-        "infer_sv1_thr": 0.5,
-        "infer_slots": 5000,
-    },
-}
 
 
 class BuildingFeatureCollection(BaseModel):

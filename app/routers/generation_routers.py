@@ -2,7 +2,7 @@ from typing import Annotated, List
 from fastapi import APIRouter, Body, Query
 
 from app.dependencies import builder
-from app.schema.dto import PIPELINE_EXAMPLE, ScenarioBody, TerritoryRequest, BuildingFeatureCollection
+from app.schema.dto import ScenarioBody, TerritoryRequest, BuildingFeatureCollection
 
 generation_router = APIRouter()
 
@@ -36,13 +36,7 @@ async def pipeline_route(
 async def pipeline_route(
     payload: TerritoryRequest = Body(
         ...,
-        description="Body for request",
-        examples={
-            "demo": {
-                "summary": "Request example",
-                "value": PIPELINE_EXAMPLE,
-            }
-        },
+        description="Body for request"
     )
     ):
     return await builder.run(
