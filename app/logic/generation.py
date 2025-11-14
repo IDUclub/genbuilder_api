@@ -98,7 +98,7 @@ class Genbuilder:
     @staticmethod
     def make_service(row):
         if pd.isna(row["service"]):
-            return None
+            return []
         return [{row["service"]: row["capacity"]}]
 
     async def run(
