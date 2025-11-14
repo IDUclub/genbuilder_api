@@ -15,6 +15,7 @@ from app.logic.postprocessing.attributes_calculation import BuildingAttributes
 from app.logic.postprocessing.isolines import DensityIsolines
 from app.logic.postprocessing.built_grid import GridGenerator
 from app.logic.postprocessing.buildings_generation import BuildingGenerator
+from app.logic.postprocessing.services_generation import ServiceGenerator
 from app.logic.generation import Genbuilder
 
 config = Config()
@@ -33,13 +34,14 @@ grid_operations = GridOperations(params_provider)
 shapes_library = ShapesLibrary(params_provider)
 buildings_postprocessor = BuildingsPostProcessor(grid_operations, params_provider)
 planner = SitePlanner(grid_operations, shapes_library, params_provider)
-buildings_generator = BuildingGenerator(grid_operations, shapes_library, buildings_postprocessor, planner, params_provider)
+buildings_generator = BuildingGenerator(grid_operations, buildings_postprocessor, params_provider)
+service_generator = ServiceGenerator(shapes_library, planner, params_provider)
 grid_generator = GridGenerator(params_provider)
 density_isolines = DensityIsolines()
 
 builder = Genbuilder(
     config, urban_db_api, genbuilder_inference_api,
     snapper, density_isolines, grid_generator,
-    buildings_generator, attributes_calculator,
+    buildings_generator, service_generator, attributes_calculator,
     params_provider
 )

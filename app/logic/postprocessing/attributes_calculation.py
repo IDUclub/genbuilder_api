@@ -12,28 +12,11 @@ from shapely.ops import unary_union
 @dataclass
 class BuildingAttributes:
     """
-    Calculation of building floor counts and allocation of total living area for RESIDENTIAL buildings.
+    Assigns floors and living area to buildings by zones.
 
-    The model relies ONLY on the boolean attribute `is_living` in `buildings_gdf`.
-
-    Rules:
-      1) For is_living=True:
-         floors_count = round(area_m2 / area_per_floor_m2),
-         then clipped to [1, floors_cap(zone_name)],
-         where floors_cap is taken from targets_by_zone['floors_avg'][zone_name] (rounded);
-         if missing, `default_zone_max_floor` is used.
-      2) Living area: living_area = K * area_m2 * floors_count, with K ∈ [K_min, K_max].
-      3) The target value targets_by_zone['la_target'][zone_name] is distributed by weights
-         proportional to 1 / distance_to_zone_boundary, considering cap_min/cap_max (=K_min/K_max).
-      4) If no target is defined for zone_name or it is ≤ 0 → living_area=0, K=NaN for all buildings in that zone.
-      5) For is_living=False → living_area=0, K=NaN, _alloc_status="non_living → living=0".
-
-    Returns:
-      dict:
-        - buildings: GeoDataFrame containing area_m2, floors_count, K, living_area, _alloc_status
-        - summary:  DataFrame aggregated by zone name:
-                    zone_name, target_requested, target_used, cap_min, cap_max,
-                    n_buildings, mean_K, sum_living_area, status
+    Uses `is_living` flag and `targets_by_zone` (la_target, floors_avg)
+    to compute floors_count, living_area and K per building, and returns
+    updated buildings, per-zone summary, and allocated living area.
     """
 
     area_per_floor_m2: float = 100.0
@@ -61,7 +44,7 @@ class BuildingAttributes:
         zones = self._to_metric_crs(zones_gdf.copy(), like=buildings, fallback_epsg=self.fallback_epsg)
         buildings = self._to_metric_crs(buildings, like=zones, fallback_epsg=self.fallback_epsg)
         if "is_living" not in buildings.columns:
-            raise KeyError("Column 'is_living' is required in buildings_gdf when using is_living-only mode.")
+            buildings["is_living"] = True
         zid_col, zone_name_column = self._zone_cols(zones)
         buildings = buildings.reset_index(drop=True)
         zones = zones.reset_index(drop=True)
@@ -196,6 +179,7 @@ class BuildingAttributes:
                 )
 
         summary_df = pd.DataFrame(summary_rows)
+        allocated_by_zone = buildings[['zone_id', 'living_area']].groupby('zone_id').sum()['living_area'].to_dict()
         zones.drop(columns=["_boundary"], inplace=True, errors="ignore")
         if self.verbose:
             meanK = summary_df["mean_K"].mean(skipna=True) if len(summary_df) > 0 else float("nan")
@@ -204,7 +188,11 @@ class BuildingAttributes:
                 f"zones_with_target={summary_df.shape[0]} | mean(K)={meanK:.3f}"
             )
 
-        return {"buildings": buildings, "summary": summary_df}
+        return {
+            "buildings": buildings,
+            "summary": summary_df,
+            "allocated_by_zone": allocated_by_zone,
+        }
 
     @staticmethod
     def _normalize_zone_map(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,7 +233,7 @@ class BuildingAttributes:
         zid = (
             "zone_id"
             if "zone_id" in zones.columns
-            else ("id" if "id" in zones.columns else "ZONE_ID")
+            else ("id" if "id" in zones.columns else "zone_id")
         )
         if zid not in zones.columns:
             zones[zid] = np.arange(len(zones))

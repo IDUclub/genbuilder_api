@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union, Annotated
+from typing import Any, Dict, Optional, Union, Annotated
 
 from geojson_pydantic import Feature, FeatureCollection, Polygon
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
@@ -26,7 +26,7 @@ class BlockProperties(BaseModel):
     def _zone_required_nonempty(cls, v: str) -> str:
         s = str(v).strip()
         if not s or s.lower() in {"none", "nan"}:
-            raise ValueError("`zone` обязательно в feature.properties и не может быть пустым.")
+            raise ValueError("feature.properties should have 'zone'.")
         return s
 
 
@@ -198,7 +198,7 @@ class BuildingFeatureCollection(BaseModel):
                             "properties": {
                                 "living_area": 10636.33,
                                 "floors_count": 7,
-                                "service": [{"school": 350}]
+                                "service": [{"Школа": 350}]
                             },
                             "geometry": {
                                 "type": "Polygon",

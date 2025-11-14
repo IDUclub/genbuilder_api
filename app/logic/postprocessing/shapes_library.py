@@ -5,22 +5,17 @@ import random
 from typing import Dict, List, Tuple
 
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.exceptions.http_exception_wrapper import http_exception
 
 
 class ShapesLibrary:
     """
-    Библиотека форм сервисных зданий и утилиты генерации вариантов.
+    Defines and manages service building shapes.
 
-    Ответственности:
-      • Описание «ядер» (offsets) форм сервисов по типам (сад, школа, поликлиника)
-      • Повороты/зеркала, нормализация в (0,0), построение всех уникальных вариантов
-      • Подбор прямоугольников для площадок по требуемой площади (в клетках)
-      • Расчёт min количества клеток площадки с учётом внутреннего отступа
-      • Подбор и сортировка вариантов по соотношению сторон ядра (core fit)
-      • Нормативы площадок/вместимости по типу сервиса и имени паттерна
-
-    Параметры берутся из GenParams (cell_size_m, service_site_rules,
-    randomize_service_forms, inner_margin_cells и др.).
+    Provides core patterns for services (school, kindergarten, clinic),
+    generates rotated/mirrored variants, picks rectangular site layouts
+    for a given area, and returns site specs (area, capacity, floors) for
+    use in service placement.
     """
     def __init__(self, params_provider: ParamsProvider):
         self._params = params_provider
@@ -32,8 +27,7 @@ class ShapesLibrary:
     def pattern_library(self) -> Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]]:
         service_parameters = self.generation_parameters.service_patterns
         if not service_parameters:
-            raise ValueError("GenParams.service_patterns пуст — нет доступных форм сервисов.")
-
+            raise http_exception(404, f"No service patterns")
         by_svc: Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
         for (svc, pattern), rec in service_parameters.items():
             offsets_raw = rec["offsets"]
