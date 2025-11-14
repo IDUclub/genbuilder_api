@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import MultiPolygon, Polygon, box as _box
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 
 
 @dataclass
@@ -56,13 +56,17 @@ class GridGenerator:
         - Suitable for generating isoline-based zoning masks or multi-level heatmaps over regular grids.
         - The “3-side rule” ensures morphological continuity along polygon boundaries.
     """
-    def __init__(self, generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+    def __init__(self, params_provider: ParamsProvider):
+        self._params = params_provider
         self.iso_buffer_m: float = 1.0
         self.edge_share_frac: float = 0.2
         self.auto_reproject: bool = True
         self.fallback_epsg: int = 32636
         self.verbose: bool = True
+
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
 
     def fit_transform(
         self,
