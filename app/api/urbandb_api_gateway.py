@@ -42,7 +42,9 @@ class UrbanDBAPI:
         logger.info(f"Fetching service normatives from API: {api_url}")
         async with aiohttp.ClientSession() as session:
             json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)
-        territory_id = json_data["project"]["region"]["id"]
+        territory_id =  json_data.get("project", {}).get("region", {}).get("id", False)
+        if not territory_id:
+            raise http_exception(404, f"No territory id found for scenario {scenario_id}")
         logger.info(f"Territory id for scenario {scenario_id} collected.")
         return territory_id
     

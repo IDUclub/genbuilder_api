@@ -32,17 +32,14 @@ class BuildingAttributes:
 
     def fit_transform(
         self,
-        buildings_gdf: gpd.GeoDataFrame,
-        zones_gdf: gpd.GeoDataFrame,
+        buildings: gpd.GeoDataFrame,
+        zones: gpd.GeoDataFrame,
         targets_by_zone: Dict[str, Dict[str, float | int]],
     ) -> Dict[str, object]:
 
         la_target_map = self._normalize_zone_map(targets_by_zone.get("la_target", {}))
         floors_avg_map = self._normalize_zone_map(targets_by_zone.get("floors_avg", {}))
 
-        buildings = buildings_gdf.copy()
-        zones = self._to_metric_crs(zones_gdf.copy(), like=buildings, fallback_epsg=self.fallback_epsg)
-        buildings = self._to_metric_crs(buildings, like=zones, fallback_epsg=self.fallback_epsg)
         if "is_living" not in buildings.columns:
             buildings["is_living"] = True
         zid_col, zone_name_column = self._zone_cols(zones)
@@ -84,8 +81,6 @@ class BuildingAttributes:
         )
 
         prev_floors = buildings["floors_count"].copy() if "floors_count" in buildings.columns else None
-        if "floors_count" not in buildings.columns:
-            buildings["floors_count"] = pd.Series(pd.NA, index=buildings.index, dtype="Float64")
 
         mask_liv = is_living
         if mask_liv.any():

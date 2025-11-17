@@ -5,6 +5,7 @@ import random
 from typing import Dict, List, Tuple
 
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.logic.postprocessing.service_types import ServiceType
 from app.exceptions.http_exception_wrapper import http_exception
 
 
@@ -24,11 +25,11 @@ class ShapesLibrary:
     def generation_parameters(self) -> GenParams:
         return self._params.current()
 
-    def pattern_library(self) -> Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]]:
+    def pattern_library(self) -> Dict[ServiceType, List[Tuple[str, List[Tuple[int, int]], bool]]]:
         service_parameters = self.generation_parameters.service_patterns
         if not service_parameters:
-            raise http_exception(404, f"No service patterns")
-        by_svc: Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
+            raise http_exception(404, "No service patterns")
+        by_svc: Dict[ServiceType, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
         for (svc, pattern), rec in service_parameters.items():
             offsets_raw = rec["offsets"]
             offsets = [(int(dr), int(dc)) for dr, dc in offsets_raw]
@@ -103,10 +104,10 @@ class ShapesLibrary:
         ncells = self.site_cells_required(area_m2)
         return self.rect_variants_for_cells(ncells, max_variants=12)
 
-    def service_site_spec(self, svc: str, pattern: str | None) -> Tuple[float, int, int]:
+    def service_site_spec(self, svc: ServiceType, pattern: str | None) -> Tuple[float, int, int]:
         rule = self.generation_parameters.service_site_rules.get((svc, pattern))
         site_area_m2 = float(rule.get("site_area_m2", 0.0))
-        capacity     = int(rule.get("capacity", 0))
+        capacity = int(rule.get("capacity", 0))
 
         pat_meta = self.generation_parameters.service_patterns.get((svc, pattern))
         floors = pat_meta.get("floors")
@@ -114,8 +115,8 @@ class ShapesLibrary:
     
     def min_site_cells_for_service_with_margin(
         self,
-        svc: str,
-        shape_variants_by_svc: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]],
+        svc: ServiceType,
+        shape_variants_by_svc: Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]],
         *,
         inner_margin_cells: int | None = None,
     ) -> int:
@@ -159,12 +160,12 @@ class ShapesLibrary:
 
     def build_shape_variants_from_library(
         self, *, rng: random.Random | None = None
-    ) -> Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]]:
+    ) -> Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]]:
         lib = self.pattern_library()
         if rng is None:
             rng = random.Random(self.generation_parameters.service_random_seed)
-        shape_variants: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]] = {}
-        for svc, shapes in lib.items():
+        shape_variants: Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]] = {}
+        for svc, shapes in lib.items(): 
             items = list(shapes)
             if self.generation_parameters.randomize_service_forms:
                 rng.shuffle(items)

@@ -11,6 +11,7 @@ import pandas as pd
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.shapes_library import ShapesLibrary
 from app.logic.postprocessing.site_planner import SitePlanner
+from app.logic.postprocessing.service_types import ServiceType
 
 
 class ServiceGenerator:
@@ -100,7 +101,7 @@ class ServiceGenerator:
                 "zone_name": zone_name,
             }
 
-        svc_capacity_by_zone: DefaultDict[int, DefaultDict[str, float]] = DefaultDict(
+        svc_capacity_by_zone: DefaultDict[int, DefaultDict[ServiceType, float]] = DefaultDict(
             lambda: DefaultDict(float)
         )
 
@@ -114,7 +115,7 @@ class ServiceGenerator:
         service_polys_geom: List = []
         service_polys_attrs: List[Dict] = []
         placed_site_sets: List[List[int]] = []
-        placed_sites_by_type: DefaultDict[str, List[List[int]]] = DefaultDict(list)
+        placed_sites_by_type: DefaultDict[ServiceType, List[List[int]]] = DefaultDict(list)
 
         for zid, meta in zone_groups.items():
             r_cen, c_cen = meta["r_center"], meta["c_center"]
@@ -122,10 +123,11 @@ class ServiceGenerator:
             z_outside = meta["outside_ids"]
             zone_name = meta["zone_name"]
 
-            limits: Dict[str, float] = {}
+            limits: Dict[ServiceType, float] = {}
             for service in self.generation_parameters.created_services:
                 row = service_normatives.loc[
-                    service_normatives["service_name"] == service, "service_capacity"
+                    service_normatives["service_id"] == service.value,
+                    "service_capacity",
                 ]
                 if row.empty:
                     logger.warning(
@@ -145,7 +147,7 @@ class ServiceGenerator:
             pbar = tqdm(
                 total=total_targets,
                 desc=f"Zone {zone_name}-{zid} service placement",
-                unit="cap",  # capacity units
+                unit="cap",
                 disable=not getattr(self.generation_parameters, "verbose", True),
                 leave=False,
             )

@@ -12,6 +12,7 @@ from loguru import logger
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.postprocessing.shapes_library import ShapesLibrary
 from app.logic.postprocessing.grid_operations import GridOperations
+from app.logic.postprocessing.service_types import ServiceType, SERVICE_TITLE_RU
 
 
 class SitePlanner:
@@ -65,8 +66,8 @@ class SitePlanner:
         cells: gpd.GeoDataFrame,
         candidate_idxs: List[int],
         placed_site_sets: List[List[int]],
-        placed_sites_by_type: Dict[str, List[List[int]]],
-        svc: str,
+        placed_sites_by_type: Dict[ServiceType, List[List[int]]],
+        svc: ServiceType,
     ) -> bool:
         for S in placed_site_sets:
             if self._min_cheb_between_sets(cells, candidate_idxs, S) < self.generation_parameters.gap_between_sites_cheb:
@@ -78,7 +79,7 @@ class SitePlanner:
 
     @staticmethod
     def _positions_from_center_or_edges(
-        svc: str,
+        svc: ServiceType,
         rmin: int,
         rmax: int,
         cmin: int,
@@ -88,42 +89,41 @@ class SitePlanner:
         invert: bool = False,
     ) -> List[Tuple[int, int]]:
         pos = [(r0, c0) for r0 in range(rmin, rmax + 1) for c0 in range(cmin, cmax + 1)]
+
         def d2(rc: Tuple[int, int]):
             return (rc[0] - r_center) ** 2 + (rc[1] - c_center) ** 2
-        pos.sort(key=d2, reverse=invert and (svc == "Детский сад"))
+        
+        pos.sort(key=d2, reverse=invert and (svc is ServiceType.KINDERGARTEN))
         return pos
 
     def try_place_service_inside_site(
         self,
+        *,
         cells: gpd.GeoDataFrame,
-        svc: str,
+        svc: ServiceType,
         zid: int,
         site_idxs: List[int],
         site_id: str,
-        shape_variants_by_svc: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]],
+        shape_variants_by_svc: Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]],
         reserved_service_cells: Set[int],
         rng: random.Random,
         idx_by_rc: Dict[Tuple[int, int], int],
-        *,
-        inner_margin_cells: int | None = None,
     ) -> Tuple[bool, List[int], str]:
-        if inner_margin_cells is None:
-            inner_margin_cells = int(self.generation_parameters.inner_margin_cells)
-
+        inner_margin = self.generation_parameters.inner_margin_cells
         site_set = set(site_idxs)
         rvals = cells.loc[site_idxs, "row_i"].to_numpy()
         cvals = cells.loc[site_idxs, "col_j"].to_numpy()
         rmin, rmax = int(rvals.min()), int(rvals.max())
         cmin, cmax = int(cvals.min()), int(cvals.max())
 
-        rmin_core = rmin + inner_margin_cells
-        rmax_core = rmax - inner_margin_cells
-        cmin_core = cmin + inner_margin_cells
-        cmax_core = cmax - inner_margin_cells
+        rmin_core = rmin + inner_margin
+        rmax_core = rmax - inner_margin
+        cmin_core = cmin + inner_margin
+        cmax_core = cmax - inner_margin
 
         if (rmin_core > rmax_core) or (cmin_core > cmax_core):
             logger.debug(
-                f"[site:{site_id}] svc={svc} cores is not formed: inner_margin_cells={inner_margin_cells}, "
+                f"[site:{site_id}] svc={svc} cores is not formed: inner_margin_cells={inner_margin}, "
                 f"r[{rmin_core},{rmax_core}] c[{cmin_core},{cmax_core}]"
             )
             return False, [], ""
@@ -173,14 +173,14 @@ class SitePlanner:
         self,
         cells: gpd.GeoDataFrame,
         zid: int,
-        svc: str,
+        svc: ServiceType,
         candidate_ids: List[int],
         r_cen: float,
         c_cen: float,
         placed_site_sets: List[List[int]],
-        placed_sites_by_type: Dict[str, List[List[int]]],
+        placed_sites_by_type: Dict[ServiceType, List[List[int]]],
         rng: random.Random,
-        shape_variants_by_svc: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]],
+        shape_variants_by_svc: Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]],
         idx_by_rc: Dict[Tuple[int, int], int],
         reserved_site_cells: Set[int],
         reserved_service_cells: Set[int],
@@ -308,15 +308,14 @@ class SitePlanner:
                         shape_variants_by_svc=shape_variants_by_svc,
                         reserved_service_cells=reserved_service_cells,
                         rng=rng,
-                        idx_by_rc=idx_by_rc,
-                        inner_margin_cells=int(self.generation_parameters.inner_margin_cells),
+                        idx_by_rc=idx_by_rc
                     )
                     if not ok_svc:
                         fail_counts["inner_fail"] += 1
                         continue
 
-                    site_id = f"SITE_{svc.upper()}_{str(len(service_sites_attrs) + 1).zfill(4)}"
-                    service_id = f"{svc.upper()}_{str(len(service_polys_attrs) + 1).zfill(4)}"
+                    site_id = f"SITE_{svc}_{str(len(service_sites_attrs) + 1).zfill(4)}"
+                    service_id = f"{svc}_{str(len(service_polys_attrs) + 1).zfill(4)}"
 
                     for idx in site_idxs:
                         reserved_site_cells.add(idx)
@@ -339,7 +338,7 @@ class SitePlanner:
                     service_sites_attrs.append(
                         {
                             "site_id": site_id,
-                            "service": svc,
+                            "service":  SERVICE_TITLE_RU[svc], 
                             "zone_id": int(zid),
                             "site_form": site_form_name,
                             "pattern_for_norms": pat_name,
@@ -355,7 +354,7 @@ class SitePlanner:
                         {
                             "building_id": service_id,
                             "site_id": site_id,
-                            "service": svc,
+                            "service": SERVICE_TITLE_RU[svc],
                             "pattern": chosen_pat,
                             "zone_id": int(zid),
                             "n_cells": int(len(svc_cell_idxs)),

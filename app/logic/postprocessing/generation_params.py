@@ -5,6 +5,7 @@ from dataclasses import field
 from typing import Dict, List, Tuple, Any, Iterator
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.logic.postprocessing.service_types import ServiceType
 
 class GenParams(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -22,7 +23,11 @@ class GenParams(BaseModel):
     '''merge_fix_eps - fix for bad geometry'''
     living_area_normative: int = 18
     '''number of living area meters per person'''
-    created_services: List[str] = ["Школа", "Детский сад", "Поликлиника"]
+    created_services: List[ServiceType] = [
+        ServiceType.SCHOOL,
+        ServiceType.KINDERGARTEN,
+        ServiceType.POLYCLINIC,
+    ]
     '''list of services supported by algorithm'''
     randomize_service_forms: bool = True
     '''randomize_service_forms - flag for randomization of service building forms (for better diversity)'''
@@ -37,64 +42,97 @@ class GenParams(BaseModel):
     inner_margin_cells: int = 1
     '''inner_margin_cells - distance between border of service territory and service building'''
 
-    service_patterns: Dict[Tuple[str, str], Dict[str, Any]] = Field(
+    service_patterns: Dict[Tuple[ServiceType, str], Dict[str, Any]] = Field(
         default_factory=lambda: {
-            ("Детский сад", "H7"): {
-                "offsets": [(-1,-1),(0,-1),(1,-1),(0,0),(-1,1),(0,1),(1,1)],
+            (ServiceType.KINDERGARTEN, "H7"): {
+                "offsets": [(-1, -1), (0, -1), (1, -1), (0, 0), (-1, 1), (0, 1), (1, 1)],
                 "allow_rotations": True,
-                "floors": 2,                     
+                "floors": 2,
             },
-            ("Детский сад", "W5"): {
-                "offsets": [(0,0),(1,1),(0,2),(1,3),(0,4)],
+            (ServiceType.KINDERGARTEN, "W5"): {
+                "offsets": [(0, 0), (1, 1), (0, 2), (1, 3), (0, 4)],
                 "allow_rotations": True,
-                "floors": 2,                     
+                "floors": 2,
             },
-            ("Детский сад", "LINE3"): {
-                "offsets": [(0,0),(0,1),(0,2)],
+            (ServiceType.KINDERGARTEN, "LINE3"): {
+                "offsets": [(0, 0), (0, 1), (0, 2)],
                 "allow_rotations": True,
-                "floors": 2,                     
-            },
-
-            ("Поликлиника", "RECT_2x4"): {
-                "offsets": [(r,c) for r in range(2) for c in range(4)],
-                "allow_rotations": True,
-                "floors": 4,                     
+                "floors": 2,
             },
 
-            ("Школа", "H_5x4"): {
-                "offsets": ([(r,0) for r in range(5)] + [(r,3) for r in range(5)] + [(2,c) for c in range(4)]),
+            (ServiceType.POLYCLINIC, "RECT_2x4"): {
+                "offsets": [(r, c) for r in range(2) for c in range(4)],
                 "allow_rotations": True,
-                "floors": 3,                     
+                "floors": 4,
             },
-            ("Школа", "RING_5x5_WITH_COURTYARD"): {
-                "offsets": [(r,c) for r in range(5) for c in range(5)
-                            if (r in {0,4} or c in {0,4}) and not (r in {0,4} and c in {0,4})],
+
+            (ServiceType.SCHOOL, "H_5x4"): {
+                "offsets": ([(r, 0) for r in range(5)]
+                            + [(r, 3) for r in range(5)]
+                            + [(2, c) for c in range(4)]),
+                "allow_rotations": True,
+                "floors": 3,
+            },
+            (ServiceType.SCHOOL, "RING_5x5_WITH_COURTYARD"): {
+                "offsets": [
+                    (r, c)
+                    for r in range(5)
+                    for c in range(5)
+                    if (r in {0, 4} or c in {0, 4}) and not (r in {0, 4} and c in {0, 4})
+                ],
                 "allow_rotations": False,
-                "floors": 3,                    
+                "floors": 3,
             },
-            ("Школа", "RECT_5x2_WITH_OPEN_3"): {
-                "offsets": ([(1,c) for c in range(5)] + [(0,0),(0,4)]),
+            (ServiceType.SCHOOL, "RECT_5x2_WITH_OPEN_3"): {
+                "offsets": ([(1, c) for c in range(5)] + [(0, 0), (0, 4)]),
                 "allow_rotations": True,
-                "floors": 3,                    
+                "floors": 3,
             },
         },
     )
     '''service_patterns - geometry for services'''
 
-    service_site_rules: Dict[Tuple[str, str], Dict[str, float | int]] = field(
+    service_site_rules: Dict[Tuple[ServiceType, str], Dict[str, float | int]] = field(
         default_factory=lambda: {
-            ("Школа", "RECT_5x2_WITH_OPEN_3"): {"capacity": 600, "site_area_m2": 33000.0},
-            ("Школа", "H_5x4"): {"capacity": 800, "site_area_m2": 36000.0},
-            ("Школа", "RING_5x5_WITH_COURTYARD"): {"capacity": 1100, "site_area_m2": 39600.0},
-            ("Детский сад", "LINE3"): {"capacity": 60, "site_area_m2": 2640.0},
-            ("Детский сад", "W5"): {"capacity": 100, "site_area_m2": 4400.0},
-            ("Детский сад", "H7"): {"capacity": 150, "site_area_m2": 5700.0},
-            ("Поликлиника", "RECT_2x4"): {"capacity": 300, "site_area_m2": 3000.0},
+            (ServiceType.SCHOOL, "RECT_5x2_WITH_OPEN_3"): {
+                "capacity": 600,
+                "site_area_m2": 33000.0,
+            },
+            (ServiceType.SCHOOL, "H_5x4"): {
+                "capacity": 800,
+                "site_area_m2": 36000.0,
+            },
+            (ServiceType.SCHOOL, "RING_5x5_WITH_COURTYARD"): {
+                "capacity": 1100,
+                "site_area_m2": 39600.0,
+            },
+            (ServiceType.KINDERGARTEN, "LINE3"): {
+                "capacity": 60,
+                "site_area_m2": 2640.0,
+            },
+            (ServiceType.KINDERGARTEN, "W5"): {
+                "capacity": 100,
+                "site_area_m2": 4400.0,
+            },
+            (ServiceType.KINDERGARTEN, "H7"): {
+                "capacity": 150,
+                "site_area_m2": 5700.0,
+            },
+            (ServiceType.POLYCLINIC, "RECT_2x4"): {
+                "capacity": 300,
+                "site_area_m2": 3000.0,
+            },
         }
     )
     '''service_site_rules - mapping of capacity and area of territory for each type of service building'''
 
-    svc_order: List[str] = field(default_factory=lambda: ["Школа", "Детский сад", "Поликлиника"])
+    svc_order: List[ServiceType] = field(
+        default_factory=lambda: [
+            ServiceType.SCHOOL,
+            ServiceType.KINDERGARTEN,
+            ServiceType.POLYCLINIC,
+        ]
+    )
     '''svc_order - priority for service generation (between types)'''
     zone_id_col: str = "zone_id"
     '''zone_id_col - name of zone id column'''

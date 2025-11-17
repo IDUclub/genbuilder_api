@@ -94,12 +94,6 @@ class Genbuilder:
             gdf.geometry = gdf.centroid
 
         return gdf
-    
-    @staticmethod
-    def make_service(row):
-        if pd.isna(row["service"]):
-            return []
-        return [{row["service"]: row["capacity"]}]
 
     async def run(
         self,
@@ -175,9 +169,11 @@ class Genbuilder:
             logger.info("Service buildings generated")
             buildings_all = pd.concat([living_buildings, service_buildings], ignore_index=True)
             buildings_all = buildings_all[['floors_count', 'living_area', 'service', 'capacity', 'geometry']]
-            buildings_all['living_area'] = buildings_all['living_area'].fillna(0)
-            buildings_all['living_area'] = buildings_all['living_area'].round(0)
-            buildings_all["service"] = buildings_all.apply(self.make_service, axis=1)
-            buildings_all = buildings_all.drop(columns=["capacity"])
-            buildings_all = buildings_all.to_crs(4326)
+            buildings_all['living_area'] = buildings_all['living_area'].fillna(0).round(0)
+            buildings_all["service"] = [
+                [{service: capacity}] if mask else []
+                for mask, service, capacity in zip(buildings_all["service"].notna(), 
+                                                   buildings_all["service"], buildings_all["capacity"])
+            ]
+            buildings_all = buildings_all.drop(columns=["capacity"]).to_crs(4326)
             return json.loads(buildings_all.to_json())
