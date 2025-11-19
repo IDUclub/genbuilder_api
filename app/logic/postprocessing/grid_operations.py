@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from shapely.geometry.base import BaseGeometry
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 
 
 class GridOperations:
@@ -25,8 +25,12 @@ class GridOperations:
 
     Параметры берутся из GenParams (edge_share_frac, max_run и др.).
     """
-    def __init__(self, generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+    def __init__(self, params_provider: ParamsProvider):
+        self._params = params_provider
+
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
 
     @staticmethod
     def sjoin(

@@ -4,60 +4,38 @@ import math
 import random
 from typing import Dict, List, Tuple
 
-from app.logic.postprocessing.generation_params import GenParams
+from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.logic.postprocessing.service_types import ServiceType
+from app.exceptions.http_exception_wrapper import http_exception
 
 
 class ShapesLibrary:
     """
-    Библиотека форм сервисных зданий и утилиты генерации вариантов.
+    Defines and manages service building shapes.
 
-    Ответственности:
-      • Описание «ядер» (offsets) форм сервисов по типам (сад, школа, поликлиника)
-      • Повороты/зеркала, нормализация в (0,0), построение всех уникальных вариантов
-      • Подбор прямоугольников для площадок по требуемой площади (в клетках)
-      • Расчёт min количества клеток площадки с учётом внутреннего отступа
-      • Подбор и сортировка вариантов по соотношению сторон ядра (core fit)
-      • Нормативы площадок/вместимости по типу сервиса и имени паттерна
-
-    Параметры берутся из GenParams (cell_size_m, service_site_rules,
-    randomize_service_forms, inner_margin_cells и др.).
+    Provides core patterns for services (school, kindergarten, clinic),
+    generates rotated/mirrored variants, picks rectangular site layouts
+    for a given area, and returns site specs (area, capacity, floors) for
+    use in service placement.
     """
-    def __init__(self, generation_parameters: GenParams):
-        self.generation_parameters = generation_parameters
+    def __init__(self, params_provider: ParamsProvider):
+        self._params = params_provider
 
-    @staticmethod
-    def pattern_library() -> Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]]:
-        lib: Dict[str, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
-        # Kindergarten
-        k_h7 = [(-1, -1), (0, -1), (1, -1), (0, 0), (-1, 1), (0, 1), (1, 1)]
-        k_w5 = [(0, 0), (1, 1), (0, 2), (1, 3), (0, 4)]
-        line3 = [(0, 0), (0, 1), (0, 2)]
-        lib["kindergarten"] = [
-            ("H7", k_h7, True),
-            ("W5", k_w5, True),
-            ("LINE3", line3, True),
-        ]
-        # Polyclinics
-        rect_2x4 = [(r, c) for r in range(2) for c in range(4)]
-        lib["polyclinics"] = [("RECT_2x4", rect_2x4, True)]
-        # School
-        s_h_5x4 = (
-            [(r, 0) for r in range(5)]
-            + [(r, 3) for r in range(5)]
-            + [(2, c) for c in range(4)]
-        )
-        ring: List[Tuple[int, int]] = []
-        for r in range(5):
-            for c in range(5):
-                if (r in {0, 4} or c in {0, 4}) and not (r in {0, 4} and c in {0, 4}):
-                    ring.append((r, c))
-        s_5x2_open = [(1, c) for c in range(5)] + [(0, 0), (0, 4)]
-        lib["school"] = [
-            ("H_5x4", s_h_5x4, True),
-            ("RING_5x5_WITH_COURTYARD", ring, False),
-            ("RECT_5x2_WITH_OPEN_3", s_5x2_open, True),
-        ]
-        return lib
+    @property
+    def generation_parameters(self) -> GenParams:
+        return self._params.current()
+
+    def pattern_library(self) -> Dict[ServiceType, List[Tuple[str, List[Tuple[int, int]], bool]]]:
+        service_parameters = self.generation_parameters.service_patterns
+        if not service_parameters:
+            raise http_exception(404, "No service patterns")
+        by_svc: Dict[ServiceType, List[Tuple[str, List[Tuple[int, int]], bool]]] = {}
+        for (svc, pattern), rec in service_parameters.items():
+            offsets_raw = rec["offsets"]
+            offsets = [(int(dr), int(dc)) for dr, dc in offsets_raw]
+            allow = bool(rec.get("allow_rotations", True))
+            by_svc.setdefault(svc, []).append((pattern, offsets, allow))
+        return by_svc
 
     @staticmethod
     def transform_offsets(
@@ -126,22 +104,19 @@ class ShapesLibrary:
         ncells = self.site_cells_required(area_m2)
         return self.rect_variants_for_cells(ncells, max_variants=12)
 
-    def service_site_spec(self, svc: str, pattern_name: str) -> Tuple[float, int]:
-        spec = self.generation_parameters.service_site_rules.get((svc, pattern_name))
-        if spec:
-            return float(spec["site_area_m2"]), int(spec["capacity"])
-        if svc == "school":
-            return 33000.0, 600
-        if svc == "kindergarten":
-            return 4400.0, 100
-        if svc == "polyclinics":
-            return 3000.0, 300
-        return 2000.0, 0
+    def service_site_spec(self, svc: ServiceType, pattern: str | None) -> Tuple[float, int, int]:
+        rule = self.generation_parameters.service_site_rules.get((svc, pattern))
+        site_area_m2 = float(rule.get("site_area_m2", 0.0))
+        capacity = int(rule.get("capacity", 0))
+
+        pat_meta = self.generation_parameters.service_patterns.get((svc, pattern))
+        floors = pat_meta.get("floors")
+        return site_area_m2, capacity, int(floors)
     
     def min_site_cells_for_service_with_margin(
         self,
-        svc: str,
-        shape_variants_by_svc: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]],
+        svc: ServiceType,
+        shape_variants_by_svc: Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]],
         *,
         inner_margin_cells: int | None = None,
     ) -> int:
@@ -185,12 +160,12 @@ class ShapesLibrary:
 
     def build_shape_variants_from_library(
         self, *, rng: random.Random | None = None
-    ) -> Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]]:
+    ) -> Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]]:
         lib = self.pattern_library()
         if rng is None:
             rng = random.Random(self.generation_parameters.service_random_seed)
-        shape_variants: Dict[str, List[Tuple[str, List[List[Tuple[int, int]]]]]] = {}
-        for svc, shapes in lib.items():
+        shape_variants: Dict[ServiceType, List[Tuple[str, List[List[Tuple[int, int]]]]]] = {}
+        for svc, shapes in lib.items(): 
             items = list(shapes)
             if self.generation_parameters.randomize_service_forms:
                 rng.shuffle(items)
