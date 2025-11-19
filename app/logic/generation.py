@@ -168,7 +168,6 @@ class Genbuilder:
             )
             logger.info("Service buildings generated")
             buildings_all = pd.concat([living_buildings, service_buildings], ignore_index=True)
-            buildings_all = buildings_all[['floors_count', 'living_area', 'service', 'capacity', 'geometry']]
             buildings_all['living_area'] = buildings_all['living_area'].fillna(0).round(0)
             buildings_all["service"] = [
                 [{service: capacity}] if mask else []
@@ -176,4 +175,5 @@ class Genbuilder:
                                                    buildings_all["service"], buildings_all["capacity"])
             ]
             buildings_all = buildings_all.drop(columns=["capacity"]).to_crs(4326)
+            buildings_all = buildings_all[['floors_count', 'living_area', 'service', 'geometry']]
             return json.loads(buildings_all.to_json())
