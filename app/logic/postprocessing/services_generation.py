@@ -210,5 +210,8 @@ class ServiceGenerator:
             crs=cells_gdf.crs,
         )
         service_rects["is_living"] = False
+        if len(service_polys_attrs) == 0:
+            service_rects['service'] = None
+            service_rects['capacity'] = None
 
         return service_rects
