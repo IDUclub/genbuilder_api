@@ -141,8 +141,9 @@ class GenParams(BaseModel):
     verbose: bool = True
     '''verbose - if True, prints stats for generation results'''
     INNER_BORDER: int = 3
-    MAX_COVERAGE: int = 40
+    MAX_COVERAGE: float = 0.9
     rectangle_finder_step: int = 5
+    minimal_rectangle_side: int = 40
     jobs_number: int = 5
 
     def patched(self, patch: Dict[str, Any]) -> "GenParams":
