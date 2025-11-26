@@ -12,6 +12,7 @@ from app.logic.building_generation.building_params import (
     BuildingParams,
 )
 
+
 class CapacityOptimizer:
     """
     Helper class for block-level capacity planning in residential generation.
@@ -28,6 +29,7 @@ class CapacityOptimizer:
     - compute_block(...) – wrapper for a pandas row;
     - compute_blocks_for_gdf(...) – apply the logic to an entire GeoDataFrame.
     """
+
     def __init__(
         self,
         building_params_provider: BuildingParamsProvider,
@@ -38,7 +40,9 @@ class CapacityOptimizer:
     def building_generation_parameters(self) -> BuildingGenParams:
         return self._building_params.current()
 
-    def pick_indices(self, far: str, params: BuildingParams) -> tuple[int, int, int, int]:
+    def pick_indices(
+        self, far: str, params: BuildingParams
+    ) -> tuple[int, int, int, int]:
 
         if far == "min":
             L_idx = 0
@@ -61,7 +65,9 @@ class CapacityOptimizer:
 
         return L_idx, W_idx, H_idx, F_idx
 
-    def get_plot_area_params(self, far: str, params: BuildingParams) -> tuple[float, float, float]:
+    def get_plot_area_params(
+        self, far: str, params: BuildingParams
+    ) -> tuple[float, float, float]:
 
         if far == "min":
             area_base = params.plot_area_max
@@ -88,7 +94,9 @@ class CapacityOptimizer:
 
         area_min, area_max, area_base = self.get_plot_area_params(far, building_params)
 
-        base_L_idx, base_W_idx, base_h_idx, base_front_idx = self.pick_indices(far, building_params)
+        base_L_idx, base_W_idx, base_h_idx, base_front_idx = self.pick_indices(
+            far, building_params
+        )
 
         L = float(building_params.building_length_range[base_L_idx])
         W = float(building_params.building_width_range[base_W_idx])
@@ -106,7 +114,11 @@ class CapacityOptimizer:
         else:
             building_need = 0
 
-        far_target = (base_house_area * H) / plot_area_base if plot_area_base > 0 else float("nan")
+        far_target = (
+            (base_house_area * H) / plot_area_base
+            if plot_area_base > 0
+            else float("nan")
+        )
 
         return {
             "building_length": L,
@@ -147,14 +159,16 @@ class CapacityOptimizer:
                 }
             )
 
-        building_params = self.building_generation_parameters.params_by_type[building_type]
+        building_params = self.building_generation_parameters.params_by_type[
+            building_type
+        ]
         target_la = float(row["la_target"])
 
         res = self.solve_block_initial(
             target_la=target_la,
             far=far,
-            building_params=building_params,           
-            la_ratio=building_params.la_coef, 
+            building_params=building_params,
+            la_ratio=building_params.la_coef,
         )
 
         building_need = res["building_need"]
@@ -184,7 +198,7 @@ class CapacityOptimizer:
                 "far_diff": np.nan,
             }
         )
-    
+
     def compute_blocks_for_gdf(
         self,
         blocks_gdf,

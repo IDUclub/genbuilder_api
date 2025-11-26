@@ -11,13 +11,14 @@ from shapely.affinity import rotate
 from tqdm.auto import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+
 class MIR:
-    
-    def _pack_rectangles_for_single_geom(self, idx: int, geom: Polygon, step: float, min_side: float):
+    def _pack_rectangles_for_single_geom(
+        self, idx: int, geom: Polygon, step: float, min_side: float
+    ):
 
         if geom is None or geom.is_empty:
             return []
-
 
         if geom.geom_type == "Polygon":
             polys = [geom]
@@ -37,8 +38,6 @@ class MIR:
                 records.append(r)
 
         return records
-
-
 
     @staticmethod
     def _main_axis_angle(poly: Polygon) -> float:
@@ -64,9 +63,6 @@ class MIR:
                 best_angle = angle
 
         return best_angle
-
-
-
 
     @staticmethod
     def _max_inscribed_rect_in_rotated_poly(
@@ -97,13 +93,10 @@ class MIR:
                 if not p.within(poly_r):
                     continue
 
-
                 half_w = half_h = step / 2.0
-
 
                 while True:
                     improved = False
-
 
                     cand = box(
                         x - (half_w + step / 2.0),
@@ -114,7 +107,6 @@ class MIR:
                     if cand.within(poly_r):
                         half_w += step / 2.0
                         improved = True
-
 
                     cand = box(
                         x - half_w,
@@ -131,7 +123,6 @@ class MIR:
 
                 width = 2 * half_w
                 height = 2 * half_h
-
 
                 if width < min_side or height < min_side:
                     continue
@@ -158,10 +149,8 @@ class MIR:
             "area": float(best_area),
         }
 
-
-
-
-    def _pack_rectangles_in_poly(self, 
+    def _pack_rectangles_in_poly(
+        self,
         poly: Polygon,
         step: float,
         min_side: float,
@@ -172,7 +161,6 @@ class MIR:
 
         angle = self._main_axis_angle(poly)
         origin = poly.centroid
-
 
         remaining = rotate(poly, -angle, origin=origin)
 
@@ -191,9 +179,7 @@ class MIR:
 
             rect_r = best["geometry"]
 
-
             rect = rotate(rect_r, angle, origin=origin)
-
 
             results.append(
                 {
@@ -205,18 +191,12 @@ class MIR:
                 }
             )
 
-
             remaining = remaining.difference(rect_r.buffer(tol))
-
-
-
 
         return results
 
-
-
-
-    def pack_inscribed_rectangles_for_gdf(self, 
+    def pack_inscribed_rectangles_for_gdf(
+        self,
         gdf: gpd.GeoDataFrame,
         step: float = 5.0,
         min_side: float = 40.0,
@@ -225,15 +205,13 @@ class MIR:
 
         records: List[Dict[str, Any]] = []
 
-
-        items = list(gdf['geometry'].items())
+        items = list(gdf["geometry"].items())
         if not items:
             return gpd.GeoDataFrame(
                 columns=["src_index", "rect_id", "geometry"],
                 geometry="geometry",
                 crs=gdf.crs,
             )
-
 
         if n_jobs == 1:
             for idx, geom in tqdm(items, desc="Packing rectangles", leave=False):
@@ -242,16 +220,22 @@ class MIR:
 
         else:
 
-
             max_workers = min(n_jobs, len(items))
             with ProcessPoolExecutor(max_workers=max_workers) as ex:
 
                 futures = [
-                    ex.submit(self._pack_rectangles_for_single_geom, idx, geom, step, min_side)
+                    ex.submit(
+                        self._pack_rectangles_for_single_geom, idx, geom, step, min_side
+                    )
                     for idx, geom in items
                 ]
 
-                for f in tqdm(as_completed(futures), total=len(futures), desc="Packing rectangles (parallel)", leave=False):
+                for f in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="Packing rectangles (parallel)",
+                    leave=False,
+                ):
                     recs = f.result()
                     records.extend(recs)
 

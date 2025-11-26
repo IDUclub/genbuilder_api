@@ -18,6 +18,7 @@ from app.logic.building_generation.building_params import (
     BuildingParams,
 )
 
+
 class SegmentsAllocator:
     """
     Allocates building capacity across rectangular segments inside blocks.
@@ -27,6 +28,7 @@ class SegmentsAllocator:
     - compute how many plots/buildings fit into each segment;
     - update blocks with final capacity/FAR and segments with plot_front/depth.
     """
+
     def __init__(
         self,
         capacity_optimizer: CapacityOptimizer,
@@ -65,7 +67,9 @@ class SegmentsAllocator:
         logger.debug(f"[solve_block] block_id={block_id}: using la_ratio={la_ratio}")
 
         if rects_block.empty:
-            logger.debug(f"[solve_block] block_id={block_id}: rects_block is EMPTY, return zeros/NaN")
+            logger.debug(
+                f"[solve_block] block_id={block_id}: rects_block is EMPTY, return zeros/NaN"
+            )
             rects_block = rects_block.copy()
             rects_block["plots_capacity"] = 0
             rects_block["plot_front"] = np.nan
@@ -123,14 +127,18 @@ class SegmentsAllocator:
                 "far_diff": np.nan,
             }, rects_block
 
-
         area_min, area_max, area_base = self.capacity_optimizer.get_plot_area_params(
             far,
             building_params,
         )
         plot_area_base = float(area_base)
 
-        base_L_idx, base_W_idx, base_H_idx, base_F_idx = self.capacity_optimizer.pick_indices(
+        (
+            base_L_idx,
+            base_W_idx,
+            base_H_idx,
+            base_F_idx,
+        ) = self.capacity_optimizer.pick_indices(
             far,
             building_params,
         )
@@ -151,7 +159,6 @@ class SegmentsAllocator:
             f"far_initial={far_initial}"
         )
 
-
         rects_block = rects_block.copy()
         seg_fronts: list[float] = []
         seg_depths: list[float] = []
@@ -167,7 +174,6 @@ class SegmentsAllocator:
         logger.debug(
             f"[solve_block] block_id={block_id}: seg_fronts={seg_fronts}, seg_depths={seg_depths}"
         )
-
 
         capacity_by_front_idx: list[int] = []
         for F in building_params.plot_side:
@@ -215,7 +221,6 @@ class SegmentsAllocator:
                 "far_diff": np.nan,
             }, rects_block
 
-
         best_success: Dict[str, Any] | None = None
         best_success_score: Tuple[float, float, float, float, float] | None = None
 
@@ -247,10 +252,11 @@ class SegmentsAllocator:
 
             is_long_side_along_front = F >= plot_depth
 
-            building_need = int(math.ceil(target_la / living_per_building)) if target_la > 0 else 0
+            building_need = (
+                int(math.ceil(target_la / living_per_building)) if target_la > 0 else 0
+            )
 
             capacity_total = int(capacity_by_front_idx[F_idx])
-
 
             if building_need > 0:
                 buildings_count_fallback = min(capacity_total, building_need)
@@ -259,7 +265,9 @@ class SegmentsAllocator:
             total_la_fallback = buildings_count_fallback * living_per_building
 
             if total_la_fallback > fallback_total_la:
-                far_final_fb = (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
+                far_final_fb = (
+                    (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
+                )
                 fallback_total_la = float(total_la_fallback)
                 fallback = {
                     "L": L,
@@ -279,7 +287,6 @@ class SegmentsAllocator:
                     f"capacity_total={capacity_total}, total_la_fallback={total_la_fallback}"
                 )
 
-
             if building_need <= 0 or capacity_total < building_need:
                 return
 
@@ -290,7 +297,9 @@ class SegmentsAllocator:
             total_la = buildings_count * living_per_building
             la_diff_abs = abs(total_la - target_la)
 
-            far_final = (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
+            far_final = (
+                (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
+            )
             far_diff_abs = abs(far_final - far_initial)
 
             front_reduction = base_F - F
@@ -334,11 +343,11 @@ class SegmentsAllocator:
             f"len(F_range)={len(building_params.plot_side)}"
         )
 
-
         for L_idx in range(base_L_idx, len(building_params.building_length_range)):
             for W_idx in range(base_W_idx, len(building_params.building_width_range)):
-                consider_candidate(L_idx, W_idx, base_H_idx, base_F_idx, only_long_front=True)
-
+                consider_candidate(
+                    L_idx, W_idx, base_H_idx, base_F_idx, only_long_front=True
+                )
 
         if best_success is None:
             logger.debug(
@@ -346,10 +355,15 @@ class SegmentsAllocator:
                 f"trying H-range with fixed F"
             )
             for H_idx in range(base_H_idx, len(building_params.building_height)):
-                for L_idx in range(base_L_idx, len(building_params.building_length_range)):
-                    for W_idx in range(base_W_idx, len(building_params.building_width_range)):
-                        consider_candidate(L_idx, W_idx, H_idx, base_F_idx, only_long_front=True)
-
+                for L_idx in range(
+                    base_L_idx, len(building_params.building_length_range)
+                ):
+                    for W_idx in range(
+                        base_W_idx, len(building_params.building_width_range)
+                    ):
+                        consider_candidate(
+                            L_idx, W_idx, H_idx, base_F_idx, only_long_front=True
+                        )
 
         if best_success is None:
             logger.debug(
@@ -358,10 +372,15 @@ class SegmentsAllocator:
             )
             for F_idx in range(base_F_idx, 0, -1):
                 for H_idx in range(base_H_idx, len(building_params.building_height)):
-                    for L_idx in range(base_L_idx, len(building_params.building_length_range)):
-                        for W_idx in range(base_W_idx, len(building_params.building_width_range)):
-                            consider_candidate(L_idx, W_idx, H_idx, F_idx, only_long_front=True)
-
+                    for L_idx in range(
+                        base_L_idx, len(building_params.building_length_range)
+                    ):
+                        for W_idx in range(
+                            base_W_idx, len(building_params.building_width_range)
+                        ):
+                            consider_candidate(
+                                L_idx, W_idx, H_idx, F_idx, only_long_front=True
+                            )
 
         if best_success is None:
             logger.debug(
@@ -370,9 +389,15 @@ class SegmentsAllocator:
             )
             for F_idx in range(base_F_idx, 0, -1):
                 for H_idx in range(base_H_idx, len(building_params.building_height)):
-                    for L_idx in range(base_L_idx, len(building_params.building_length_range)):
-                        for W_idx in range(base_W_idx, len(building_params.building_width_range)):
-                            consider_candidate(L_idx, W_idx, H_idx, F_idx, only_long_front=False)
+                    for L_idx in range(
+                        base_L_idx, len(building_params.building_length_range)
+                    ):
+                        for W_idx in range(
+                            base_W_idx, len(building_params.building_width_range)
+                        ):
+                            consider_candidate(
+                                L_idx, W_idx, H_idx, F_idx, only_long_front=False
+                            )
 
         chosen = best_success or fallback
         if chosen is None:
@@ -404,7 +429,6 @@ class SegmentsAllocator:
                 "far_diff": np.nan,
             }, rects_block
 
-
         L = chosen["L"]
         W = chosen["W"]
         H = chosen["H"]
@@ -433,7 +457,6 @@ class SegmentsAllocator:
             f"far_initial={far_initial}, far_final={far_final}, la_diff={la_diff}"
         )
 
-
         plots_capacity_total = 0
         plot_depth_norm = plot_depth
 
@@ -449,7 +472,11 @@ class SegmentsAllocator:
             if cap_seg <= 0:
                 continue
 
-            depth_seg = min(plot_depth_norm, depth_len) if not np.isnan(plot_depth_norm) else depth_len
+            depth_seg = (
+                min(plot_depth_norm, depth_len)
+                if not np.isnan(plot_depth_norm)
+                else depth_len
+            )
 
             rects_block.at[idx_seg, "plots_capacity"] = cap_seg
             rects_block.at[idx_seg, "plot_front"] = plot_front
@@ -572,7 +599,9 @@ class SegmentsAllocator:
                 continue
 
             try:
-                building_params = self.building_generation_parameters.params_by_type[building_type]
+                building_params = self.building_generation_parameters.params_by_type[
+                    building_type
+                ]
             except KeyError as e:
                 logger.error(
                     f"[update_blocks] block_idx={idx}: building_type={building_type} "
@@ -608,8 +637,9 @@ class SegmentsAllocator:
             for key, value in block_res.items():
                 blocks.at[idx, key] = value
 
-            rects.loc[block_rects_res.index, ["plots_capacity", "plot_front", "plot_depth"]] = \
-                block_rects_res[["plots_capacity", "plot_front", "plot_depth"]].values
+            rects.loc[
+                block_rects_res.index, ["plots_capacity", "plot_front", "plot_depth"]
+            ] = block_rects_res[["plots_capacity", "plot_front", "plot_depth"]].values
 
             rects.loc[block_rects_res.index, "src_index"] = idx
             rects.loc[block_rects_res.index, "la_target"] = row.get("la_target", np.nan)
@@ -630,7 +660,9 @@ class SegmentsAllocator:
                 "floors_count",
                 row.get("floors_count", np.nan),
             )
-            rects.loc[block_rects_res.index, "floors_group"] = row.get("floors_group", np.nan)
+            rects.loc[block_rects_res.index, "floors_group"] = row.get(
+                "floors_group", np.nan
+            )
 
             logger.debug(
                 f"[update_blocks] block_idx={idx}: rects updated for indices "

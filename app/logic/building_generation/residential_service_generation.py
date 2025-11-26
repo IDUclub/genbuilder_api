@@ -21,7 +21,8 @@ from shapely.validation import make_valid
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 from app.logic.building_generation.service_projects import service_projects
 
-class ResidentialServiceGenerator():
+
+class ResidentialServiceGenerator:
     """
     Generates service buildings (schools, kindergartens, clinics, etc.) for
     residential blocks based on population and OSM-based prototype projects.
@@ -39,24 +40,21 @@ class ResidentialServiceGenerator():
     - generate_services(...) – high-level entry point that ties everything
         together and returns a GeoDataFrame of service buildings.
     """
+
     def __init__(self, params_provider: ParamsProvider):
         self._params = params_provider
 
     @property
     def generation_parameters(self) -> GenParams:
         return self._params.current()
-    
+
     def compute_service_limits_for_blocks(
         self,
         blocks: gpd.GeoDataFrame,
         buildings: gpd.GeoDataFrame,
-        service_normatives: pd.DataFrame
+        service_normatives: pd.DataFrame,
     ) -> Tuple[Dict[Any, Dict[str, float]], Dict[Any, float], gpd.GeoDataFrame]:
-        la_per_block = (
-            buildings
-            .groupby("src_index")["living_area"]
-            .sum()
-        )
+        la_per_block = buildings.groupby("src_index")["living_area"].sum()
 
         blocks = blocks.copy()
         blocks["actual_la"] = blocks["src_index"].map(la_per_block).fillna(0.0)
@@ -99,7 +97,6 @@ class ResidentialServiceGenerator():
 
         return osm_type, osm_id
 
-
     def load_service_projects_from_osm_osmnx(self) -> gpd.GeoDataFrame:
         specs: List[Dict[str, Any]] = []
         queries: List[str] = []
@@ -114,7 +111,9 @@ class ResidentialServiceGenerator():
                 osm_type, osm_id = self._parse_osm_url(osm_url)
                 prefix = type_to_prefix.get(osm_type)
                 if prefix is None:
-                    raise ValueError(f"Неподдерживаемый osm_type '{osm_type}' для URL: {osm_url}")
+                    raise ValueError(
+                        f"Неподдерживаемый osm_type '{osm_type}' для URL: {osm_url}"
+                    )
 
                 query_str = f"{prefix}{osm_id}"
 
@@ -156,22 +155,18 @@ class ResidentialServiceGenerator():
             plot_width = spec.get("plot_width", [None, None])
 
             row: Dict[str, Any] = {
-                "service":      spec.get("service"),
-                "type_id":      spec.get("type_id"),
-                "capacity":     spec.get("capacity"),
+                "service": spec.get("service"),
+                "type_id": spec.get("type_id"),
+                "capacity": spec.get("capacity"),
                 "floors_count": spec.get("floors_count"),
-
                 "plot_length_min": plot_length[0],
                 "plot_length_max": plot_length[1],
-                "plot_width_min":  plot_width[0],
-                "plot_width_max":  plot_width[1],
-
+                "plot_width_min": plot_width[0],
+                "plot_width_max": plot_width[1],
                 "address": spec.get("address"),
-
                 "osm_type": osm_type,
-                "osm_id":   osm_id,
-                "osm_url":  spec.get("osm_url"),
-
+                "osm_id": osm_id,
+                "osm_url": spec.get("osm_url"),
                 "geometry": geom,
             }
             rows.append(row)
@@ -191,7 +186,6 @@ class ResidentialServiceGenerator():
         if str(gdf.crs) != str(target_crs):
             return gdf.to_crs(target_crs)
         return gdf
-
 
     @staticmethod
     def _get_block_free_area(
@@ -275,7 +269,6 @@ class ResidentialServiceGenerator():
                     max_len = seg_len
                     best_angle = math.degrees(math.atan2(dy, dx))
 
-
             if best_angle < -90.0:
                 best_angle += 180.0
             elif best_angle >= 90.0:
@@ -284,7 +277,6 @@ class ResidentialServiceGenerator():
             return best_angle
         except Exception:
             return 0.0
-
 
     def _sample_rect_in_polygon(
         self,
@@ -306,7 +298,6 @@ class ResidentialServiceGenerator():
         len_min, len_max = length_range
         wid_min, wid_max = width_range
 
-
         if preferred_angle is not None:
             base = preferred_angle
 
@@ -327,12 +318,10 @@ class ResidentialServiceGenerator():
             length = random.uniform(len_min, len_max)
             width = random.uniform(wid_min, wid_max)
 
-
             rect = box(-length / 2.0, -width / 2.0, length / 2.0, width / 2.0)
 
             angle = random.choice(angle_candidates)
             rect_rot = rotate(rect, angle, origin=(0, 0), use_radians=False)
-
 
             cx = random.uniform(minx, maxx)
             cy = random.uniform(miny, maxy)
@@ -342,7 +331,11 @@ class ResidentialServiceGenerator():
             if not rect_shifted.within(poly):
                 continue
 
-            if existing_centroids and min_dist_between_centers and min_dist_between_centers > 0.0:
+            if (
+                existing_centroids
+                and min_dist_between_centers
+                and min_dist_between_centers > 0.0
+            ):
                 center = rect_shifted.centroid
                 too_close = any(
                     center.distance(c) < min_dist_between_centers
@@ -360,11 +353,8 @@ class ResidentialServiceGenerator():
         c = geom.centroid
         return translate(geom, xoff=-c.x, yoff=-c.y)
 
-
     def _place_building_in_plot(
-        self,
-        building_template: BaseGeometry,
-        plot_geom: BaseGeometry
+        self, building_template: BaseGeometry, plot_geom: BaseGeometry
     ) -> Optional[BaseGeometry]:
         allowed_area = plot_geom.buffer(-self.generation_parameters.INNER_BORDER)
         if allowed_area.is_empty:
@@ -388,7 +378,6 @@ class ResidentialServiceGenerator():
 
         return None
 
-
     def _select_project_for_remaining(
         self,
         service_projects: gpd.GeoDataFrame,
@@ -403,16 +392,13 @@ class ResidentialServiceGenerator():
 
         return list(df_sorted.itertuples(index=False))
 
-
-
-
     def place_service_buildings(
         self,
         blocks: gpd.GeoDataFrame,
         plots_gdf: gpd.GeoDataFrame,
         all_limits: Dict[Hashable, Dict[str, float]],
         projects_gdf: gpd.GeoDataFrame,
-        blocks_crs: int | str = 32636
+        blocks_crs: int | str = 32636,
     ) -> gpd.GeoDataFrame:
 
         projects_local = self._ensure_crs(projects_gdf, blocks_crs)
@@ -424,40 +410,34 @@ class ResidentialServiceGenerator():
 
         service_buildings_rows: List[Dict[str, Any]] = []
 
-
         for block_row in blocks.itertuples():
             block_id = getattr(block_row, "src_index")
             block_geom = getattr(block_row, "geometry")
 
-
             block_angle = self._compute_main_axis_angle(block_geom)
-
 
             minx_b, miny_b, maxx_b, maxy_b = block_geom.bounds
             span_min = min(maxx_b - minx_b, maxy_b - miny_b)
 
-
             min_spacing = 0.0
-            if self.generation_parameters.max_sites_per_service_per_block > 1 and span_min > 0:
+            if (
+                self.generation_parameters.max_sites_per_service_per_block > 1
+                and span_min > 0
+            ):
                 min_spacing = 0.25 * span_min
-
 
             placed_plot_centers: List[Point] = []
 
-
             plots_block = plots_gdf[plots_gdf["src_index"] == block_id]
-
 
             free_area = self._get_block_free_area(block_geom, plots_block)
 
             if free_area.is_empty:
                 continue
 
-
             block_limits = all_limits.get(block_id, {})
             if not block_limits:
                 continue
-
 
             for service_name, target_capacity in block_limits.items():
                 if target_capacity <= 0:
@@ -472,10 +452,10 @@ class ResidentialServiceGenerator():
                 placed_capacity = 0.0
                 sites_count = 0
 
-
                 while (
                     placed_capacity < target_capacity
-                    and sites_count < self.generation_parameters.max_sites_per_service_per_block
+                    and sites_count
+                    < self.generation_parameters.max_sites_per_service_per_block
                     and not free_area.is_empty
                 ):
                     remaining_capacity = target_capacity - placed_capacity
@@ -504,7 +484,6 @@ class ResidentialServiceGenerator():
                         if building_template_norm is None:
                             continue
 
-
                         plot_geom = self._sample_rect_in_polygon(
                             free_area,
                             length_range=(plot_length_min, plot_length_max),
@@ -519,8 +498,6 @@ class ResidentialServiceGenerator():
 
                             continue
 
-
-
                         building_oriented_main = rotate(
                             building_template_norm,
                             block_angle,
@@ -530,9 +507,8 @@ class ResidentialServiceGenerator():
 
                         building_geom = self._place_building_in_plot(
                             building_template=building_oriented_main,
-                            plot_geom=plot_geom
+                            plot_geom=plot_geom,
                         )
-
 
                         if building_geom is None:
                             building_oriented_orth = rotate(
@@ -543,13 +519,12 @@ class ResidentialServiceGenerator():
                             )
                             building_geom = self._place_building_in_plot(
                                 building_template=building_oriented_orth,
-                                plot_geom=plot_geom
+                                plot_geom=plot_geom,
                             )
 
                         if building_geom is None:
 
                             continue
-
 
                         row_out: Dict[str, Any] = {
                             "src_index": block_id,
@@ -567,9 +542,7 @@ class ResidentialServiceGenerator():
                         sites_count += 1
                         placed_in_iteration = True
 
-
                         free_area = free_area.difference(plot_geom)
-
 
                         placed_plot_centers.append(plot_geom.centroid)
 
@@ -578,7 +551,6 @@ class ResidentialServiceGenerator():
                     if not placed_in_iteration:
 
                         break
-
 
         if not service_buildings_rows:
             return gpd.GeoDataFrame(
@@ -599,18 +571,19 @@ class ResidentialServiceGenerator():
         )
 
         return service_buildings_gdf
-    
 
     def generate_services(self, blocks, plots, buildings, service_normatives, crs):
         blocks = blocks.reset_index()
-        blocks.rename(columns={'index':'src_index'}, inplace=True)
+        blocks.rename(columns={"index": "src_index"}, inplace=True)
         projects_gdf = self.load_service_projects_from_osm_osmnx()
-        all_limits = self.compute_service_limits_for_blocks(blocks, buildings, service_normatives)
+        all_limits = self.compute_service_limits_for_blocks(
+            blocks, buildings, service_normatives
+        )
         services_buildings_gdf = self.place_service_buildings(
-                    blocks=blocks,
-                    plots_gdf=plots,
-                    all_limits=all_limits,
-                    projects_gdf=projects_gdf,
-                    blocks_crs=crs
-                )
+            blocks=blocks,
+            plots_gdf=plots,
+            all_limits=all_limits,
+            projects_gdf=projects_gdf,
+            blocks_crs=crs,
+        )
         return services_buildings_gdf

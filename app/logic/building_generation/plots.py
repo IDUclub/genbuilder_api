@@ -24,15 +24,15 @@ from app.logic.postprocessing.generation_params import (
     ParamsProvider,
 )
 
-class PlotsGenerator:
 
+class PlotsGenerator:
     def __init__(
         self,
         params_provider: ParamsProvider,
-        building_params_provider: BuildingParamsProvider, 
+        building_params_provider: BuildingParamsProvider,
     ):
         self._params = params_provider
-        self._building_params = building_params_provider   
+        self._building_params = building_params_provider
 
         self.base_L = None
         self.base_W = None
@@ -54,7 +54,9 @@ class PlotsGenerator:
         return self._building_params.current()
 
     @staticmethod
-    def _make_side_buffers_rotated(poly_rot: Polygon, depth: float) -> List[Tuple[Polygon, str, str]]:
+    def _make_side_buffers_rotated(
+        poly_rot: Polygon, depth: float
+    ) -> List[Tuple[Polygon, str, str]]:
 
         if poly_rot is None or poly_rot.is_empty or depth <= 0:
             return []
@@ -63,16 +65,15 @@ class PlotsGenerator:
         if maxx - minx <= 0 or maxy - miny <= 0:
             return []
 
+        left_box = box(minx, miny, minx + depth, maxy)
+        right_box = box(maxx - depth, miny, maxx, maxy)
+        bottom_box = box(minx, miny, maxx, miny + depth)
+        top_box = box(minx, maxy - depth, maxx, maxy)
 
-        left_box   = box(minx,         miny,         minx + depth, maxy)
-        right_box  = box(maxx - depth, miny,         maxx,         maxy)
-        bottom_box = box(minx,         miny,         maxx,         miny + depth)
-        top_box    = box(minx,         maxy - depth, maxx,         maxy)
-
-        left   = poly_rot.intersection(left_box)
-        right  = poly_rot.intersection(right_box)
+        left = poly_rot.intersection(left_box)
+        right = poly_rot.intersection(right_box)
         bottom = poly_rot.intersection(bottom_box)
-        top    = poly_rot.intersection(top_box)
+        top = poly_rot.intersection(top_box)
 
         def _safe_intersection(a, b):
             if a is None or b is None or a.is_empty or b.is_empty:
@@ -80,12 +81,10 @@ class PlotsGenerator:
             inter = a.intersection(b)
             return None if inter.is_empty else inter
 
-
-        corner_bl = _safe_intersection(left,  bottom)
+        corner_bl = _safe_intersection(left, bottom)
         corner_br = _safe_intersection(right, bottom)
-        corner_tl = _safe_intersection(left,  top)
+        corner_tl = _safe_intersection(left, top)
         corner_tr = _safe_intersection(right, top)
-
 
         def _subtract_corners(base, corners):
             if base is None or base.is_empty:
@@ -98,10 +97,10 @@ class PlotsGenerator:
                         return None
             return res
 
-        left_clean   = _subtract_corners(left,   [corner_bl, corner_tl])
-        right_clean  = _subtract_corners(right,  [corner_br, corner_tr])
+        left_clean = _subtract_corners(left, [corner_bl, corner_tl])
+        right_clean = _subtract_corners(right, [corner_br, corner_tr])
         bottom_clean = _subtract_corners(bottom, [corner_bl, corner_br])
-        top_clean    = _subtract_corners(top,    [corner_tl, corner_tr])
+        top_clean = _subtract_corners(top, [corner_tl, corner_tr])
 
         out: List[Tuple[Polygon, str, str]] = []
 
@@ -115,12 +114,10 @@ class PlotsGenerator:
             else:
                 out.append((geom, kind, side_name))
 
-
-        _append_geom(bottom_clean, "side",   "bottom")
-        _append_geom(top_clean,    "side",   "top")
-        _append_geom(left_clean,   "side",   "left")
-        _append_geom(right_clean,  "side",   "right")
-
+        _append_geom(bottom_clean, "side", "bottom")
+        _append_geom(top_clean, "side", "top")
+        _append_geom(left_clean, "side", "left")
+        _append_geom(right_clean, "side", "right")
 
         _append_geom(corner_bl, "corner", "corner_bl")
         _append_geom(corner_br, "corner", "corner_br")
@@ -161,17 +158,14 @@ class PlotsGenerator:
 
         poly_rot = affinity.rotate(poly, -axis, origin=centroid, use_radians=False)
 
-
         minx, miny, maxx, maxy = poly_rot.bounds
         width = maxx - minx
         height = maxy - miny
 
         base_attrs = {k: row[k] for k in row.index if k != "geometry"}
 
-
         if 2 * plot_depth >= min(width, height):
             long_side = max(width, height)
-
 
             if long_side <= plot_side:
                 row_dict = {k: row[k] for k in row.index}
@@ -179,7 +173,6 @@ class PlotsGenerator:
 
             geoms = []
             rows_data = []
-
 
             if width >= height:
 
@@ -189,7 +182,9 @@ class PlotsGenerator:
                     cell = box(x, miny, x2, maxy)
                     part = poly_rot.intersection(cell)
                     if not part.is_empty:
-                        geom_back = affinity.rotate(part, axis, origin=centroid, use_radians=False)
+                        geom_back = affinity.rotate(
+                            part, axis, origin=centroid, use_radians=False
+                        )
                         data = dict(base_attrs)
                         data["segment_kind"] = "full"
                         data["segment_side"] = "long_x"
@@ -204,7 +199,9 @@ class PlotsGenerator:
                     cell = box(minx, y, maxx, y2)
                     part = poly_rot.intersection(cell)
                     if not part.is_empty:
-                        geom_back = affinity.rotate(part, axis, origin=centroid, use_radians=False)
+                        geom_back = affinity.rotate(
+                            part, axis, origin=centroid, use_radians=False
+                        )
                         data = dict(base_attrs)
                         data["segment_kind"] = "full"
                         data["segment_side"] = "long_y"
@@ -219,8 +216,6 @@ class PlotsGenerator:
 
             return gpd.GeoDataFrame(rows_data, geometry=geoms, crs=crs)
 
-
-
         parts_rot = self._make_side_buffers_rotated(poly_rot, plot_depth)
         if not parts_rot:
             return gpd.GeoDataFrame(columns=list(row.index) + ["geometry"], crs=crs)
@@ -232,9 +227,10 @@ class PlotsGenerator:
             if geom_rot is None or geom_rot.is_empty:
                 continue
 
-
             if kind == "corner":
-                geom_back = affinity.rotate(geom_rot, axis, origin=centroid, use_radians=False)
+                geom_back = affinity.rotate(
+                    geom_rot, axis, origin=centroid, use_radians=False
+                )
                 data = dict(base_attrs)
                 data["segment_kind"] = kind
                 data["segment_side"] = side_name
@@ -254,7 +250,9 @@ class PlotsGenerator:
                     cell = box(x, gminy, x2, gmaxy)
                     part = geom_rot.intersection(cell)
                     if not part.is_empty:
-                        geom_back = affinity.rotate(part, axis, origin=centroid, use_radians=False)
+                        geom_back = affinity.rotate(
+                            part, axis, origin=centroid, use_radians=False
+                        )
                         data = dict(base_attrs)
                         data["segment_kind"] = kind
                         data["segment_side"] = side_name
@@ -269,7 +267,9 @@ class PlotsGenerator:
                     cell = box(gminx, y, gmaxx, y2)
                     part = geom_rot.intersection(cell)
                     if not part.is_empty:
-                        geom_back = affinity.rotate(part, axis, origin=centroid, use_radians=False)
+                        geom_back = affinity.rotate(
+                            part, axis, origin=centroid, use_radians=False
+                        )
                         data = dict(base_attrs)
                         data["segment_kind"] = kind
                         data["segment_side"] = side_name
@@ -284,37 +284,36 @@ class PlotsGenerator:
         return out
 
     @staticmethod
-    def merge_small_plots(plots: gpd.GeoDataFrame,
-                        area_factor: float) -> gpd.GeoDataFrame:
+    def merge_small_plots(
+        plots: gpd.GeoDataFrame, area_factor: float
+    ) -> gpd.GeoDataFrame:
 
         if plots.empty:
             return plots
 
         gdf = plots.copy()
 
-
         gdf = gdf[gdf.geometry.notna()]
         gdf = gdf[~gdf.geometry.is_empty]
         if gdf.empty:
             return gpd.GeoDataFrame(columns=plots.columns, crs=plots.crs)
 
-
         gdf["_target_area"] = gdf["plot_front"] * gdf["plot_depth"]
         gdf["_area"] = gdf.geometry.area
         gdf["_is_small"] = gdf["_area"] < (area_factor * gdf["_target_area"])
-
 
         try:
             sindex = gdf.sindex
         except Exception:
 
-            result = gdf.drop(columns=["_target_area", "_area", "_is_small"], errors="ignore")
+            result = gdf.drop(
+                columns=["_target_area", "_area", "_is_small"], errors="ignore"
+            )
             result.reset_index(drop=True, inplace=True)
             return result
 
         processed: set[int] = set()
         new_rows = []
-
 
         for idx, row in gdf.sort_values("_area").iterrows():
             if idx in processed:
@@ -322,18 +321,15 @@ class PlotsGenerator:
 
             geom = row.geometry
 
-
             if geom is None or geom.is_empty:
                 new_rows.append(row)
                 processed.add(idx)
                 continue
 
-
             if not bool(row["_is_small"]):
                 new_rows.append(row)
                 processed.add(idx)
                 continue
-
 
             possible_idx = list(sindex.intersection(geom.bounds))
             possible_idx = [i for i in possible_idx if i != idx and i not in processed]
@@ -344,10 +340,8 @@ class PlotsGenerator:
             for j in possible_idx:
                 other_geom = gdf.at[j, "geometry"]
 
-
                 if other_geom is None or other_geom.is_empty:
                     continue
-
 
                 try:
                     shared_geom = geom.boundary.intersection(other_geom.boundary)
@@ -357,7 +351,6 @@ class PlotsGenerator:
 
                 if shared_geom is None:
                     continue
-
 
                 try:
                     shared_len = shared_geom.length
@@ -372,12 +365,10 @@ class PlotsGenerator:
                     best_shared_len = shared_len
                     best_neighbor_idx = j
 
-
             if best_neighbor_idx is None or best_shared_len == 0.0:
                 new_rows.append(row)
                 processed.add(idx)
                 continue
-
 
             neighbor = gdf.loc[best_neighbor_idx]
             try:
@@ -397,9 +388,10 @@ class PlotsGenerator:
             processed.add(idx)
             processed.add(best_neighbor_idx)
 
-
         result = gpd.GeoDataFrame(new_rows, crs=gdf.crs)
-        result = result.drop(columns=["_target_area", "_area", "_is_small"], errors="ignore")
+        result = result.drop(
+            columns=["_target_area", "_area", "_is_small"], errors="ignore"
+        )
         result.reset_index(drop=True, inplace=True)
         return result
 
@@ -407,7 +399,6 @@ class PlotsGenerator:
         gdf = plots.copy()
         for _ in range(max_iters):
             gdf_new = self.merge_small_plots(gdf, area_factor=area_factor)
-
 
             target_area = gdf_new["plot_front"] * gdf_new["plot_depth"]
             small_mask = gdf_new.geometry.area < (area_factor * target_area)
@@ -417,7 +408,7 @@ class PlotsGenerator:
                 break
 
         return gdf
-    
+
     def _score_to_base(self, option: dict) -> tuple[float, float, float]:
 
         return (
@@ -427,7 +418,11 @@ class PlotsGenerator:
         )
 
     def _current_far(self, total_la: float) -> float:
-        return total_la / self.block_area if self.block_area and self.block_area > 0 else math.nan
+        return (
+            total_la / self.block_area
+            if self.block_area and self.block_area > 0
+            else math.nan
+        )
 
     def _objective(self, total_la: float) -> tuple[float, float]:
 
@@ -439,11 +434,7 @@ class PlotsGenerator:
         return la_score, far_score
 
     def _hill_climb(
-        self,
-        direction: int,
-        total_la: float,
-        best_la: float,
-        best_far: float
+        self, direction: int, total_la: float, best_la: float, best_far: float
     ) -> tuple[float, float, float]:
 
         changed = True
@@ -480,8 +471,7 @@ class PlotsGenerator:
                 changed = True
 
         return total_la, best_la, best_far
-    
-    
+
     def _tune_block(self, group: gpd.GeoDataFrame, gdf) -> gpd.GeoDataFrame:
 
         la_target = float(group["la_target"].iloc[0])
@@ -503,7 +493,9 @@ class PlotsGenerator:
         except Exception:
             return group
 
-        building_params = self.building_generation_parameters.params_by_type[building_type]
+        building_params = self.building_generation_parameters.params_by_type[
+            building_type
+        ]
 
         self.base_L = float(
             group.get(
@@ -604,9 +596,8 @@ class PlotsGenerator:
                     if footprint <= 0 or footprint > max_fp:
                         continue
 
-                    fits_by_dims = (
-                        (L <= eff_front and W <= eff_depth)
-                        or (L <= eff_depth and W <= eff_front)
+                    fits_by_dims = (L <= eff_front and W <= eff_depth) or (
+                        L <= eff_depth and W <= eff_front
                     )
                     if not fits_by_dims:
                         continue

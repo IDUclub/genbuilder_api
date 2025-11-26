@@ -12,6 +12,7 @@ from app.logic.building_generation.plots import PlotsGenerator
 from app.logic.building_generation.buildings import ResidentialBuildingsGenerator
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 
+
 class ResidentialGenBuilder:
     """
     Orchestrates the full residential generation pipeline.
@@ -26,14 +27,15 @@ class ResidentialGenBuilder:
     Main API:
     - run(...) → (blocks_gdf, plots_gdf, buildings_gdf)
     """
+
     def __init__(
         self,
         building_capacity_optimizer: CapacityOptimizer,
         max_rectangle_finder: MIR,
         segments_allocator: SegmentsAllocator,
         plots_generator: PlotsGenerator,
-        buildings_generator: ResidentialBuildingsGenerator, 
-        params_provider: ParamsProvider
+        buildings_generator: ResidentialBuildingsGenerator,
+        params_provider: ParamsProvider,
     ) -> None:
         self._params = params_provider
         self.building_capacity_optimizer = building_capacity_optimizer
@@ -45,20 +47,36 @@ class ResidentialGenBuilder:
     @property
     def generation_parameters(self) -> GenParams:
         return self._params.current()
-    
-    async def run(self, residential_la_target, 
-            density_scenario, default_floors_group, residential_blocks):
-        
-        residential_blocks["la_target"] = residential_la_target * residential_blocks.geometry.area / residential_blocks.geometry.area.sum()
-        residential_blocks["floors_group"] = residential_blocks.get("floors_group", default_floors_group)
-        residential_blocks = self.building_capacity_optimizer.compute_blocks_for_gdf(residential_blocks, density_scenario)
+
+    async def run(
+        self,
+        residential_la_target,
+        density_scenario,
+        default_floors_group,
+        residential_blocks,
+    ):
+
+        residential_blocks["la_target"] = (
+            residential_la_target
+            * residential_blocks.geometry.area
+            / residential_blocks.geometry.area.sum()
+        )
+        residential_blocks["floors_group"] = residential_blocks.get(
+            "floors_group", default_floors_group
+        )
+        residential_blocks = self.building_capacity_optimizer.compute_blocks_for_gdf(
+            residential_blocks, density_scenario
+        )
         segments = self.max_rectangle_finder.pack_inscribed_rectangles_for_gdf(
             residential_blocks,
             step=self.generation_parameters.rectangle_finder_step,
             min_side=self.generation_parameters.minimal_rectangle_side,
             n_jobs=self.generation_parameters.jobs_number,
         )
-        residential_blocks, segments = self.segments_allocator.update_blocks_with_segments(
+        (
+            residential_blocks,
+            segments,
+        ) = self.segments_allocator.update_blocks_with_segments(
             residential_blocks,
             segments,
             far=density_scenario,

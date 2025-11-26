@@ -4,12 +4,14 @@ from typing import List, Dict, Any, Iterator
 import contextvars
 import contextlib
 
+
 class BuildingType(str, Enum):
     IZH = "private"
     MKD_2_4 = "low"
     MKD_5_8 = "medium"
     MKD_9_16 = "high"
     HIGHRISE = "extreme"
+
 
 @dataclass(frozen=True)
 class BuildingParams:
@@ -20,6 +22,7 @@ class BuildingParams:
     plot_area_min: float
     plot_area_max: float
     la_coef: float
+
 
 PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
     BuildingType.IZH: BuildingParams(
@@ -69,13 +72,13 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
     ),
 }
 
+
 @dataclass(frozen=True)
 class BuildingGenParams:
 
     params_by_type: Dict[BuildingType, BuildingParams] = field(default_factory=dict)
 
     def patched(self, patch: Dict[str, Any]) -> "BuildingGenParams":
-
         def deep_merge(a: Any, b: Any) -> Any:
             if isinstance(a, dict) and isinstance(b, dict):
                 c = dict(a)
@@ -84,10 +87,8 @@ class BuildingGenParams:
                 return c
             return b if b is not None else a
 
-
         base_dict = asdict(self)
         merged = deep_merge(base_dict, patch)
-
 
         raw_params_by_type = merged.get("params_by_type", {})
 
@@ -110,6 +111,7 @@ class BuildingGenParams:
 
         return BuildingGenParams(params_by_type=new_mapping)
 
+
 class BuildingParamsProvider:
     def __init__(self, base: BuildingGenParams):
         self._var: contextvars.ContextVar[BuildingGenParams] = contextvars.ContextVar(
@@ -130,4 +132,3 @@ class BuildingParamsProvider:
             yield
         finally:
             self._var.reset(token)
-            

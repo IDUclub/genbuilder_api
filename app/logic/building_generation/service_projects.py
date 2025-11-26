@@ -1,5 +1,6 @@
 from enum import IntEnum
 
+
 class ServiceType(IntEnum):
     SCHOOL = 22
     KINDERGARTEN = 21
@@ -43,7 +44,6 @@ service_projects = {
             "osm_url": "https://www.openstreetmap.org/way/1268542756",
         },
     ],
-
     ServiceType.KINDERGARTEN: [
         {
             "service": "Детский сад",
@@ -73,12 +73,11 @@ service_projects = {
             "osm_url": "https://www.openstreetmap.org/way/23130101",
         },
     ],
-
     ServiceType.POLYCLINIC: [
         {
             "service": "Поликлиника",
             "type_id": "polyclinic_spb_49",
-            "capacity": 750, 
+            "capacity": 750,
             "floors_count": 5,
             "plot_length": [70.0, 120.0],
             "plot_width": [50.0, 90.0],

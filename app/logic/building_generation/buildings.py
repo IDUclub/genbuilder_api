@@ -25,6 +25,7 @@ class ResidentialBuildingsGenerator:
     - generate_buildings_from_plots(...) – static method that converts plots
         GeoDataFrame into a buildings GeoDataFrame.
     """
+
     @staticmethod
     def generate_buildings_from_plots(
         plots_gdf: gpd.GeoDataFrame,
@@ -100,10 +101,7 @@ class ResidentialBuildingsGenerator:
 
             pts = [p1, p2, p3, p4]
 
-            if any(
-                (not math.isfinite(x)) or (not math.isfinite(y))
-                for (x, y) in pts
-            ):
+            if any((not math.isfinite(x)) or (not math.isfinite(y)) for (x, y) in pts):
                 continue
 
             try:
