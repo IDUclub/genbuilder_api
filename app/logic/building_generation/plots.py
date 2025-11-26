@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import List,  Tuple
+from typing import List, Tuple
 
 import geopandas as gpd
 import numpy as np
@@ -10,33 +10,52 @@ import pandas as pd
 from shapely.geometry import Polygon, box
 from shapely.errors import TopologicalError
 from shapely import affinity
+from loguru import logger
+
+from app.logic.building_generation.building_params import (
+    BuildingGenParams,
+    BuildingParamsProvider,
+    BuildingType,
+    BuildingParams,
+)
+
+from app.logic.postprocessing.generation_params import (
+    GenParams,
+    ParamsProvider,
+)
 
 class PlotsGenerator:
 
-    def __init__(self, params_provider: ParamsProvider):
+    def __init__(
+        self,
+        params_provider: ParamsProvider,
+        building_params_provider: BuildingParamsProvider, 
+    ):
         self._params = params_provider
+        self._building_params = building_params_provider   
+
+        self.base_L = None
+        self.base_W = None
+        self.base_H = None
+        self.base_living_per_building = None
+        self.block_area = None
+        self.far_initial = None
+        self.la_target = None
+        self.plot_indices = []
+        self.options_per_plot = {}
+        self.current_choice = {}
 
     @property
     def generation_parameters(self) -> GenParams:
         return self._params.current()
 
+    @property
+    def building_generation_parameters(self) -> BuildingGenParams:
+        return self._building_params.current()
+
     @staticmethod
     def _make_side_buffers_rotated(poly_rot: Polygon, depth: float) -> List[Tuple[Polygon, str, str]]:
-        """
-        poly_rot — полигон в ЛОКАЛЬНОЙ системе координат квартала
-                (ось X вдоль фасадов / длинных сторон),
-        depth    — глубина участка внутрь квартала.
 
-        Возвращает список (geom, kind, side_name):
-
-        kind ∈ {"side", "corner"}
-        side_name ∈ {"bottom", "top", "left", "right",
-                    "corner_bl", "corner_br", "corner_tl", "corner_tr"}
-
-        Стороны уже "очищены" от углов — кольцо разбито на:
-        • 4 боковых сегмента вдоль сторон,
-        • 4 квадратных/почти квадратных угла.
-        """
         if poly_rot is None or poly_rot.is_empty or depth <= 0:
             return []
 
@@ -112,11 +131,7 @@ class PlotsGenerator:
 
     @staticmethod
     def make_block_ring(poly: Polygon, depth: float) -> Polygon:
-        """
-        Строит кольцо вдоль внешней границы квартала шириной `depth`.
-        Если буфер съедает полигон полностью или происходит ошибка —
-        возвращаем исходный полигон (считаем весь квартал кольцом).
-        """
+
         if poly is None or poly.is_empty or depth <= 0:
             return poly
 
@@ -130,24 +145,7 @@ class PlotsGenerator:
             return poly
 
     def _slice_segment_with_plots(self, row, crs=None):
-        """
-        Режет один прямоугольный сегмент на участки.
 
-        Ожидает в row:
-        • geometry   — Polygon (исходный сегмент / прямоугольник),
-        • angle      — угол ориентации квартала, градусы,
-        • plot_front — длина участка вдоль фасада (plot_side),
-        • plot_depth — глубина участка внутрь квартала.
-
-        Логика:
-        1) Поворачиваем сегмент в локальную систему (ось X вдоль фасадов).
-        2) Если 2*plot_depth >= min(width, height) — глубина съедает сегмент целиком:
-            2.1) Если длинная сторона <= plot_side — возвращаем исходный rect.
-            2.2) Иначе режем ВЕСЬ rect вдоль длинной стороны с шагом plot_side.
-        3) Иначе: стандартная схема с `_make_side_buffers_rotated`:
-            отдельные полосы вдоль сторон + углы, боковые режем по plot_side,
-            углы оставляем как есть.
-        """
         poly = row.geometry
         if poly is None or poly.is_empty:
             return gpd.GeoDataFrame(columns=list(row.index) + ["geometry"], crs=crs)
@@ -288,17 +286,7 @@ class PlotsGenerator:
     @staticmethod
     def merge_small_plots(plots: gpd.GeoDataFrame,
                         area_factor: float) -> gpd.GeoDataFrame:
-        """
-        Сливает участки, площадь которых меньше `area_factor` от
-        "нужной" площади (plot_front * plot_depth), с соседом,
-        с которым у них максимальная длина общей границы.
 
-        Параметры:
-        plots       — GeoDataFrame с колонками geometry, plot_front, plot_depth.
-        area_factor — доля нужной площади, ниже которой считаем участок маленьким.
-
-        Возвращает новый GeoDataFrame без служебных колонок.
-        """
         if plots.empty:
             return plots
 
@@ -431,30 +419,33 @@ class PlotsGenerator:
         return gdf
     
     def _score_to_base(self, option: dict) -> tuple[float, float, float]:
-                    return (
-                        abs(option["living"] - self.base_living_per_building),
-                        abs(option["footprint"] - (self.base_L * self.base_W)),
-                        abs(option["H"] - self.base_H),
-                    )
+
+        return (
+            abs(option["living"] - self.base_living_per_building),
+            abs(option["footprint"] - (self.base_L * self.base_W)),
+            abs(option["H"] - self.base_H),
+        )
 
     def _current_far(self, total_la: float) -> float:
-        return total_la / self.block_area if self.block_area > 0 else math.nan
+        return total_la / self.block_area if self.block_area and self.block_area > 0 else math.nan
 
     def _objective(self, total_la: float) -> tuple[float, float]:
-        la_score = abs(total_la - self.generation_parameters.la_target)
+
+        la_score = abs(total_la - self.la_target)
         if math.isnan(self.far_initial):
             far_score = 0.0
         else:
             far_score = abs(self._current_far(total_la) - self.far_initial)
         return la_score, far_score
 
-    def _hill_climb(self, direction: int, total_la: float,
-                    best_la: float, best_far: float) -> tuple[float, float, float]:
-        """
-        direction = +1 (хотим увеличить LA) или -1 (уменьшить LA).
-        Итеративно подбираем для отдельных участков другой тип дома,
-        если это уменьшает (la_score, far_score).
-        """
+    def _hill_climb(
+        self,
+        direction: int,
+        total_la: float,
+        best_la: float,
+        best_far: float
+    ) -> tuple[float, float, float]:
+
         changed = True
         while changed:
             changed = False
@@ -490,227 +481,233 @@ class PlotsGenerator:
 
         return total_la, best_la, best_far
     
+    
     def _tune_block(self, group: gpd.GeoDataFrame, gdf) -> gpd.GeoDataFrame:
-            la_target = float(group["la_target"].iloc[0])
-            if la_target <= 0:
-                return group
 
-            angle = float(group["angle"].iloc[0])
+        la_target = float(group["la_target"].iloc[0])
+        if la_target <= 0:
+            return group
 
+        angle = float(group["angle"].iloc[0])
 
-            block_area = float(group["plot_area"].sum())
-            if block_area <= 0:
-                return group
+        block_area = float(group["plot_area"].sum())
+        if block_area <= 0:
+            return group
 
+        if "floors_group" not in group.columns:
+            return group
 
-            self.base_L = float(group.get(
+        floors_group = group["floors_group"].iloc[0]
+        try:
+            building_type = BuildingType(floors_group)
+        except Exception:
+            return group
+
+        building_params = self.building_generation_parameters.params_by_type[building_type]
+
+        self.base_L = float(
+            group.get(
                 "building_length",
-                pd.Series([self.generation_parameters.building_length_range[0]])
-            ).iloc[0])
-            self.base_W = float(group.get(
+                pd.Series([building_params.building_length_range[0]]),
+            ).iloc[0]
+        )
+        self.base_W = float(
+            group.get(
                 "building_width",
-                pd.Series([self.generation_parameters.building_width_range[0]])
-            ).iloc[0])
-            self.base_H = float(group.get(
+                pd.Series([building_params.building_width_range[0]]),
+            ).iloc[0]
+        )
+        self.base_H = float(
+            group.get(
                 "floors_count",
-                pd.Series([self.generation_parameters.building_height[0]])
-            ).iloc[0])
+                pd.Series([building_params.building_height[0]]),
+            ).iloc[0]
+        )
 
-            self.base_living_per_building = self.base_L * self.base_W * self.base_H * self.generation_parameters.la_coef
+        self.base_living_per_building = (
+            self.base_L * self.base_W * self.base_H * building_params.la_coef
+        )
 
-            if "far_initial" in group.columns:
-                far_initial = float(group["far_initial"].iloc[0])
-            else:
-                far_initial = math.nan
+        if "far_initial" in group.columns:
+            far_initial = float(group["far_initial"].iloc[0])
+        else:
+            far_initial = math.nan
 
+        self.block_area = block_area
+        self.far_initial = far_initial
+        self.la_target = la_target
 
+        self.plot_indices = list(group.index)
+        fronts_eff: dict[int, float] = {}
+        depths_eff: dict[int, float] = {}
+        max_footprints: dict[int, float] = {}
 
-            self.plot_indices = list(group.index)
-            fronts_eff = {}
-            depths_eff = {}
-            max_footprints = {}
+        inner_border = self.generation_parameters.INNER_BORDER
+        max_coverage = self.generation_parameters.MAX_COVERAGE
 
-            for idx, row in group.iterrows():
-                poly = row.geometry
-                area = float(row["plot_area"])
+        for idx, row in group.iterrows():
+            poly = row.geometry
+            area = float(row["plot_area"])
 
-                if poly is None or poly.is_empty or area <= 0:
-                    fronts_eff[idx] = 0.0
-                    depths_eff[idx] = 0.0
-                    max_footprints[idx] = 0.0
-                    continue
+            if poly is None or poly.is_empty or area <= 0:
+                fronts_eff[idx] = 0.0
+                depths_eff[idx] = 0.0
+                max_footprints[idx] = 0.0
+                continue
 
+            poly_rot = affinity.rotate(
+                poly, -angle, origin=poly.centroid, use_radians=False
+            )
+            minx, miny, maxx, maxy = poly_rot.bounds
 
-                poly_rot = affinity.rotate(poly, -angle, origin=poly.centroid, use_radians=False)
-                minx, miny, maxx, maxy = poly_rot.bounds
+            front = maxx - minx
+            depth = maxy - miny
 
-                front = maxx - minx
-                depth = maxy - miny
+            eff_front = max(front - 2 * inner_border, 0.0)
+            eff_depth = max(depth - 2 * inner_border, 0.0)
 
+            fronts_eff[idx] = eff_front
+            depths_eff[idx] = eff_depth
+            max_footprints[idx] = max_coverage * area
 
-                eff_front = max(front - 2 * self.generation_parameters.INNER_BORDER, 0.0)
-                eff_depth = max(depth - 2 * self.generation_parameters.INNER_BORDER, 0.0)
+        self.options_per_plot = {}
 
-                fronts_eff[idx] = eff_front
-                depths_eff[idx] = eff_depth
-                max_footprints[idx] = self.generation_parameters.MAX_COVERAGE * area
+        for idx in self.plot_indices:
+            eff_front = fronts_eff[idx]
+            eff_depth = depths_eff[idx]
+            max_fp = max_footprints[idx]
 
+            options: list[dict] = []
 
-
-            self.options_per_plot: dict[int, list[dict]] = {}
-
-            for idx in self.plot_indices:
-                eff_front = fronts_eff[idx]
-                eff_depth = depths_eff[idx]
-                max_fp = max_footprints[idx]
-
-                options: list[dict] = []
-
-
-                if eff_front <= 0 or eff_depth <= 0 or max_fp <= 0 or gdf.loc[idx, "plot_area"] < self.generation_parameters.plot_area_min:
-                    self.options_per_plot[idx] = [{
+            if (
+                eff_front <= 0
+                or eff_depth <= 0
+                or max_fp <= 0
+                or gdf.loc[idx, "plot_area"] < building_params.plot_area_min
+            ):
+                self.options_per_plot[idx] = [
+                    {
                         "L": 0.0,
                         "W": 0.0,
                         "H": 0.0,
                         "living": 0.0,
                         "footprint": 0.0,
-                    }]
-                    continue
+                    }
+                ]
+                continue
 
-                for L in self.generation_parameters.building_length_range:
-                    L = float(L)
-                    for W in self.generation_parameters.building_width_range:
-                        W = float(W)
-                        footprint = L * W
-                        if footprint <= 0 or footprint > max_fp:
+            for L in building_params.building_length_range:
+                L = float(L)
+                for W in building_params.building_width_range:
+                    W = float(W)
+                    footprint = L * W
+                    if footprint <= 0 or footprint > max_fp:
+                        continue
+
+                    fits_by_dims = (
+                        (L <= eff_front and W <= eff_depth)
+                        or (L <= eff_depth and W <= eff_front)
+                    )
+                    if not fits_by_dims:
+                        continue
+
+                    for H in building_params.building_height:
+                        H = float(H)
+                        if H < 1:
                             continue
 
-
-                        fits_by_dims = (
-                            (L <= eff_front and W <= eff_depth) or
-                            (L <= eff_depth and W <= eff_front)
-                        )
-                        if not fits_by_dims:
+                        living = footprint * H * building_params.la_coef
+                        if living <= 0:
                             continue
 
-                        for H in self.generation_parameters.building_height:
-                            H = float(H)
-                            if H < 1:
-                                continue
-
-                            living = footprint * H * self.generation_parameters.la_coef
-                            if living <= 0:
-                                continue
-
-                            options.append({
+                        options.append(
+                            {
                                 "L": L,
                                 "W": W,
                                 "H": H,
                                 "living": living,
                                 "footprint": footprint,
-                            })
+                            }
+                        )
 
-
-                if not options:
-                    options = [{
+            if not options:
+                options = [
+                    {
                         "L": 0.0,
                         "W": 0.0,
                         "H": 0.0,
                         "living": 0.0,
                         "footprint": 0.0,
-                    }]
+                    }
+                ]
 
-                self.options_per_plot[idx] = options
+            self.options_per_plot[idx] = options
 
+        self.current_choice = {}
+        total_living = 0.0
 
+        for idx in self.plot_indices:
+            options = self.options_per_plot[idx]
+            best_opt = min(options, key=self._score_to_base)
+            self.current_choice[idx] = best_opt
+            total_living += best_opt["living"]
 
-            self.current_choice: dict[int, dict] = {}
-            total_living = 0.0
+        best_la_score, best_far_score = self._objective(total_living)
 
-            for idx in self.plot_indices:
-                options = self.options_per_plot[idx]
+        if total_living < la_target:
+            total_living, best_la_score, best_far_score = self._hill_climb(
+                +1, total_living, best_la_score, best_far_score
+            )
+        elif total_living > la_target:
+            total_living, best_la_score, best_far_score = self._hill_climb(
+                -1, total_living, best_la_score, best_far_score
+            )
 
+        if total_living < la_target:
+            total_living, best_la_score, best_far_score = self._hill_climb(
+                -1, total_living, best_la_score, best_far_score
+            )
+        elif total_living > la_target:
+            total_living, best_la_score, best_far_score = self._hill_climb(
+                +1, total_living, best_la_score, best_far_score
+            )
 
-                
+        group = group.copy()
+        for idx in self.plot_indices:
+            choice = self.current_choice[idx]
+            L = choice["L"]
+            W = choice["W"]
+            H = choice["H"]
+            living = choice["living"]
 
-                best_opt = min(options, key=self._score_to_base)
-                self.current_choice[idx] = best_opt
-                total_living += best_opt["living"]
+            if living <= 0:
+                group.at[idx, "building_length"] = np.nan
+                group.at[idx, "building_width"] = np.nan
+                group.at[idx, "floors_count"] = np.nan
+                group.at[idx, "living_per_building"] = 0.0
+                group.at[idx, "living_area"] = 0.0
+            else:
+                group.at[idx, "building_length"] = float(L)
+                group.at[idx, "building_width"] = float(W)
+                group.at[idx, "floors_count"] = float(H)
+                group.at[idx, "living_per_building"] = float(living)
+                group.at[idx, "living_area"] = float(living)
 
-            best_la_score, best_far_score = self._objective(total_living)
+        far_final = self._current_far(total_living)
+        la_diff = total_living - la_target
+        la_ratio = total_living / la_target if la_target > 0 else math.nan
+        far_diff = far_final - far_initial if not math.isnan(far_initial) else math.nan
 
+        group.loc[:, "total_living_area"] = float(total_living)
+        group.loc[:, "la_diff"] = float(la_diff)
+        group.loc[:, "la_ratio"] = float(la_ratio)
+        group.loc[:, "far_initial"] = float(far_initial)
+        group.loc[:, "far_final"] = float(far_final)
+        group.loc[:, "far_diff"] = float(far_diff)
 
-
-
-            if total_living < la_target:
-                total_living, best_la_score, best_far_score = self._hill_climb(+1, total_living,
-                                                                        best_la_score, best_far_score)
-            elif total_living > la_target:
-                total_living, best_la_score, best_far_score = self._hill_climb(-1, total_living,
-                                                                        best_la_score, best_far_score)
-
-
-
-            if total_living < la_target:
-                total_living, best_la_score, best_far_score = self._hill_climb(-1, total_living,
-                                                                        best_la_score, best_far_score)
-            elif total_living > la_target:
-                total_living, best_la_score, best_far_score = self._hill_climb(+1, total_living,
-                                                                        best_la_score, best_far_score)
-
-
-
-            group = group.copy()
-            for idx in self.plot_indices:
-                choice = self.current_choice[idx]
-                L = choice["L"]
-                W = choice["W"]
-                H = choice["H"]
-                living = choice["living"]
-
-                if living <= 0:
-                    group.at[idx, "building_length"] = np.nan
-                    group.at[idx, "building_width"] = np.nan
-                    group.at[idx, "floors_count"] = np.nan
-                    group.at[idx, "living_per_building"] = 0.0
-                    group.at[idx, "living_area"] = 0.0
-                else:
-                    group.at[idx, "building_length"] = float(L)
-                    group.at[idx, "building_width"] = float(W)
-                    group.at[idx, "floors_count"] = float(H)
-                    group.at[idx, "living_per_building"] = float(living)
-                    group.at[idx, "living_area"] = float(living)
-
-            far_final = self._current_far(total_living)
-            la_diff = total_living - la_target
-            la_ratio = total_living / la_target if la_target > 0 else math.nan
-            far_diff = far_final - far_initial if not math.isnan(far_initial) else math.nan
-
-            group.loc[:, "total_living_area"] = float(total_living)
-            group.loc[:, "la_diff"] = float(la_diff)
-            group.loc[:, "la_ratio"] = float(la_ratio)
-            group.loc[:, "far_initial"] = float(far_initial)
-            group.loc[:, "far_final"] = float(far_final)
-            group.loc[:, "far_diff"] = float(far_diff)
-
-            return group
+        return group
 
     def _recalc_buildings_for_plots(self, plots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """
-        Пересчитывает параметры зданий по итоговым участкам.
-
-        Логика:
-        • один участок = максимум один дом;
-        • для КАЖДОГО участка подбираем собственные L, W, H из
-            building_length_range, building_width_range, building_height,
-            с учётом:
-            - реальных габаритов участка в системе координат квартала,
-            - отступа INNER_BORDER,
-            - доли застройки MAX_COVERAGE * plot_area;
-        • на уровне квартала (src_index) оптимизируем набор домов так, чтобы:
-            1) минимизировать |total_living_area - la_target|;
-            2) минимизировать |far_final - far_initial| (при равном 1).
-        """
 
         required_cols = {"src_index", "la_target", "angle"}
         if not required_cols.issubset(plots.columns):
@@ -719,40 +716,40 @@ class PlotsGenerator:
         gdf = plots.copy()
         gdf["plot_area"] = gdf.geometry.area
 
-        gdf = gdf.groupby("src_index", group_keys=False).apply(lambda x: self._tune_block(x, gdf))
+        gdf = gdf.groupby("src_index", group_keys=False).apply(
+            lambda x: self._tune_block(x, gdf)
+        )
         return gdf
 
-        
     def generate_plots(self, segments: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         segments = segments.dropna(subset=["plot_depth"]).copy()
         crs = segments.crs
 
-        parts = segments.apply(lambda r: self._slice_segment_with_plots(r, crs=crs), axis=1)
-        non_empty = [p for p in parts.tolist() if not p.empty]
-
-        if not non_empty:
-            return gpd.GeoDataFrame(columns=list(segments.columns), geometry="geometry", crs=crs)
+        parts_list = []
+        for _, r in segments.iterrows():
+            p = self._slice_segment_with_plots(r, crs=crs)
+            if p is not None and not p.empty:
+                parts_list.append(p)
+        if not parts_list:
+            return gpd.GeoDataFrame(
+                columns=list(segments.columns),
+                geometry="geometry",
+                crs=crs,
+            )
 
         result = gpd.GeoDataFrame(
-            pd.concat(non_empty, ignore_index=True),
+            pd.concat(parts_list, ignore_index=True),
             geometry="geometry",
             crs=crs,
         )
 
-
         result = self.merge_small_plots_iterative(result, area_factor=0.5)
 
-
-
         result = result[result.geometry.notna() & ~result.geometry.is_empty]
-
-
         result = result[result.geom_type.isin(["Polygon", "MultiPolygon"])]
-
 
         result["plot_area"] = result.geometry.area
         result = result[result["plot_area"] > 0]
-
 
         result = self._recalc_buildings_for_plots(result)
 

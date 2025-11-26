@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from loguru import logger
 from tqdm.auto import tqdm
@@ -10,35 +10,62 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from shapely.geometry import Polygon
-
+from app.logic.building_generation.building_capacity_optimizer import CapacityOptimizer
+from app.logic.building_generation.building_params import (
+    BuildingGenParams,
+    BuildingParamsProvider,
+    BuildingType,
+    BuildingParams,
+)
 
 class SegmentsAllocator:
+    """
+    Allocates building capacity across rectangular segments inside blocks.
 
-    def __init__(self, params_provider: ParamsProvider, capacity_optimizer: CapacityOptimizer):
-        self._params = params_provider
+    Uses block targets and building presets to:
+    - choose a consistent (L, W, H, plot_front) scenario per block;
+    - compute how many plots/buildings fit into each segment;
+    - update blocks with final capacity/FAR and segments with plot_front/depth.
+    """
+    def __init__(
+        self,
+        capacity_optimizer: CapacityOptimizer,
+        building_params_provider: BuildingParamsProvider,
+    ):
         self.capacity_optimizer = capacity_optimizer
+        self._building_params = building_params_provider
 
     @property
-    def generation_parameters(self) -> GenParams:
-        return self._params.current()
-    
-    def solve_block_with_segments(self,
-    row: pd.Series,
-    rects_block: gpd.GeoDataFrame,
-    far: str,
-    *,
-    la_ratio: float = self.generation_parameters.la_coef,
-) -> Tuple[Dict[str, Any], gpd.GeoDataFrame]:
-        """
-        ШАГИ 2–3 с приоритетом:
-        1) сначала ищем комбинации (L,W,H,F) и building_capacity, где участок
-            расположен ДЛИННОЙ стороной по границе квартала (plot_depth <= plot_front);
-        2) только если ни одна не даёт building_capacity >= building_need,
-            допускаем варианты, где по границе лежит короткая сторона (plot_depth > plot_front).
-        """
+    def building_generation_parameters(self) -> BuildingGenParams:
+        return self._building_params.current()
 
-        if rects_block.empty or row.get("floors_group") != "private":
+    def solve_block_with_segments(
+        self,
+        row: pd.Series,
+        rects_block: gpd.GeoDataFrame,
+        far: str,
+        *,
+        building_params: BuildingParams,
+        la_ratio: float | None = None,
+    ) -> Tuple[Dict[str, Any], gpd.GeoDataFrame]:
+
+        block_id = row.name
+        floors_group = row.get("floors_group")
+        la_target_raw = row.get("la_target")
+        logger.debug(
+            f"[solve_block] start: block_id={block_id}, far={far}, "
+            f"floors_group={floors_group}, la_target={la_target_raw}, "
+            f"rects_count={len(rects_block)}, "
+            f"building_params.la_coef={building_params.la_coef}, "
+            f"plot_side_range=({min(building_params.plot_side)}, {max(building_params.plot_side)})"
+        )
+
+        if la_ratio is None:
+            la_ratio = building_params.la_coef
+        logger.debug(f"[solve_block] block_id={block_id}: using la_ratio={la_ratio}")
+
+        if rects_block.empty:
+            logger.debug(f"[solve_block] block_id={block_id}: rects_block is EMPTY, return zeros/NaN")
             rects_block = rects_block.copy()
             rects_block["plots_capacity"] = 0
             rects_block["plot_front"] = np.nan
@@ -65,7 +92,12 @@ class SegmentsAllocator:
             }, rects_block
 
         target_la = float(row["la_target"])
+        logger.debug(f"[solve_block] block_id={block_id}: target_la={target_la}")
         if target_la <= 0:
+            logger.debug(
+                f"[solve_block] block_id={block_id}: target_la <= 0 "
+                f"(target_la={target_la}), return zeros/NaN"
+            )
             rects_block = rects_block.copy()
             rects_block["plots_capacity"] = 0
             rects_block["plot_front"] = np.nan
@@ -92,17 +124,31 @@ class SegmentsAllocator:
             }, rects_block
 
 
-        area_min, area_max, area_base = self.capacity_opimizer.get_plot_area_params(far)
+        area_min, area_max, area_base = self.capacity_optimizer.get_plot_area_params(
+            far,
+            building_params,
+        )
         plot_area_base = float(area_base)
 
-        base_L_idx, base_W_idx, base_H_idx, base_F_idx = self.capacity_opimizer.pick_indices(far)
-        base_L = float(self.generation_parameters.building_length_range[base_L_idx])
-        base_W = float(self.generation_parameters.building_width_range[base_W_idx])
-        base_H = float(self.generation_parameters.building_height[base_H_idx])
-        base_F = float(self.generation_parameters.plot_side[base_F_idx])
+        base_L_idx, base_W_idx, base_H_idx, base_F_idx = self.capacity_optimizer.pick_indices(
+            far,
+            building_params,
+        )
+
+        base_L = float(building_params.building_length_range[base_L_idx])
+        base_W = float(building_params.building_width_range[base_W_idx])
+        base_H = float(building_params.building_height[base_H_idx])
+        base_F = float(building_params.plot_side[base_F_idx])
 
         far_initial = float(
             row.get("far_initial", (base_L * base_W * base_H) / plot_area_base)
+        )
+
+        logger.debug(
+            f"[solve_block] block_id={block_id}: "
+            f"area_min={area_min}, area_max={area_max}, area_base={area_base}, "
+            f"base_L={base_L}, base_W={base_W}, base_H={base_H}, base_F={base_F}, "
+            f"far_initial={far_initial}"
         )
 
 
@@ -118,9 +164,13 @@ class SegmentsAllocator:
             seg_fronts.append(seg_front)
             seg_depths.append(seg_depth)
 
+        logger.debug(
+            f"[solve_block] block_id={block_id}: seg_fronts={seg_fronts}, seg_depths={seg_depths}"
+        )
+
 
         capacity_by_front_idx: list[int] = []
-        for F in plot_side:
+        for F in building_params.plot_side:
             F_val = float(F)
             if F_val <= 0:
                 capacity_by_front_idx.append(0)
@@ -130,7 +180,17 @@ class SegmentsAllocator:
                 cap_total += int(front_len // F_val)
             capacity_by_front_idx.append(cap_total)
 
-        if max(capacity_by_front_idx) <= 0:
+        max_cap = max(capacity_by_front_idx) if capacity_by_front_idx else 0
+        logger.debug(
+            f"[solve_block] block_id={block_id}: "
+            f"capacity_by_front_idx={capacity_by_front_idx}, max_capacity={max_cap}"
+        )
+
+        if max_cap <= 0:
+            logger.debug(
+                f"[solve_block] block_id={block_id}: max_capacity <= 0, "
+                f"return zeros/NaN for plots"
+            )
             rects_block["plots_capacity"] = 0
             rects_block["plot_front"] = np.nan
             rects_block["plot_depth"] = np.nan
@@ -171,15 +231,14 @@ class SegmentsAllocator:
         ) -> None:
             nonlocal best_success, best_success_score, fallback, fallback_total_la
 
-            L = float(self.generation_parameters.building_length_range[L_idx])
-            W = float(self.generation_parameters.building_width_range[W_idx])
-            H = float(self.generation_parameters.building_height[H_idx])
-            F = float(self.generation_parameters.plot_side[F_idx])
+            L = float(building_params.building_length_range[L_idx])
+            W = float(building_params.building_width_range[W_idx])
+            H = float(building_params.building_height[H_idx])
+            F = float(building_params.plot_side[F_idx])
 
             living_per_building = L * W * H * la_ratio
             if living_per_building <= 0:
                 return
-
 
             if F > 0:
                 plot_depth = plot_area_base / F
@@ -188,7 +247,6 @@ class SegmentsAllocator:
 
             is_long_side_along_front = F >= plot_depth
 
-            # building_need
             building_need = int(math.ceil(target_la / living_per_building)) if target_la > 0 else 0
 
             capacity_total = int(capacity_by_front_idx[F_idx])
@@ -215,11 +273,15 @@ class SegmentsAllocator:
                     "total_living_area": total_la_fallback,
                     "far_final": far_final_fb,
                 }
+                logger.debug(
+                    f"[solve_block] block_id={block_id}: fallback updated -> "
+                    f"L={L}, W={W}, H={H}, F={F}, "
+                    f"capacity_total={capacity_total}, total_la_fallback={total_la_fallback}"
+                )
 
 
             if building_need <= 0 or capacity_total < building_need:
                 return
-
 
             if only_long_front and not is_long_side_along_front:
                 return
@@ -234,12 +296,6 @@ class SegmentsAllocator:
             front_reduction = base_F - F
             floor_delta = H - base_H
             area_diff_abs = abs((L * W) - (base_L * base_W))
-
-
-
-
-
-
 
             score = (
                 la_diff_abs,
@@ -263,38 +319,67 @@ class SegmentsAllocator:
                     "total_living_area": total_la,
                     "far_final": far_final,
                 }
+                logger.debug(
+                    f"[solve_block] block_id={block_id}: best_success updated -> "
+                    f"L={L}, W={W}, H={H}, F={F}, "
+                    f"building_need={building_need}, capacity_total={capacity_total}, "
+                    f"total_la={total_la}, score={score}"
+                )
+
+        logger.debug(
+            f"[solve_block] block_id={block_id}: "
+            f"searching candidates: len(L_range)={len(building_params.building_length_range)}, "
+            f"len(W_range)={len(building_params.building_width_range)}, "
+            f"len(H_range)={len(building_params.building_height)}, "
+            f"len(F_range)={len(building_params.plot_side)}"
+        )
 
 
-
-        for L_idx in range(base_L_idx, len(self.generation_parameters.building_length_range)):
-            for W_idx in range(base_W_idx, len(self.generation_parameters.building_width_range)):
+        for L_idx in range(base_L_idx, len(building_params.building_length_range)):
+            for W_idx in range(base_W_idx, len(building_params.building_width_range)):
                 consider_candidate(L_idx, W_idx, base_H_idx, base_F_idx, only_long_front=True)
 
 
         if best_success is None:
-            for H_idx in range(base_H_idx, len(self.generation_parameters.building_height)):
-                for L_idx in range(base_L_idx, len(self.generation_parameters.building_length_range)):
-                    for W_idx in range(base_W_idx, len(self.generation_parameters.building_width_range)):
+            logger.debug(
+                f"[solve_block] block_id={block_id}: no best_success after L/W scan, "
+                f"trying H-range with fixed F"
+            )
+            for H_idx in range(base_H_idx, len(building_params.building_height)):
+                for L_idx in range(base_L_idx, len(building_params.building_length_range)):
+                    for W_idx in range(base_W_idx, len(building_params.building_width_range)):
                         consider_candidate(L_idx, W_idx, H_idx, base_F_idx, only_long_front=True)
 
 
         if best_success is None:
+            logger.debug(
+                f"[solve_block] block_id={block_id}: still no best_success, "
+                f"trying smaller F with only_long_front=True"
+            )
             for F_idx in range(base_F_idx, 0, -1):
-                for H_idx in range(base_H_idx, len(self.generation_parameters.building_height)):
-                    for L_idx in range(base_L_idx, len(self.generation_parameters.building_length_range)):
-                        for W_idx in range(base_W_idx, len(self.generation_parameters.building_width_range)):
+                for H_idx in range(base_H_idx, len(building_params.building_height)):
+                    for L_idx in range(base_L_idx, len(building_params.building_length_range)):
+                        for W_idx in range(base_W_idx, len(building_params.building_width_range)):
                             consider_candidate(L_idx, W_idx, H_idx, F_idx, only_long_front=True)
 
 
         if best_success is None:
+            logger.debug(
+                f"[solve_block] block_id={block_id}: no best_success yet, "
+                f"allowing short-front (only_long_front=False)"
+            )
             for F_idx in range(base_F_idx, 0, -1):
-                for H_idx in range(base_H_idx, len(self.generation_parameters.building_height)):
-                    for L_idx in range(base_L_idx, len(self.generation_parameters.building_length_range)):
-                        for W_idx in range(base_W_idx, len(self.generation_parameters.uilding_width_range)):
+                for H_idx in range(base_H_idx, len(building_params.building_height)):
+                    for L_idx in range(base_L_idx, len(building_params.building_length_range)):
+                        for W_idx in range(base_W_idx, len(building_params.building_width_range)):
                             consider_candidate(L_idx, W_idx, H_idx, F_idx, only_long_front=False)
 
         chosen = best_success or fallback
         if chosen is None:
+            logger.debug(
+                f"[solve_block] block_id={block_id}: chosen is None "
+                f"(no best_success and no fallback) -> return zeros/NaN for plots"
+            )
             rects_block["plots_capacity"] = 0
             rects_block["plot_front"] = np.nan
             rects_block["plot_depth"] = np.nan
@@ -338,6 +423,16 @@ class SegmentsAllocator:
         plot_area = plot_area_base
         plot_depth = plot_area / plot_front if plot_front > 0 else np.nan
 
+        logger.debug(
+            f"[solve_block] block_id={block_id}: CHOSEN -> "
+            f"L={L}, W={W}, H={H}, F={F}, "
+            f"building_need={building_need}, building_capacity={building_capacity}, "
+            f"buildings_count={buildings_count}, "
+            f"living_per_building={living_per_building}, total_living_area={total_living_area}, "
+            f"plot_front={plot_front}, plot_depth={plot_depth}, "
+            f"far_initial={far_initial}, far_final={far_final}, la_diff={la_diff}"
+        )
+
 
         plots_capacity_total = 0
         plot_depth_norm = plot_depth
@@ -362,7 +457,18 @@ class SegmentsAllocator:
 
             plots_capacity_total += cap_seg
 
+        logger.debug(
+            f"[solve_block] block_id={block_id}: "
+            f"plots_capacity_total={plots_capacity_total}, "
+            f"initial_building_capacity={building_capacity}"
+        )
+
         if plots_capacity_total != building_capacity:
+            logger.debug(
+                f"[solve_block] block_id={block_id}: "
+                f"plots_capacity_total ({plots_capacity_total}) != building_capacity ({building_capacity}), "
+                f"overriding building_capacity"
+            )
             building_capacity = plots_capacity_total
 
         block_result = {
@@ -385,30 +491,34 @@ class SegmentsAllocator:
             "far_diff": float(far_final - far_initial),
         }
 
+        logger.debug(
+            f"[solve_block] block_id={block_id}: DONE -> "
+            f"building_capacity={block_result['building_capacity']}, "
+            f"buildings_count={block_result['buildings_count']}, "
+            f"plot_front={block_result['plot_front']}, "
+            f"plot_depth={block_result['plot_depth']}"
+        )
+
         return block_result, rects_block
 
-    def update_blocks_with_segments(self,
+    def update_blocks_with_segments(
+        self,
         blocks_gdf: gpd.GeoDataFrame,
-        rects_gdf: gpd.GeoDataFrame
+        rects_gdf: gpd.GeoDataFrame,
+        far: str,
     ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-        """
-        Применяет solve_block_with_segments ко всем кварталам.
 
-        На вход:
-        - blocks_gdf: кварталы с результатами compute_private_row
-        - rects_gdf: прямоугольные сегменты от pack_inscribed_rectangles_for_gdf
-                    (должен быть столбец 'src_index' с индексом квартала)
-
-        На выход:
-        - обновлённый blocks_gdf
-        - обновлённый rects_gdf (plots_capacity, plot_front, plot_depth + блочные атрибуты)
-        """
         blocks = blocks_gdf.copy()
         rects = rects_gdf.copy()
 
-        if rects.empty:
-            return blocks, rects
+        logger.debug(
+            f"[update_blocks] start: blocks_count={len(blocks)}, "
+            f"rects_count={len(rects)}, far={far}"
+        )
 
+        if rects.empty:
+            logger.debug("[update_blocks] rects is EMPTY, nothing to update")
+            return blocks, rects
 
         for col, default in [
             ("plots_capacity", 0),
@@ -418,38 +528,114 @@ class SegmentsAllocator:
             if col not in rects.columns:
                 rects[col] = default
 
+        try:
+            unique_src = rects["src_index"].unique()
+        except Exception:
+            unique_src = "N/A"
+
+        logger.debug(f"[update_blocks] rects.src_index.unique={unique_src}")
+
         for idx, row in blocks.iterrows():
-            if row.get("floors_group") != "private":
-                continue
+            fg = row.get("floors_group")
+            la_target = row.get("la_target")
+            logger.debug(
+                f"[update_blocks] block_idx={idx}: floors_group={fg}, la_target={la_target}"
+            )
 
             block_rects = rects[rects["src_index"] == idx]
+            logger.debug(
+                f"[update_blocks] block_idx={idx}: matched_rects_count={len(block_rects)}"
+            )
+
             if block_rects.empty:
+                logger.debug(
+                    f"[update_blocks] block_idx={idx}: NO rects for this block, "
+                    f"set building_capacity=0, buildings_count=0"
+                )
                 blocks.at[idx, "building_capacity"] = 0
                 blocks.at[idx, "buildings_count"] = 0
                 continue
 
+            try:
+                building_type = BuildingType(fg)
+                logger.debug(
+                    f"[update_blocks] block_idx={idx}: mapped floors_group={fg} "
+                    f"-> building_type={building_type}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[update_blocks] block_idx={idx}: cannot map floors_group={fg} "
+                    f"to BuildingType: {e!r}, set building_capacity=0, buildings_count=0"
+                )
+                blocks.at[idx, "building_capacity"] = 0
+                blocks.at[idx, "buildings_count"] = 0
+                continue
+
+            try:
+                building_params = self.building_generation_parameters.params_by_type[building_type]
+            except KeyError as e:
+                logger.error(
+                    f"[update_blocks] block_idx={idx}: building_type={building_type} "
+                    f"not in params_by_type keys="
+                    f"{list(self.building_generation_parameters.params_by_type.keys())} "
+                    f"-> set building_capacity=0, buildings_count=0"
+                )
+                blocks.at[idx, "building_capacity"] = 0
+                blocks.at[idx, "buildings_count"] = 0
+                continue
+
+            logger.debug(
+                f"[update_blocks] block_idx={idx}: calling solve_block_with_segments "
+                f"with {len(block_rects)} rects, building_type={building_type}"
+            )
+
             block_res, block_rects_res = self.solve_block_with_segments(
                 row=row,
                 rects_block=block_rects,
-                far=self.generation_parameters.far,
-                la_ratio=self.generation_parameters.la_coef,
+                far=far,
+                building_params=building_params,
+                la_ratio=building_params.la_coef,
             )
 
+            logger.debug(
+                f"[update_blocks] block_idx={idx}: solve_block_with_segments returned -> "
+                f"building_capacity={block_res.get('building_capacity')}, "
+                f"buildings_count={block_res.get('buildings_count')}, "
+                f"plot_front={block_res.get('plot_front')}, "
+                f"plot_depth={block_res.get('plot_depth')}"
+            )
 
             for key, value in block_res.items():
                 blocks.at[idx, key] = value
 
-
             rects.loc[block_rects_res.index, ["plots_capacity", "plot_front", "plot_depth"]] = \
                 block_rects_res[["plots_capacity", "plot_front", "plot_depth"]].values
-
 
             rects.loc[block_rects_res.index, "src_index"] = idx
             rects.loc[block_rects_res.index, "la_target"] = row.get("la_target", np.nan)
 
-            rects.loc[block_rects_res.index, "far_initial"] = block_res.get("far_initial", row.get("far_initial", np.nan))
-            rects.loc[block_rects_res.index, "building_length"] = block_res.get("building_length", row.get("building_length", np.nan))
-            rects.loc[block_rects_res.index, "building_width"] = block_res.get("building_width", row.get("building_width", np.nan))
-            rects.loc[block_rects_res.index, "floors_count"] = block_res.get("floors_count", row.get("floors_count", np.nan))
+            rects.loc[block_rects_res.index, "far_initial"] = block_res.get(
+                "far_initial",
+                row.get("far_initial", np.nan),
+            )
+            rects.loc[block_rects_res.index, "building_length"] = block_res.get(
+                "building_length",
+                row.get("building_length", np.nan),
+            )
+            rects.loc[block_rects_res.index, "building_width"] = block_res.get(
+                "building_width",
+                row.get("building_width", np.nan),
+            )
+            rects.loc[block_rects_res.index, "floors_count"] = block_res.get(
+                "floors_count",
+                row.get("floors_count", np.nan),
+            )
+            rects.loc[block_rects_res.index, "floors_group"] = row.get("floors_group", np.nan)
 
+            logger.debug(
+                f"[update_blocks] block_idx={idx}: rects updated for indices "
+                f"{list(block_rects_res.index)}"
+            )
+
+        logger.debug("[update_blocks] DONE")
         return blocks, rects

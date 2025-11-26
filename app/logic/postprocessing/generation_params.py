@@ -145,6 +145,9 @@ class GenParams(BaseModel):
     rectangle_finder_step: int = 5
     minimal_rectangle_side: int = 40
     jobs_number: int = 5
+    la_per_person: int = 18
+    max_service_attempts: int = 200
+    max_sites_per_service_per_block: int = 10
 
     def patched(self, patch: Dict[str, Any]) -> "GenParams":
         def deep_merge(a, b):

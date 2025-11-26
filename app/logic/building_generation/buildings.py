@@ -7,15 +7,24 @@ from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
 
-class BuildingsGenerator:
-    
-    def __init__(self, params_provider: ParamsProvider):
-        self._params = params_provider
+class ResidentialBuildingsGenerator:
+    """
+    Generates residential building footprints inside plot polygons.
 
-    @property
-    def generation_parameters(self) -> GenParams:
-        return self._params.current()
+    Given a GeoDataFrame of plots with preset building dimensions and attributes
+    (length, width, floors, living area), this class:
+    - filters valid plot geometries (non-empty polygons with positive area);
+    - orients each building along the longest edge of the plot’s minimum
+        rotated rectangle;
+    - places a single rectangular building at the plot centroid with the
+        requested length and width;
+    - returns a GeoDataFrame of building footprints with geometry and
+        key attributes (dimensions, floors, living_area, src_index).
 
+    Main entry point:
+    - generate_buildings_from_plots(...) – static method that converts plots
+        GeoDataFrame into a buildings GeoDataFrame.
+    """
     @staticmethod
     def generate_buildings_from_plots(
         plots_gdf: gpd.GeoDataFrame,
@@ -24,14 +33,7 @@ class BuildingsGenerator:
         floors_col: str = "floors_count",
         la_col: str = "living_area",
     ) -> gpd.GeoDataFrame:
-        """
-        Для каждого полигона plots строит прямоугольное здание
-        размера building_length x building_width, ориентированное
-        по главной оси полигона.
 
-        Любые вырожденные / проблемные участки (NaN-координаты,
-        некорректный LinearRing и т.п.) тихо пропускаются.
-        """
         plots = plots_gdf.copy()
         plots = plots[plots.geometry.notna() & ~plots.geometry.is_empty]
         plots = plots[plots.geom_type.isin(["Polygon", "MultiPolygon"])]

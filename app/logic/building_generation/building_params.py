@@ -1,40 +1,27 @@
-from __future__ import annotations
-
-import contextvars
-import contextlib
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import List, Dict, Any, Iterator
-
+import contextvars
+import contextlib
 
 class BuildingType(str, Enum):
-    """Типы жилой застройки по этажности/формату."""
-    IZH = "private"              
-    MKD_2_4 = "low"     
-    MKD_5_8 = "medium"    
-    MKD_9_16 = "high"    
-    HIGHRISE = "extreme"    
+    IZH = "private"
+    MKD_2_4 = "low"
+    MKD_5_8 = "medium"
+    MKD_9_16 = "high"
+    HIGHRISE = "extreme"
 
 @dataclass(frozen=True)
 class BuildingParams:
-
-    building_length_range: List[int]  
-    building_width_range: List[int]    
-    building_height: List[int]         
-
-
+    building_length_range: List[int]
+    building_width_range: List[int]
+    building_height: List[int]
     plot_side: List[int]
     plot_area_min: float
     plot_area_max: float
-
-
     la_coef: float
 
-
 PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
-
-
-
     BuildingType.IZH: BuildingParams(
         building_length_range=list(range(8, 16)),
         building_width_range=list(range(8, 13)),
@@ -44,10 +31,6 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
         plot_area_max=900.0,
         la_coef=0.65,
     ),
-
-
-
-
     BuildingType.MKD_2_4: BuildingParams(
         building_length_range=list(range(30, 81)),
         building_width_range=list(range(10, 20)),
@@ -57,10 +40,6 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
         plot_area_max=4000.0,
         la_coef=0.55,
     ),
-
-
-
-
     BuildingType.MKD_5_8: BuildingParams(
         building_length_range=list(range(40, 121)),
         building_width_range=list(range(12, 19)),
@@ -70,10 +49,6 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
         plot_area_max=6000.0,
         la_coef=0.50,
     ),
-
-
-
-
     BuildingType.MKD_9_16: BuildingParams(
         building_length_range=list(range(40, 121)),
         building_width_range=list(range(14, 23)),
@@ -83,10 +58,6 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
         plot_area_max=8000.0,
         la_coef=0.45,
     ),
-
-
-
-
     BuildingType.HIGHRISE: BuildingParams(
         building_length_range=list(range(30, 71)),
         building_width_range=list(range(18, 31)),
@@ -98,36 +69,13 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
     ),
 }
 
-
 @dataclass(frozen=True)
 class BuildingGenParams:
-    """
-    Аналог GenParams, но для параметров типов застройки.
 
-    params_by_type:
-      ключ  - BuildingType
-      значение - BuildingParams
-    """
     params_by_type: Dict[BuildingType, BuildingParams] = field(default_factory=dict)
 
     def patched(self, patch: Dict[str, Any]) -> "BuildingGenParams":
-        """
-        Возвращает новый BuildingGenParams поверх текущего,
-        с учётом рекурсивного deep-merge патча.
 
-        Ожидаемый формат patch примерно такой:
-        {
-            "params_by_type": {
-                "MKD_5_8": {
-                    "plot_area_min": 1800.0,
-                    "plot_area_max": 5500.0,
-                },
-                "IZH": {
-                    "la_coef": 0.6
-                }
-            }
-        }
-        """
         def deep_merge(a: Any, b: Any) -> Any:
             if isinstance(a, dict) and isinstance(b, dict):
                 c = dict(a)
@@ -162,14 +110,7 @@ class BuildingGenParams:
 
         return BuildingGenParams(params_by_type=new_mapping)
 
-
 class BuildingParamsProvider:
-    """
-    Аналог ParamsProvider для конфигурации типов застройки.
-
-    Хранит BuildingGenParams в contextvars, чтобы можно было
-    локально переопределять параметры внутри контекстного менеджера.
-    """
     def __init__(self, base: BuildingGenParams):
         self._var: contextvars.ContextVar[BuildingGenParams] = contextvars.ContextVar(
             "building_gen_params",
@@ -183,25 +124,10 @@ class BuildingParamsProvider:
         return self.current().params_by_type[building_type]
 
     @contextlib.contextmanager
-    def override(self, new_params: BuildingGenParams) -> Iterator[None]:
+    def override(self, new_params: BuildingGenParams):
         token = self._var.set(new_params)
         try:
             yield
         finally:
             self._var.reset(token)
-# TODO: remove later
-BASE_BUILDING_GEN_PARAMS = BuildingGenParams(
-    params_by_type=PARAMS_BY_TYPE,
-)
-
-BUILDING_PARAMS_PROVIDER = BuildingParamsProvider(
-    base=BASE_BUILDING_GEN_PARAMS,
-)
-
-
-def get_params(building_type: BuildingType) -> BuildingParams:
-    """
-    Backward-совместимая обёртка, аналог старой функции get_params.
-    Теперь берёт данные из глобального BUILDING_PARAMS_PROVIDER.
-    """
-    return BUILDING_PARAMS_PROVIDER.get(building_type)
+            

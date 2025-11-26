@@ -12,45 +12,8 @@ from tqdm.auto import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 class MIR:
-    """
-    Упаковка максимальных вписанных прямоугольников в полигоны кварталов.
-
-    Логика:
-      1) Для каждого полигона оценивается угол его главной оси
-         (через minimum_rotated_rectangle).
-      2) Полигон поворачивается так, чтобы главная ось стала горизонтальной.
-      3) В повернутом полигоне ищется ОДИН прямоугольник максимальной площади,
-         ориентированный по осям, с минимальной стороной >= min_side.
-      4) Найденный прямоугольник вырезается из полигона, цикл повторяется,
-         пока возможно найти новый прямоугольник.
-      5) Все прямоугольники поворачиваются обратно в исходную систему координат.
-
-    Публичный API:
-      • fit_transform(gdf) -> GeoDataFrame прямоугольников
-      • статический враппер pack_inscribed_rectangles_for_gdf(...) для обратной совместимости
-
-    Выходной GeoDataFrame содержит:
-      - src_index: индекс исходного полигона (индекс строки входного gdf)
-      - rect_id: порядковый номер прямоугольника внутри полигона (0,1,2,...)
-      - width, height: габариты прямоугольника в повернутой системе, м
-      - area: площадь прямоугольника, м²
-      - angle: угол поворота в градусах (ориентация длинной стороны)
-      - geometry: геометрия прямоугольника в ИСХОДНОЙ системе координат
-    """
-
-    def __init__(
-        self, params_provider: ParamsProvider):
-        self._params = params_provider
-
-    @property
-    def generation_parameters(self) -> GenParams:
-        return self._params.current()
     
     def _pack_rectangles_for_single_geom(self, idx: int, geom: Polygon, step: float, min_side: float):
-        """
-        Обрабатывает один объект gdf: индекс + геометрия.
-        Возвращает список records (dict), готовых к сборке в GeoDataFrame.
-        """
 
         if geom is None or geom.is_empty:
             return []
@@ -79,10 +42,7 @@ class MIR:
 
     @staticmethod
     def _main_axis_angle(poly: Polygon) -> float:
-        """
-        Оценка угла главной оси полигона по minimum_rotated_rectangle.
-        Возвращает угол в градусах (ориентация длинной стороны).
-        """
+
         mrr = poly.minimum_rotated_rectangle
         coords = list(mrr.exterior.coords)
 
@@ -114,12 +74,7 @@ class MIR:
         step: float,
         min_side: float,
     ) -> Optional[Dict[str, Any]]:
-        """
-        poly_r — полигон уже повернут в систему, где главная ось горизонтальна.
-        Ищет ОДИН прямоугольник максимальной площади, ориентированный по осям,
-        с минимальной стороной >= min_side.
-        Возвращает dict с geometry (в повернутой системе) и метаданными, либо None.
-        """
+
         if poly_r.is_empty or poly_r.area == 0:
             return None
 
@@ -211,17 +166,7 @@ class MIR:
         step: float,
         min_side: float,
     ) -> List[Dict[str, Any]]:
-        """
-        poly — исходный полигон (в CRS с метрами).
-        Логика:
-        1) оцениваем угол главной оси,
-        2) поворачиваем полигон,
-        3) пока можно:
-            - ищем максимальный прямоугольник в текущем остатке,
-            - вычитаем его,
-            - сохраняем результат.
-        Возвращает список dict-ов с geometry уже В ИСХОДНОЙ системе координат.
-        """
+
         if poly.is_empty or poly.area == 0:
             return []
 
@@ -275,26 +220,13 @@ class MIR:
         gdf: gpd.GeoDataFrame,
         step: float = 5.0,
         min_side: float = 40.0,
-        geometry_column: str = "geometry",
         n_jobs: int = 1,
     ) -> gpd.GeoDataFrame:
-        """
-        Принимает GeoDataFrame с полигонами (CRS в метрах!),
-        возвращает ОТДЕЛЬНЫЙ GeoDataFrame с упакованными прямоугольниками.
 
-        Колонки:
-        - src_index: индекс исходного полигона
-        - rect_id: порядковый номер прямоугольника внутри полигона (0,1,2,...)
-        - width, height, area, angle, geometry
-
-        n_jobs:
-        - 1  — без параллелизации (как раньше),
-        - >1 — параллелизация по объектам gdf через ProcessPoolExecutor.
-        """
         records: List[Dict[str, Any]] = []
 
 
-        items = list(gdf[geometry_column].items())
+        items = list(gdf['geometry'].items())
         if not items:
             return gpd.GeoDataFrame(
                 columns=["src_index", "rect_id", "geometry"],
@@ -305,7 +237,7 @@ class MIR:
 
         if n_jobs == 1:
             for idx, geom in tqdm(items, desc="Packing rectangles", leave=False):
-                recs = self._pack_rectangles_for_single_geom((idx, geom, step, min_side))
+                recs = self._pack_rectangles_for_single_geom(idx, geom, step, min_side)
                 records.extend(recs)
 
         else:
@@ -315,7 +247,7 @@ class MIR:
             with ProcessPoolExecutor(max_workers=max_workers) as ex:
 
                 futures = [
-                    ex.submit(self._pack_rectangles_for_single_geom, (idx, geom, step, min_side))
+                    ex.submit(self._pack_rectangles_for_single_geom, idx, geom, step, min_side)
                     for idx, geom in items
                 ]
 

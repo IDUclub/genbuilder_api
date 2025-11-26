@@ -1,103 +1,103 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
 from app.logic.building_generation.building_params import (
+    BuildingGenParams,
+    BuildingParamsProvider,
     BuildingType,
-    get_params,
+    BuildingParams,
 )
-import math
 
 class CapacityOptimizer:
+    """
+    Helper class for block-level capacity planning in residential generation.
 
-    def __init__(self, params_provider: ParamsProvider):
-        self._params = params_provider
+    It uses building parameter presets (via BuildingParamsProvider) and a chosen
+    FAR scenario ("min", "mean", "max") to:
+    - select representative building and plot dimensions;
+    - estimate living area per building;
+    - compute the required number of buildings to reach target living area;
+    - derive initial FAR and plot geometry attributes for each block.
+
+    The main entry points are:
+    - solve_block_initial(...) – compute parameters for a single block;
+    - compute_block(...) – wrapper for a pandas row;
+    - compute_blocks_for_gdf(...) – apply the logic to an entire GeoDataFrame.
+    """
+    def __init__(
+        self,
+        building_params_provider: BuildingParamsProvider,
+    ):
+        self._building_params = building_params_provider
 
     @property
-    def generation_parameters(self) -> GenParams:
-        return self._params.current()
+    def building_generation_parameters(self) -> BuildingGenParams:
+        return self._building_params.current()
 
-    def pick_indices(self, far: str) -> tuple[int, int, int, int]:
-        """
-        Возвращает индексы (L_idx, W_idx, H_idx, F_idx)
-        под сценарий FAR: 'min' / 'mean' / 'max'.
+    def pick_indices(self, far: str, params: BuildingParams) -> tuple[int, int, int, int]:
 
-        ВАЖНО: индексы всегда неотрицательные, чтобы нормально работать в циклах.
-        """
         if far == "min":
             L_idx = 0
             W_idx = 0
             H_idx = 0
-            F_idx = len(self.generation_parameters.plot_side) - 1  
+            F_idx = len(params.plot_side) - 1
         elif far == "mean":
-            L_idx = len(self.generation_parameters.building_length_range) // 2
-            W_idx = len(self.generation_parameters.building_width_range) // 2
-            H_idx = len(self.generation_parameters.building_height) // 2
-            F_idx = len(self.generation_parameters.plot_side) // 2
+            L_idx = len(params.building_length_range) // 2
+            W_idx = len(params.building_width_range) // 2
+            H_idx = len(params.building_height) // 2
+            F_idx = len(params.plot_side) // 2
+
         elif far == "max":
-            L_idx = len(self.generation_parameters.uilding_length_range) - 1
-            W_idx = len(self.generation_parameters.building_width_range) - 1
-            H_idx = len(self.generation_parameters.building_height) - 1
+            L_idx = len(params.building_length_range) - 1
+            W_idx = len(params.building_width_range) - 1
+            H_idx = len(params.building_height) - 1
             F_idx = 0
         else:
             raise ValueError(f"Unknown FAR scenario: {far!r}")
+
         return L_idx, W_idx, H_idx, F_idx
 
-    def get_plot_area_params(self, far: str) -> tuple[float, float, float]:
-        """
-        Возвращает (area_min, area_max, area_base) для участка под сценарий FAR.
+    def get_plot_area_params(self, far: str, params: BuildingParams) -> tuple[float, float, float]:
 
-        Логика:
-        • FAR='min'  -> базовая площадь ближе к максимуму (разреженная застройка),
-        • FAR='mean' -> середина диапазона,
-        • FAR='max'  -> базовая площадь ближе к минимуму (плотная застройка).
-        """
         if far == "min":
-            area_base = self.generation_parameters.plot_area_max
+            area_base = params.plot_area_max
         elif far == "mean":
-            area_base = 0.5 * (self.generation_parameters.plot_area_min + self.generation_parameters.plot_area_max)
+            area_base = 0.5 * (params.plot_area_min + params.plot_area_max)
         elif far == "max":
-            area_base = self.generation_parameters.plot_area_min
+            area_base = params.plot_area_min
         else:
             raise ValueError(f"Unknown FAR scenario for plot area: {far!r}")
-        return self.generation_parameters.plot_area_min, self.generation_parameters.plot_area_max, area_base
 
+        return params.plot_area_min, params.plot_area_max, area_base
 
-    def solve_private_block_initial(self,
+    def solve_block_initial(
+        self,
         target_la: float,
         far: str,
         *,
-        la_ratio: float = self.generation_parameters.la_coef,
+        building_params: BuildingParams,
+        la_ratio: float | None = None,
     ) -> dict:
-        """
-        ШАГ 1: подсчёт ИСХОДНЫХ параметров дома/участка для квартала
-        под заданный сценарий FAR ('min' / 'mean' / 'max').
 
-        Здесь мы:
-        1) выбираем (building_length, building_width, floors, plot_front)
-            по сценарию FAR через pick_indices;
-        2) выбираем базовую площадь участка (plot_area_base) через get_plot_area_params;
-        3) считаем living_per_building = L * W * H * la_ratio;
-        4) считаем building_need = ceil(target_la / living_per_building);
-        5) считаем сценарный FAR (far_target) для дома на базовом участке.
+        if la_ratio is None:
+            la_ratio = building_params.la_coef
 
-        НИЧЕГО не делаем с периметром и сегментами — это будет на следующих шагах.
-        """
-        area_min, area_max, area_base = self.generation_parameters.get_plot_area_params(far)
+        area_min, area_max, area_base = self.get_plot_area_params(far, building_params)
 
-        base_L_idx, base_W_idx, base_h_idx, base_front_idx = self.generation_parameters.pick_indices(far)
+        base_L_idx, base_W_idx, base_h_idx, base_front_idx = self.pick_indices(far, building_params)
 
-        L = float(self.generation_parameters.building_length_range[base_L_idx])
-        W = float(self.generation_parameters.building_width_range[base_W_idx])
-        H = float(self.generation_parameters.building_height[base_h_idx])
-        F = float(self.generation_parameters.plot_side[base_front_idx])
+        L = float(building_params.building_length_range[base_L_idx])
+        W = float(building_params.building_width_range[base_W_idx])
+        H = float(building_params.building_height[base_h_idx])
+        F = float(building_params.plot_side[base_front_idx])
 
         plot_area_base = float(area_base)
         plot_depth_base = plot_area_base / F if F > 0 else float("nan")
+
         base_house_area = L * W
         living_per_building = base_house_area * H * la_ratio
 
@@ -147,14 +147,14 @@ class CapacityOptimizer:
                 }
             )
 
-        building_params = get_params(building_type)
+        building_params = self.building_generation_parameters.params_by_type[building_type]
         target_la = float(row["la_target"])
 
-        res = self.solve_private_block_initial(
+        res = self.solve_block_initial(
             target_la=target_la,
             far=far,
-            building_params=building_params,
-            la_ratio=building_params.la_coef,
+            building_params=building_params,           
+            la_ratio=building_params.la_coef, 
         )
 
         building_need = res["building_need"]
@@ -190,10 +190,7 @@ class CapacityOptimizer:
         blocks_gdf,
         far: str,
     ):
-        """
-        Оборачивает compute_block: принимает GeoDataFrame кварталов
-        и возвращает тот же GeoDataFrame с добавленными расчётными колонками.
-        """
+
         base_cols = blocks_gdf.apply(
             lambda row: self.compute_block(row, far=far),
             axis=1,

@@ -25,6 +25,7 @@ from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 
 from app.logic.building_generation.building_params import BuildingGenParams, BuildingParamsProvider
 from app.logic.building_generation.residential_generator import ResidentialGenBuilder
+from app.logic.building_generation.residential_service_generation import ResidentialServiceGenerator
 
 class Genbuilder:
     """
@@ -37,7 +38,8 @@ class Genbuilder:
     def __init__(self, config: Config, urban_api: UrbanDBAPI, genbuilder_inference_api: GenbuilderInferenceAPI, 
                 snapper: Snapper, density_isolines: DensityIsolines, grid_generator: GridGenerator, 
                 buildings_generator: BuildingGenerator, service_generator: ServiceGenerator, attributes_calculator: BuildingAttributes, params_provider: ParamsProvider,
-                residential_buildings_generator: ResidentialGenBuilder, buildings_generation_parameters: BuildingGenParams, buildings_params_provider: BuildingParamsProvider):
+                residential_buildings_generator: ResidentialGenBuilder, residential_service_generator: ResidentialServiceGenerator, 
+                buildings_params_provider: BuildingParamsProvider):
         self.config = config
         self.urban_api = urban_api
         self.genbuilder_inference_api = genbuilder_inference_api
@@ -49,7 +51,8 @@ class Genbuilder:
         self.attributes_calculator = attributes_calculator
         self.generation_parameters = params_provider
         self.residential_buildings_generator = residential_buildings_generator
-        self.buildings_generation_parameters = buildings_generation_parameters
+        self.residential_service_generator = residential_service_generator
+        self.buildings_generation_parameters = buildings_params_provider
 
     async def infer_centroids_for_gdf(
         self,
@@ -138,68 +141,78 @@ class Genbuilder:
         gdf_blocks = gdf_blocks.to_crs(utm)
         non_residential_blocks = gdf_blocks[gdf_blocks['zone'] != 'residential']
         residential_blocks = gdf_blocks[gdf_blocks['zone'] == 'residential']
+        territory_id = await self.urban_api.get_territory_by_scenario(scenario_id)
+        service_normatives = await self.urban_api.get_normatives_for_territory(territory_id)
         with self.generation_parameters.override(new_parameters):
-            centroids = await self.infer_centroids_for_gdf(
-                non_residential_blocks,
-                infer_params,
-                targets_by_zone["la_target"],
-                targets_by_zone["floors_avg"],
-            )
-            logger.info(f"Centroids generated, {len(centroids)} total")
-            snapper_result = await asyncio.to_thread(self.snapper.run, centroids, non_residential_blocks)
-            logger.info("Centroids snapped")
-            centroids = snapper_result["centroids"]
-            midline = snapper_result["midline"]
-            empty_grid = await asyncio.to_thread(
-                self.grid_generator.make_grid_for_blocks,
-                blocks_gdf=non_residential_blocks,
-                midlines=gpd.GeoSeries([midline], crs=non_residential_blocks.crs),
-                block_id_col="block_id",
-            )
-            isolines = await asyncio.to_thread(
-                self.density_isolines.build, non_residential_blocks, centroids, zone_id_col="zone"
-            )
-            logger.info("Isolines generated")
-            grid = await asyncio.to_thread(self.grid_generator.fit_transform, empty_grid, isolines)
-            logger.info("Grid created")
-            territory_id = await self.urban_api.get_territory_by_scenario(scenario_id)
-            service_normatives = await self.urban_api.get_normatives_for_territory(territory_id)
-            building_stage = await self.buildings_generator.fit_transform(
-                grid, non_residential_blocks, zone_name_aliases=["zone"]
-            )
-
-            cells_with_buildings = building_stage["cells"]         
-            buildings = building_stage["buildings"] 
-            logger.info("Buildings generated")
-            attributes_result = await asyncio.to_thread(
-                self.attributes_calculator.fit_transform,
-                buildings,
-                non_residential_blocks,
-                targets_by_zone,
-            )
-            buildings = attributes_result["buildings"]
-            living_area_per_zone = attributes_result["allocated_by_zone"]
-            logger.info("Residential building attributes generated")
+            if len(non_residential_blocks) > 0:
+                centroids = await self.infer_centroids_for_gdf(
+                    non_residential_blocks,
+                    infer_params,
+                    targets_by_zone["la_target"],
+                    targets_by_zone["floors_avg"],
+                )
+                logger.info(f"Centroids generated, {len(centroids)} total")
+                snapper_result = await asyncio.to_thread(self.snapper.run, centroids, non_residential_blocks)
+                logger.info("Centroids snapped")
+                centroids = snapper_result["centroids"]
+                midline = snapper_result["midline"]
+                empty_grid = await asyncio.to_thread(
+                    self.grid_generator.make_grid_for_blocks,
+                    blocks_gdf=non_residential_blocks,
+                    midlines=gpd.GeoSeries([midline], crs=non_residential_blocks.crs),
+                    block_id_col="block_id",
+                )
+                isolines = await asyncio.to_thread(
+                    self.density_isolines.build, non_residential_blocks, centroids, zone_id_col="zone"
+                )
+                logger.info("Isolines generated")
+                grid = await asyncio.to_thread(self.grid_generator.fit_transform, empty_grid, isolines)
+                logger.info("Grid created")
+                building_stage = await self.buildings_generator.fit_transform(
+                    grid, non_residential_blocks, zone_name_aliases=["zone"]
+                )
+                cells_with_buildings = building_stage["cells"]         
+                buildings = building_stage["buildings"] 
+                logger.info("Buildings generated")
+                attributes_result = await asyncio.to_thread(
+                    self.attributes_calculator.fit_transform,
+                    buildings,
+                    non_residential_blocks,
+                    targets_by_zone,
+                )
+                buildings = attributes_result["buildings"]
+                living_area_per_zone = attributes_result["allocated_by_zone"]
+                logger.info("Building attributes generated")
+                services = await self.service_generator.fit_transform(
+                        cells_with_buildings, living_area_per_zone, service_normatives
+                    )
+                logger.info("Service buildings generated")
+            else:
+                buildings = None
+                services = None
 
             with self.buildings_generation_parameters.override(new_residential_parameters): # TODO: spread this logic to non-residential zones
                 residential_la_target = targets_by_zone.get('la_target', {}).get('residential', 0)
                 if residential_la_target > 0:
-                    residential_buildings = await self.residential_buildings_generator.run(residential_la_target, 
+                    residential_blocks, plots, residential_buildings = await self.residential_buildings_generator.run(residential_la_target, 
                         density_scenario, default_floors_group, residential_blocks)
+                    logger.info(f"Residential buildings generated: {len(residential_buildings)}")
+                    residential_services = self.residential_service_generator.generate_services(residential_blocks, plots, 
+                                                                                                residential_buildings, service_normatives, utm)
+                    logger.info(f"Residential services generated: {len(residential_services)}")
                 else:
                     residential_buildings = None
+                    residential_services = None
 
-                service_buildings = await self.service_generator.fit_transform(
-                    cells_with_buildings, living_area_per_zone, service_normatives
-                )
-                logger.info("Service buildings generated")
-                buildings_all = pd.concat([buildings, residential_buildings, service_buildings], ignore_index=True)
+                buildings_all = pd.concat([buildings, residential_buildings, services, residential_services
+                                           ], ignore_index=True)
                 buildings_all['living_area'] = buildings_all['living_area'].fillna(0).round(0)
                 buildings_all["service"] = [
                     [{service: capacity}] if mask else []
                     for mask, service, capacity in zip(buildings_all["service"].notna(), 
                                                     buildings_all["service"], buildings_all["capacity"])
                 ]
-                buildings_all = buildings_all.drop(columns=["capacity"]).to_crs(4326)
                 buildings_all = buildings_all[['floors_count', 'living_area', 'service', 'geometry']]
+                buildings_all = gpd.sjoin(buildings_all, gdf_blocks[["zone", "geometry"]])
+                buildings_all = buildings_all.drop(columns=['index_right']).to_crs(4326)
                 return json.loads(buildings_all.to_json())

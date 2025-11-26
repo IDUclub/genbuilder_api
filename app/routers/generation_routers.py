@@ -16,7 +16,7 @@ async def pipeline_route(
         ..., description="Target functional zone types"
     , example=['residential', 'business', 'industrial'])],
     density_scenario:     Annotated[str,  Query(..., description="Target density for residential blocks", example="min")],
-    default_floors_group: Annotated[str,  Query(..., description="Target density for residential blocks", example="medium_rise")],
+    default_floors_group: Annotated[str,  Query(..., description="Target density for residential blocks", example="medium")],
     body: ScenarioBody = Body(
         default_factory=ScenarioBody,
         description="Targets and hyperparameters as JSON (optional)"
