@@ -1,3 +1,4 @@
+from pathlib import Path
 import contextvars
 import contextlib
 
@@ -7,45 +8,54 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.logic.postprocessing.service_types import ServiceType
 
+
 class GenParams(BaseModel):
     model_config = ConfigDict(frozen=True)
     max_run: int = 8
-    ''' max_run - maximal length of living building'''
+    """ max_run - maximal length of living building"""
     neigh_empty_thr: int = 3
-    '''neigh_empty_thr - criterion for square to be qualified as outer (e.g. 3 neighbor squares are not buildings)'''
+    """neigh_empty_thr - criterion for square to be qualified as outer (e.g. 3 neighbor squares are not buildings)"""
     cell_size_m: float = 15.0
-    '''cell_size_m - size of square in meters'''
+    """cell_size_m - size of square in meters"""
     edge_share_frac: float = 0.2
-    '''edge_share_frac - criterion for qualifing as direct neighbor'''
+    """edge_share_frac - criterion for qualifing as direct neighbor"""
     merge_predicate: str = "intersects"
-    '''merge_predicate - predicate for squares merge strategy'''
+    """merge_predicate - predicate for squares merge strategy"""
     merge_fix_eps: float = 0.0
-    '''merge_fix_eps - fix for bad geometry'''
+    """merge_fix_eps - fix for bad geometry"""
     living_area_normative: int = 18
-    '''number of living area meters per person'''
+    """number of living area meters per person"""
     created_services: List[ServiceType] = [
         ServiceType.SCHOOL,
         ServiceType.KINDERGARTEN,
         ServiceType.POLYCLINIC,
     ]
-    '''list of services supported by algorithm'''
+    """list of services supported by algorithm"""
     randomize_service_forms: bool = True
-    '''randomize_service_forms - flag for randomization of service building forms (for better diversity)'''
+    """randomize_service_forms - flag for randomization of service building forms (for better diversity)"""
     service_random_seed: int = 42
-    '''service_random_seed - seed for randomization'''
+    """service_random_seed - seed for randomization"""
     gap_to_houses_cheb: int = 2
-    '''gap_to_houses_cheb - minimal distance between service territory and buildings'''
+    """gap_to_houses_cheb - minimal distance between service territory and buildings"""
     gap_between_sites_cheb: int = 2
-    '''gap_between_sites_cheb - minimal distance between two service territories'''
+    """gap_between_sites_cheb - minimal distance between two service territories"""
     same_type_site_gap_cheb: int = 10
-    '''same_type_site_gap_cheb - minimal distance between service territories of same type to improve even distribution of services in block'''
+    """same_type_site_gap_cheb - minimal distance between service territories of same type to improve even distribution of services in block"""
     inner_margin_cells: int = 1
-    '''inner_margin_cells - distance between border of service territory and service building'''
+    """inner_margin_cells - distance between border of service territory and service building"""
 
     service_patterns: Dict[Tuple[ServiceType, str], Dict[str, Any]] = Field(
         default_factory=lambda: {
             (ServiceType.KINDERGARTEN, "H7"): {
-                "offsets": [(-1, -1), (0, -1), (1, -1), (0, 0), (-1, 1), (0, 1), (1, 1)],
+                "offsets": [
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                    (0, 0),
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                ],
                 "allow_rotations": True,
                 "floors": 2,
             },
@@ -59,17 +69,17 @@ class GenParams(BaseModel):
                 "allow_rotations": True,
                 "floors": 2,
             },
-
             (ServiceType.POLYCLINIC, "RECT_2x4"): {
                 "offsets": [(r, c) for r in range(2) for c in range(4)],
                 "allow_rotations": True,
                 "floors": 4,
             },
-
             (ServiceType.SCHOOL, "H_5x4"): {
-                "offsets": ([(r, 0) for r in range(5)]
-                            + [(r, 3) for r in range(5)]
-                            + [(2, c) for c in range(4)]),
+                "offsets": (
+                    [(r, 0) for r in range(5)]
+                    + [(r, 3) for r in range(5)]
+                    + [(2, c) for c in range(4)]
+                ),
                 "allow_rotations": True,
                 "floors": 3,
             },
@@ -78,7 +88,8 @@ class GenParams(BaseModel):
                     (r, c)
                     for r in range(5)
                     for c in range(5)
-                    if (r in {0, 4} or c in {0, 4}) and not (r in {0, 4} and c in {0, 4})
+                    if (r in {0, 4} or c in {0, 4})
+                    and not (r in {0, 4} and c in {0, 4})
                 ],
                 "allow_rotations": False,
                 "floors": 3,
@@ -90,7 +101,7 @@ class GenParams(BaseModel):
             },
         },
     )
-    '''service_patterns - geometry for services'''
+    """service_patterns - geometry for services"""
 
     service_site_rules: Dict[Tuple[ServiceType, str], Dict[str, float | int]] = field(
         default_factory=lambda: {
@@ -124,7 +135,7 @@ class GenParams(BaseModel):
             },
         }
     )
-    '''service_site_rules - mapping of capacity and area of territory for each type of service building'''
+    """service_site_rules - mapping of capacity and area of territory for each type of service building"""
 
     svc_order: List[ServiceType] = field(
         default_factory=lambda: [
@@ -133,13 +144,31 @@ class GenParams(BaseModel):
             ServiceType.POLYCLINIC,
         ]
     )
-    '''svc_order - priority for service generation (between types)'''
+    """svc_order - priority for service generation (between types)"""
     zone_id_col: str = "zone_id"
-    '''zone_id_col - name of zone id column'''
+    """zone_id_col - name of zone id column"""
     zone_name_col: str = "zone"
-    '''zone_name_col - name of zone type column'''
+    """zone_name_col - name of zone type column"""
     verbose: bool = True
-    '''verbose - if True, prints stats for generation results'''
+    """verbose - if True, prints stats for generation results"""
+    INNER_BORDER: int = 3
+    """width of inner plot border restricted for construction"""
+    MAX_COVERAGE: float = 0.9
+    """control parameter for building generation"""
+    rectangle_finder_step: int = 5
+    """parameter for maximum rectangle inscription, lower - higher quality and lower speed"""
+    minimal_rectangle_side: int = 40
+    """minimal side length for rectangle segments"""
+    jobs_number: int = 5
+    """jobs number for MIR"""
+    la_per_person: int = 18
+    """normative square meters for person, used in service deman calculation"""
+    max_service_attempts: int = 200
+    """limit for attempts for service placement"""
+    max_sites_per_service_per_block: int = 10
+    """limit for number of service of one type in block"""
+    service_projects_file: str = str( Path(__file__).resolve().parent.parent / "building_generation" / "service_projects.geojson")
+    """path to service projects file with geometry and plot/building parameters"""
 
     def patched(self, patch: Dict[str, Any]) -> "GenParams":
         def deep_merge(a, b):
@@ -153,11 +182,13 @@ class GenParams(BaseModel):
         data = self.model_dump()
         merged = deep_merge(data, patch)
         return self.__class__.model_validate(merged)
-    
+
 
 class ParamsProvider:
     def __init__(self, base: GenParams):
-        self._var: contextvars.ContextVar[GenParams] = contextvars.ContextVar("gen_params", default=base)
+        self._var: contextvars.ContextVar[GenParams] = contextvars.ContextVar(
+            "gen_params", default=base
+        )
 
     def current(self) -> GenParams:
         return self._var.get()
