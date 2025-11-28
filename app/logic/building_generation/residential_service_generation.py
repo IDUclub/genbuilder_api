@@ -6,11 +6,9 @@ import math
 import random
 
 import pandas as pd
-import osmnx as ox
 import pandas as pd
 import geopandas as gpd
 
-from urllib.parse import urlparse
 from shapely.geometry import Polygon, box, Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -19,7 +17,6 @@ from shapely.errors import GEOSException
 from shapely.validation import make_valid
 
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
-from app.logic.building_generation.service_projects import service_projects
 
 
 class ResidentialServiceGenerator:
@@ -53,7 +50,7 @@ class ResidentialServiceGenerator:
         blocks: gpd.GeoDataFrame,
         buildings: gpd.GeoDataFrame,
         service_normatives: pd.DataFrame,
-    ) -> Tuple[Dict[Any, Dict[str, float]], Dict[Any, float], gpd.GeoDataFrame]:
+    ) -> Dict[Any, Dict[str, float]]:
         la_per_block = buildings.groupby("src_index")["living_area"].sum()
 
         blocks = blocks.copy()
@@ -82,101 +79,32 @@ class ResidentialServiceGenerator:
 
         return all_limits
 
-    @staticmethod
-    def _parse_osm_url(osm_url: str) -> Tuple[str, int]:
-        parsed = urlparse(osm_url)
-        parts = parsed.path.strip("/").split("/")
-        if len(parts) < 2:
-            raise ValueError(f"Не удалось распарсить OSM URL: {osm_url}")
-
-        osm_type = parts[-2]
-        osm_id = int(parts[-1])
-
-        if osm_type not in {"way", "relation", "node"}:
-            raise ValueError(f"Неподдерживаемый тип OSM-объекта в URL: {osm_url}")
-
-        return osm_type, osm_id
-
-    def load_service_projects_from_osm_osmnx(self) -> gpd.GeoDataFrame:
-        specs: List[Dict[str, Any]] = []
-        queries: List[str] = []
-
-        type_to_prefix = {"node": "N", "way": "W", "relation": "R"}
-        for _, variants in service_projects.items():
-            for spec in variants:
-                osm_url = spec.get("osm_url")
-                if not osm_url:
-                    continue
-
-                osm_type, osm_id = self._parse_osm_url(osm_url)
-                prefix = type_to_prefix.get(osm_type)
-                if prefix is None:
-                    raise ValueError(
-                        f"Неподдерживаемый osm_type '{osm_type}' для URL: {osm_url}"
-                    )
-
-                query_str = f"{prefix}{osm_id}"
-
-                queries.append(query_str)
-                specs.append(spec)
-
-        if not queries:
-            return gpd.GeoDataFrame(
-                columns=[
-                    "service",
-                    "type_id",
-                    "capacity",
-                    "floors_count",
-                    "plot_length_min",
-                    "plot_length_max",
-                    "plot_width_min",
-                    "plot_width_max",
-                    "address",
-                    "osm_type",
-                    "osm_id",
-                    "osm_url",
-                    "geometry",
-                ],
-                geometry="geometry",
-                crs="EPSG:4326",
+    def load_service_projects(
+        self
+    ) -> gpd.GeoDataFrame:
+        projects_gdf = gpd.read_file(self.generation_parameters.service_projects_file)
+        projects_gdf = projects_gdf.to_crs("EPSG:4326")
+        expected_cols = [
+            "service",
+            "type_id",
+            "capacity",
+            "floors_count",
+            "plot_length_min",
+            "plot_length_max",
+            "plot_width_min",
+            "plot_width_max",
+            "address",
+            "osm_type",
+            "osm_id",
+            "osm_url",
+            "geometry",
+        ]
+        missing = [c for c in expected_cols if c not in projects_gdf.columns]
+        if missing:
+            raise ValueError(
+                f"Columns are missing: {missing}. "
             )
-        gdf_osm = ox.geocoder.geocode_to_gdf(
-            queries,
-            by_osmid=True,
-        )
-        rows: List[Dict[str, Any]] = []
-
-        for spec, osm_row in zip(specs, gdf_osm.itertuples()):
-            osm_id = int(getattr(osm_row, "osm_id"))
-            osm_type = getattr(osm_row, "osm_type", None)
-            geom = getattr(osm_row, "geometry")
-
-            plot_length = spec.get("plot_length", [None, None])
-            plot_width = spec.get("plot_width", [None, None])
-
-            row: Dict[str, Any] = {
-                "service": spec.get("service"),
-                "type_id": spec.get("type_id"),
-                "capacity": spec.get("capacity"),
-                "floors_count": spec.get("floors_count"),
-                "plot_length_min": plot_length[0],
-                "plot_length_max": plot_length[1],
-                "plot_width_min": plot_width[0],
-                "plot_width_max": plot_width[1],
-                "address": spec.get("address"),
-                "osm_type": osm_type,
-                "osm_id": osm_id,
-                "osm_url": spec.get("osm_url"),
-                "geometry": geom,
-            }
-            rows.append(row)
-
-        projects_gdf = gpd.GeoDataFrame(
-            rows,
-            geometry="geometry",
-            crs="EPSG:4326",
-        )
-
+        projects_gdf = projects_gdf[expected_cols]
         return projects_gdf
 
     @staticmethod
@@ -575,7 +503,7 @@ class ResidentialServiceGenerator:
     def generate_services(self, blocks, plots, buildings, service_normatives, crs):
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
-        projects_gdf = self.load_service_projects_from_osm_osmnx()
+        projects_gdf = self.load_service_projects()
         all_limits = self.compute_service_limits_for_blocks(
             blocks, buildings, service_normatives
         )

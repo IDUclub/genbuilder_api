@@ -96,12 +96,11 @@ class BuildingGenParams:
             if isinstance(key, BuildingType):
                 return key
             if isinstance(key, str):
-
                 try:
                     return BuildingType(key)
                 except ValueError:
                     return BuildingType[key]
-            raise KeyError(f"Unknown BuildingType key: {key!r}")
+            raise ValueError(f"Unknown BuildingType key: {key!r}")
 
         new_mapping: Dict[BuildingType, BuildingParams] = {}
         for bt_key, params_dict in raw_params_by_type.items():

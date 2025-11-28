@@ -331,8 +331,7 @@ class PlotsGenerator:
                 processed.add(idx)
                 continue
 
-            possible_idx = list(sindex.intersection(geom.bounds))
-            possible_idx = [i for i in possible_idx if i != idx and i not in processed]
+            possible_idx = [i for i in list(sindex.intersection(geom.bounds)) if i != idx and i not in processed]
 
             best_neighbor_idx = None
             best_shared_len = 0.0

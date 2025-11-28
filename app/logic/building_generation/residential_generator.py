@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-
-import pandas as pd
-from loguru import logger
+import geopandas as gpd
 
 from app.logic.building_generation.building_capacity_optimizer import CapacityOptimizer
 from app.logic.building_generation.maximum_inscribed_rectangle import MIR
@@ -50,11 +47,11 @@ class ResidentialGenBuilder:
 
     async def run(
         self,
-        residential_la_target,
-        density_scenario,
-        default_floors_group,
+        residential_la_target: int,
+        density_scenario: str,
+        default_floors_group: str,
         residential_blocks,
-    ):
+    ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
 
         residential_blocks["la_target"] = (
             residential_la_target

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import math
 from typing import Any, Dict, List, Optional
 
@@ -220,7 +221,7 @@ class MIR:
 
         else:
 
-            max_workers = min(n_jobs, len(items))
+            max_workers = min(n_jobs, len(items), os.cpu_count() * 2)
             with ProcessPoolExecutor(max_workers=max_workers) as ex:
 
                 futures = [
