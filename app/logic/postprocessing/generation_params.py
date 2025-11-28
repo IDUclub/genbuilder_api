@@ -1,3 +1,4 @@
+from pathlib import Path
 import contextvars
 import contextlib
 
@@ -166,7 +167,7 @@ class GenParams(BaseModel):
     """limit for attempts for service placement"""
     max_sites_per_service_per_block: int = 10
     """limit for number of service of one type in block"""
-    service_projects_file: str = "app/logic/building_generation/service_projects.geojson"
+    service_projects_file: str = str( Path(__file__).resolve().parent.parent / "building_generation" / "service_projects.geojson")
     """path to service projects file with geometry and plot/building parameters"""
 
     def patched(self, patch: Dict[str, Any]) -> "GenParams":
