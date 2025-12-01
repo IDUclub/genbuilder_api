@@ -58,8 +58,9 @@ class ResidentialGenBuilder:
             * residential_blocks.geometry.area
             / residential_blocks.geometry.area.sum()
         )
-        residential_blocks["floors_group"] = residential_blocks.get(
-            "floors_group", default_floors_group
+        residential_blocks["floors_group"] = residential_blocks.get("floors_group")
+        residential_blocks["floors_group"] = residential_blocks["floors_group"].fillna(
+            default_floors_group
         )
         residential_blocks = self.building_capacity_optimizer.compute_blocks_for_gdf(
             residential_blocks, density_scenario
