@@ -112,8 +112,6 @@ class Genbuilder:
         year: Optional[int] = None,
         source: Optional[str] = None,
         functional_zone_types: Optional[List[str]] = None,
-        density_scenario: Optional[str] = None,
-        default_floors_group: Optional[str] = None,
         generation_parameters_override: dict | None = None,
         buildings_parameters_override: dict | None = None
     ):
@@ -193,9 +191,11 @@ class Genbuilder:
 
             with self.buildings_generation_parameters.override(new_residential_parameters): # TODO: spread this logic to non-residential zones
                 residential_la_target = targets_by_zone.get('la_target', {}).get('residential', 0)
+                residential_density_scenario = targets_by_zone.get('density_scenario', {}).get('residential', 'min')
+                residential_default_floors_group = targets_by_zone.get('default_floors_group', {}).get('residential', 'medium')
                 if residential_la_target > 0:
                     residential_blocks, plots, residential_buildings = await self.residential_buildings_generator.run(residential_la_target, 
-                        density_scenario, default_floors_group, residential_blocks)
+                        residential_density_scenario, residential_default_floors_group, residential_blocks)
                     logger.info(f"Residential buildings generated: {len(residential_buildings)}")
                     residential_services = self.residential_service_generator.generate_services(residential_blocks, plots, 
                                                                                                 residential_buildings, service_normatives, utm)
