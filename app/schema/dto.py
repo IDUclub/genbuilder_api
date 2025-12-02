@@ -43,33 +43,51 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
 
 
 class ScenarioBody(BaseModel):
-    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
+    targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
             "la_target": {
                 "residential": 20000,
                 "business": 10000,
-                "industrial": 0,
-                "transport": 0,
-                "special": 0,
-                "agriculture": 5000,
-                "recreation": 0
+                "unknown": 10000,
+                "industrial": 0, # TODO: remove after implementation of new logic
+                "transport": 0, # TODO: remove after implementation of new logic
+                "special": 0 # TODO: remove after implementation of new logic
             },
             "floors_avg": {
-                "residential": 12,
+                "residential": 5, # TODO: remove after implementation of new logic
                 "business": 7,
+                "unknown": 5,
                 "industrial": 5,
                 "transport": 1,
-                "special": 3,
-                "agriculture": 3,
-                "recreation": 1
+                "special": 3
+            },
+            "density_scenario": {
+                "residential": "min",
+                "business": "min",
+                "unknown": "min"
+            },
+            "default_floor_group": {
+                "residential": "medium",
+                "business": "high",
+                "unknown": "high"
+            },
+            "coverage_area": {
+                "unknown": 0.7,
+                "business": 0.6,
+                "industrial": 0.7,
+                "transport": 0.5,
+                "special": 0.5
             }
         },
-        description="Sum of living area and mean of floors count for functional zone types",
+        description="Spatial and target parameters for functional zone types",
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {"residential": 20000, "business": 6000, "industrial": 0},
-                    "floors_avg": {"residential": 12, "business": 7, "industrial": 5},
+                    "la_target": {"residential": 20000, "business": 6000, "industrial": 0}, # TODO: remove after implementation of new logic
+                    "floors_avg": {"business": 7, "industrial": 5, "residential": 5},# TODO: remove after implementation of new logic
+                    "density_scenario": {"residential": "min", "business": "min"},
+                    "default_floor_group": {"residential": "medium", "business": "high"},
+                    "coverage_area": {"industrial": 0.7, "business": 0.6}
                 }
             ]
         }
