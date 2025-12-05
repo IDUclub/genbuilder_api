@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from typing import Any, Dict, Optional, List
 
 import geopandas as gpd
@@ -74,7 +75,9 @@ class Genbuilder:
         )
         if blocks is not None:
             dumped = blocks.model_dump()
-            gdf_blocks = gpd.GeoDataFrame.from_features(dumped["features"])
+            gdf_blocks = await asyncio.to_thread(
+                gpd.GeoDataFrame.from_features, dumped["features"]
+            )
             logger.info(
                 f"Genbuilder.run: using blocks from request, count={len(gdf_blocks)}"
             )
@@ -108,9 +111,12 @@ class Genbuilder:
                 geometry="geometry",
                 crs="EPSG:4326",
             )
-            return json.loads(empty.to_json())
-        utm = gdf_blocks.estimate_utm_crs()
-        gdf_blocks = gdf_blocks.to_crs(utm)
+            empty_json = await asyncio.to_thread(empty.to_json)
+            return json.loads(empty_json)
+
+        utm = await asyncio.to_thread(gdf_blocks.estimate_utm_crs)
+        gdf_blocks = await asyncio.to_thread(gdf_blocks.to_crs, utm)
+
         res_blocks = gdf_blocks[gdf_blocks["zone"] == "residential"].copy()
 
         mixed_blocks = gdf_blocks[
@@ -262,14 +268,12 @@ class Genbuilder:
                         and res_buildings is not None
                         and len(res_buildings) > 0
                     ):
-                        residential_services = (
-                            self.residential_service_generator.generate_services(
-                                res_blocks_out,
-                                res_plots,
-                                res_buildings,
-                                service_normatives,
-                                utm,
-                            )
+                        residential_services = await self.residential_service_generator.generate_services(
+                            res_blocks_out,
+                            res_plots,
+                            res_buildings,
+                            service_normatives,
+                            utm,
                         )
                         logger.info(
                             f"Genbuilder.run: residential services generated, "
@@ -366,13 +370,16 @@ class Genbuilder:
                 geometry="geometry",
                 crs="EPSG:4326",
             )
-            return json.loads(empty.to_json())
+            empty_json = await asyncio.to_thread(empty.to_json)
+            return json.loads(empty_json)
 
+        concat_df = await asyncio.to_thread(pd.concat, frames, ignore_index=True)
         buildings_all = gpd.GeoDataFrame(
-            pd.concat(frames, ignore_index=True),
+            concat_df,
             geometry="geometry",
             crs=utm,
         )
+
         if "living_area" not in buildings_all.columns:
             buildings_all["living_area"] = 0.0
         buildings_all["living_area"] = buildings_all["living_area"].fillna(0).round(0)
@@ -380,12 +387,15 @@ class Genbuilder:
         if "functional_area" not in buildings_all.columns:
             buildings_all["functional_area"] = 0.0
         buildings_all["functional_area"] = buildings_all["functional_area"].fillna(0.0)
+
         if "floors_count" not in buildings_all.columns:
             buildings_all["floors_count"] = 0.0
         buildings_all["floors_count"] = buildings_all["floors_count"].fillna(0.0)
+
         footprint_area = buildings_all.geometry.area
         floors = buildings_all["floors_count"]
         buildings_all["building_area"] = footprint_area * floors
+
         if "service" in buildings_all.columns and "capacity" in buildings_all.columns:
             buildings_all["service"] = [
                 [{service: capacity}]
@@ -398,17 +408,18 @@ class Genbuilder:
         else:
             if "service" not in buildings_all.columns:
                 buildings_all["service"] = [[] for _ in range(len(buildings_all))]
+        buildings_all['building_area'] = buildings_all['building_area'].round(0)
         buildings_all = buildings_all[
             [
                 "floors_count",
                 "living_area",
-                "functional_area",
                 "building_area",
                 "service",
                 "geometry",
             ]
         ]
-        buildings_all = gpd.sjoin(
+        buildings_all = await asyncio.to_thread(
+            gpd.sjoin,
             buildings_all,
             gdf_blocks[["zone", "geometry"]],
             how="left",
@@ -423,14 +434,13 @@ class Genbuilder:
             ["industrial", "transport", "special"]
         )
         mixed_mask = buildings_all["zone"].isin(["business", "unknown"])
-        buildings_all.loc[res_mask, "functional_area"] = 0.0
         buildings_all.loc[nonres_mask, "living_area"] = 0.0
         logger.info(
             f"Genbuilder.run: final zones distribution in buildings: "
             f"residential={res_mask.sum()}, mixed={mixed_mask.sum()}, "
             f"non_residential={nonres_mask.sum()}"
         )
-        buildings_all = buildings_all.to_crs(4326)
+        buildings_all = await asyncio.to_thread(buildings_all.to_crs, 4326)
 
         logger.info(
             f"Genbuilder.run: final buildings count={len(buildings_all)}, "

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple, Optional
 
+import asyncio
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
@@ -212,7 +213,8 @@ class ResidentialGenBuilder:
             )
             return empty, empty, empty
 
-        blocks_with_capacity = self.building_capacity_optimizer.compute_blocks_for_gdf(
+        blocks_with_capacity = await asyncio.to_thread(
+            self.building_capacity_optimizer.compute_blocks_for_gdf,
             blocks_gdf,
             far=far_scenario,
             target_col=target_col,
@@ -223,7 +225,8 @@ class ResidentialGenBuilder:
             f"ResidentialGenBuilder.run[{mode}]: capacity computed for "
             f"{len(blocks_with_capacity)} blocks"
         )
-        segments = self.max_rectangle_finder.pack_inscribed_rectangles_for_gdf(
+        segments = await asyncio.to_thread(
+            self.max_rectangle_finder.pack_inscribed_rectangles_for_gdf,
             blocks_with_capacity,
             step=self.generation_parameters.rectangle_finder_step,
             min_side=self.generation_parameters.minimal_rectangle_side,
@@ -233,10 +236,8 @@ class ResidentialGenBuilder:
         logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: segments generated, count={len(segments)}"
         )
-        (
-            blocks_final,
-            segments_final,
-        ) = self.segments_allocator.update_blocks_with_segments(
+        blocks_final, segments_final = await asyncio.to_thread(
+            self.segments_allocator.update_blocks_with_segments,
             blocks_with_capacity,
             segments,
             far=far_scenario,
@@ -248,7 +249,8 @@ class ResidentialGenBuilder:
             f"ResidentialGenBuilder.run[{mode}]: blocks and segments updated "
             f"(blocks={len(blocks_final)}, segments={len(segments_final)})"
         )
-        plots = self.plots_generator.generate_plots(
+        plots = await asyncio.to_thread(
+            self.plots_generator.generate_plots,
             segments_final,
             mode=mode,
             target_col=target_col,
@@ -257,7 +259,8 @@ class ResidentialGenBuilder:
         logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: plots generated, count={len(plots)}"
         )
-        buildings_gdf = self.buildings_generator.generate_buildings_from_plots(
+        buildings_gdf = await asyncio.to_thread(
+            self.buildings_generator.generate_buildings_from_plots,
             plots,
             mode=mode,
         )

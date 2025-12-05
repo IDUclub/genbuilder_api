@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Tuple, Optional, Hashable
 
 import math
 import random
+import asyncio
 
 import pandas as pd
 import geopandas as gpd
@@ -454,7 +455,7 @@ class ResidentialServiceGenerator:
 
         return service_buildings_gdf
 
-    def generate_services(
+    async def generate_services(
         self,
         blocks: gpd.GeoDataFrame,
         plots: gpd.GeoDataFrame,
@@ -464,16 +465,19 @@ class ResidentialServiceGenerator:
     ) -> gpd.GeoDataFrame:
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
-
-        projects_gdf = self.load_service_projects()
-        all_limits = self.compute_service_limits_for_blocks(
-            blocks, buildings, service_normatives
+        projects_gdf = await asyncio.to_thread(self.load_service_projects)
+        all_limits = await asyncio.to_thread(
+            self.compute_service_limits_for_blocks,
+            blocks,
+            buildings,
+            service_normatives,
         )
-        services_buildings_gdf = self.place_service_buildings(
-            blocks=blocks,
-            plots_gdf=plots,
-            all_limits=all_limits,
-            projects_gdf=projects_gdf,
-            blocks_crs=crs,
+        services_buildings_gdf = await asyncio.to_thread(
+            self.place_service_buildings,
+            blocks,
+            plots,
+            all_limits,
+            projects_gdf,
+            crs,
         )
         return services_buildings_gdf
