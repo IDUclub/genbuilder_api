@@ -6,12 +6,12 @@ import geopandas as gpd
 import pandas as pd
 from loguru import logger
 
-from app.logic.building_generation.building_capacity_optimizer import CapacityOptimizer
-from app.logic.building_generation.maximum_inscribed_rectangle import MIR
-from app.logic.building_generation.segments import SegmentsAllocator
-from app.logic.building_generation.plots import PlotsGenerator
-from app.logic.building_generation.buildings import ResidentialBuildingsGenerator
-from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.logic.building_capacity_optimizer import CapacityOptimizer
+from app.logic.maximum_inscribed_rectangle import MIR
+from app.logic.segments import SegmentsAllocator
+from app.logic.plots.plots import PlotsGenerator
+from app.logic.buildings import ResidentialBuildingsGenerator
+from app.logic.generation_params import GenParams, ParamsProvider
 
 
 class ResidentialGenBuilder:

@@ -10,14 +10,14 @@ from iduconfig import Config
 
 from app.schema.dto import BlockFeatureCollection
 from app.dependencies import UrbanDBAPI
-from app.logic.postprocessing.generation_params import ParamsProvider
+from app.logic.generation_params import ParamsProvider
 
-from app.logic.building_generation.building_params import (
+from app.logic.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
 )
-from app.logic.building_generation.residential_generator import ResidentialGenBuilder
-from app.logic.building_generation.residential_service_generation import (
+from app.logic.residential_generator import ResidentialGenBuilder
+from app.logic.residential_service_generation import (
     ResidentialServiceGenerator,
 )
 

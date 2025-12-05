@@ -15,7 +15,7 @@ from shapely.affinity import rotate, translate
 from shapely.errors import GEOSException
 from shapely.validation import make_valid
 
-from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.logic.generation_params import GenParams, ParamsProvider
 
 from app.common.geo_utils import longest_edge_angle_mrr
 from app.common.geo_utils import safe_make_valid

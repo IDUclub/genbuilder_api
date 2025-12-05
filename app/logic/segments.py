@@ -8,15 +8,14 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from app.logic.building_generation.building_capacity_optimizer import CapacityOptimizer
-from app.logic.building_generation.building_params import (
+from app.logic.building_capacity_optimizer import CapacityOptimizer
+from app.logic.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
-    BuildingType,
     BuildingParams,
 )
 
-from app.logic.building_generation.building_type_resolver import infer_building_type
+from app.logic.building_type_resolver import infer_building_type
 from app.common.building_math import (
     usable_per_building,
     far_from_dims,

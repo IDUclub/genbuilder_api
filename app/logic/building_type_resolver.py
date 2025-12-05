@@ -1,7 +1,7 @@
 import math
 import pandas as pd
 
-from app.logic.building_generation.building_params import BuildingType
+from app.logic.building_params import BuildingType
 from app.common.geo_utils import safe_float
 
 def infer_building_type(row: pd.Series, mode: str) -> BuildingType | None:
