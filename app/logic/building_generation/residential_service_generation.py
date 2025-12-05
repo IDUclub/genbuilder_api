@@ -6,7 +6,6 @@ import math
 import random
 
 import pandas as pd
-import pandas as pd
 import geopandas as gpd
 
 from shapely.geometry import Polygon, box, Point
@@ -22,20 +21,17 @@ from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 class ResidentialServiceGenerator:
     """
     Generates service buildings (schools, kindergartens, clinics, etc.) for
-    residential blocks based on population and OSM-based prototype projects.
+    *residential* blocks based on built living area and service normatives.
 
-    Responsibilities:
-    - compute_service_limits_for_blocks(...) – converts built living area
-        into per-block service capacity targets using normatives;
-    - load_service_projects_from_osm_osmnx(...) – loads and parameterizes
-        prototype buildings from OSM links in service_projects;
-    - place_service_buildings(...) – places service sites inside blocks:
-        - uses free area (block minus residential plots);
-        - orients sites along the block’s main axis;
-        - enforces spacing between sites;
-        - fits prototype footprints into sampled plots;
-    - generate_services(...) – high-level entry point that ties everything
-        together and returns a GeoDataFrame of service buildings.
+    Адаптация под новый пайплайн:
+    - Используется только жилой жилой фонд (living_area) из жилого пайплайна
+      (mode="residential") для расчёта населения и сервисных мощностей;
+    - Генерируемые сервисные здания трактуются как НЕжилые:
+        * living_area = 0.0
+        * functional_area = building_area (по этажам)
+      (точное разбиение можно будет уточнить позже, но уже сейчас они
+       корректно попадают в функциональную площадь в финальном FC);
+    - Все расчёты делаются в метрике (тот же CRS, что и у residential blocks).
     """
 
     def __init__(self, params_provider: ParamsProvider):
@@ -51,20 +47,33 @@ class ResidentialServiceGenerator:
         buildings: gpd.GeoDataFrame,
         service_normatives: pd.DataFrame,
     ) -> Dict[Any, Dict[str, float]]:
-        la_per_block = buildings.groupby("src_index")["living_area"].sum()
+        """
+        Преобразует построенную жилую площадь в потребность в сервисах
+        (по кварталам, через src_index).
+
+        blocks:
+            Жилые кварталы после генерации (residential pipeline),
+            индекс – тот же, что в src_index у buildings
+            (после reset_index + rename).
+        buildings:
+            Здания жилого пайплайна (mode="residential") с колонкой living_area.
+        service_normatives:
+            Таблица с нормативами:
+            - service_name
+            - service_capacity (на 1000 жителей).
+        """
+        la_per_block = buildings.groupby("src_index", dropna=False)["living_area"].sum()
 
         blocks = blocks.copy()
         blocks["actual_la"] = blocks["src_index"].map(la_per_block).fillna(0.0)
 
         all_limits: Dict[Any, Dict[str, float]] = {}
-        people_per_zone: Dict[Any, float] = {}
 
         for _, row in blocks.iterrows():
             zid = row["src_index"]
             actual_la = float(row["actual_la"])
 
             people = actual_la / self.generation_parameters.la_per_person
-            people_per_zone[zid] = people
 
             limits: Dict[str, float] = {}
 
@@ -79,11 +88,10 @@ class ResidentialServiceGenerator:
 
         return all_limits
 
-    def load_service_projects(
-        self
-    ) -> gpd.GeoDataFrame:
+    def load_service_projects(self) -> gpd.GeoDataFrame:
         projects_gdf = gpd.read_file(self.generation_parameters.service_projects_file)
         projects_gdf = projects_gdf.to_crs("EPSG:4326")
+
         expected_cols = [
             "service",
             "type_id",
@@ -101,9 +109,8 @@ class ResidentialServiceGenerator:
         ]
         missing = [c for c in expected_cols if c not in projects_gdf.columns]
         if missing:
-            raise ValueError(
-                f"Columns are missing: {missing}. "
-            )
+            raise ValueError(f"Columns are missing: {missing}.")
+
         projects_gdf = projects_gdf[expected_cols]
         return projects_gdf
 
@@ -120,8 +127,13 @@ class ResidentialServiceGenerator:
         block_geom: BaseGeometry,
         plots_gdf: gpd.GeoDataFrame,
     ) -> BaseGeometry:
+        """
+        Свободная площадь квартала: block_geom MINUS residential plots.
+        """
+
         if block_geom is None or block_geom.is_empty:
             return block_geom
+
         try:
             if not block_geom.is_valid:
                 block_geom = make_valid(block_geom)
@@ -132,6 +144,7 @@ class ResidentialServiceGenerator:
 
         if plots_gdf.empty:
             return block_geom
+
         cleaned_geoms: List[BaseGeometry] = []
         for g in plots_gdf.geometry:
             if g is None or g.is_empty:
@@ -142,7 +155,6 @@ class ResidentialServiceGenerator:
                     if not g.is_valid:
                         g = g.buffer(0)
             except Exception:
-
                 try:
                     g = g.buffer(0)
                 except Exception:
@@ -154,31 +166,33 @@ class ResidentialServiceGenerator:
             cleaned_geoms.append(g)
 
         if not cleaned_geoms:
-
             return block_geom
+
         try:
             plots_union = unary_union(cleaned_geoms)
         except GEOSException:
-
             union_geom = cleaned_geoms[0]
             for g in cleaned_geoms[1:]:
                 try:
                     union_geom = union_geom.union(g)
                 except GEOSException:
-
                     continue
             plots_union = union_geom
+
         try:
             free_area = block_geom.difference(plots_union)
         except GEOSException:
-
             block_fixed = make_valid(block_geom)
             plots_fixed = make_valid(plots_union)
             free_area = block_fixed.difference(plots_fixed)
+
         return free_area
 
     @staticmethod
     def _compute_main_axis_angle(poly: BaseGeometry) -> float:
+        """
+        Оценка главной оси квартала по minimum rotated rectangle (в градусах).
+        """
         try:
             mrr = poly.minimum_rotated_rectangle
             coords = list(mrr.exterior.coords)
@@ -216,6 +230,10 @@ class ResidentialServiceGenerator:
         existing_centroids: Optional[List[Point]] = None,
         min_dist_between_centers: Optional[float] = None,
     ) -> Optional[Polygon]:
+        """
+        Сэмплинг прямоугольных площадок внутри свободной части квартала
+        под сервисные объекты.
+        """
         if poly.is_empty:
             return None
 
@@ -228,7 +246,6 @@ class ResidentialServiceGenerator:
 
         if preferred_angle is not None:
             base = preferred_angle
-
             angle_candidates = [
                 base,
                 base + 5.0,
@@ -239,7 +256,6 @@ class ResidentialServiceGenerator:
                 base - 90.0,
             ]
         else:
-
             angle_candidates = [0.0, 90.0, 45.0, -45.0, 30.0, -30.0]
 
         for _ in range(max_attempts):
@@ -284,6 +300,10 @@ class ResidentialServiceGenerator:
     def _place_building_in_plot(
         self, building_template: BaseGeometry, plot_geom: BaseGeometry
     ) -> Optional[BaseGeometry]:
+        """
+        Вписать прототип здания внутрь выбранной площадки plot_geom
+        с отступом INNER_BORDER.
+        """
         allowed_area = plot_geom.buffer(-self.generation_parameters.INNER_BORDER)
         if allowed_area.is_empty:
             return None
@@ -311,6 +331,9 @@ class ResidentialServiceGenerator:
         service_projects: gpd.GeoDataFrame,
         remaining_capacity: float,
     ) -> List[pd.Series]:
+        """
+        Подбор прототипов по близости к remaining_capacity.
+        """
         if service_projects.empty:
             return []
 
@@ -328,7 +351,17 @@ class ResidentialServiceGenerator:
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
     ) -> gpd.GeoDataFrame:
+        """
+        Генерирует сервисные здания внутри жилых кварталов.
 
+        ВАЖНО:
+        - На вход подаются только residential blocks и жилые plots,
+          чтобы свободная площадь считалась корректно.
+        - На выходе сервисные здания уже снабжены:
+            * living_area = 0.0
+            * functional_area = building_area (footprint * floors)
+          (в финальном пайплайне эти значения сохранятся).
+        """
         projects_local = self._ensure_crs(projects_gdf, blocks_crs)
         normalized_buildings: Dict[Any, BaseGeometry] = {}
         for row in projects_local.itertuples():
@@ -359,7 +392,6 @@ class ResidentialServiceGenerator:
             plots_block = plots_gdf[plots_gdf["src_index"] == block_id]
 
             free_area = self._get_block_free_area(block_geom, plots_block)
-
             if free_area.is_empty:
                 continue
 
@@ -423,7 +455,6 @@ class ResidentialServiceGenerator:
                         )
 
                         if plot_geom is None:
-
                             continue
 
                         building_oriented_main = rotate(
@@ -451,8 +482,16 @@ class ResidentialServiceGenerator:
                             )
 
                         if building_geom is None:
-
                             continue
+                        footprint_area = building_geom.area
+                        try:
+                            floors_val = float(floors) if floors is not None else 0.0
+                        except (TypeError, ValueError):
+                            floors_val = 0.0
+
+                        building_area = (
+                            footprint_area * floors_val if floors_val > 0 else 0.0
+                        )
 
                         row_out: Dict[str, Any] = {
                             "src_index": block_id,
@@ -460,6 +499,8 @@ class ResidentialServiceGenerator:
                             "project_id": type_id,
                             "capacity": capacity,
                             "floors_count": floors,
+                            "living_area": 0.0,              
+                            "functional_area": building_area,
                             "osm_url": osm_url,
                             "address": address,
                             "geometry": building_geom,
@@ -471,13 +512,11 @@ class ResidentialServiceGenerator:
                         placed_in_iteration = True
 
                         free_area = free_area.difference(plot_geom)
-
                         placed_plot_centers.append(plot_geom.centroid)
 
                         break
 
                     if not placed_in_iteration:
-
                         break
 
         if not service_buildings_rows:
@@ -486,6 +525,8 @@ class ResidentialServiceGenerator:
                     "service",
                     "capacity",
                     "floors_count",
+                    "living_area",
+                    "functional_area",
                     "geometry",
                 ],
                 geometry="geometry",
@@ -500,9 +541,27 @@ class ResidentialServiceGenerator:
 
         return service_buildings_gdf
 
-    def generate_services(self, blocks, plots, buildings, service_normatives, crs):
+    def generate_services(
+        self,
+        blocks: gpd.GeoDataFrame,
+        plots: gpd.GeoDataFrame,
+        buildings: gpd.GeoDataFrame,
+        service_normatives: pd.DataFrame,
+        crs: int | str,
+    ) -> gpd.GeoDataFrame:
+        """
+        Высокоуровневый пайплайн генерации сервисов поверх жилого пайплайна.
+
+        Предполагается, что сюда приходят:
+        - blocks: residential blocks (выход из ResidentialGenBuilder для mode="residential");
+        - plots: residential plots;
+        - buildings: residential buildings (living_area > 0);
+        - service_normatives: норматива по сервисам;
+        - crs: метрика (тот же CRS, что и для residential pipeline).
+        """
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
+
         projects_gdf = self.load_service_projects()
         all_limits = self.compute_service_limits_for_blocks(
             blocks, buildings, service_normatives

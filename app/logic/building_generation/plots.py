@@ -12,6 +12,7 @@ from shapely.errors import TopologicalError
 from shapely import affinity
 from loguru import logger
 
+from app.logic.building_generation.building_capacity_optimizer import CapacityOptimizer
 from app.logic.building_generation.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
@@ -26,13 +27,34 @@ from app.logic.postprocessing.generation_params import (
 
 
 class PlotsGenerator:
+    """
+    Генерация участков (plots) из прямоугольных сегментов и
+    многокритериальный подбор параметров зданий на этих участках.
+
+    Поддерживаются режимы:
+    - mode="residential"
+      * target_col="la_target" – жилая площадь;
+      * BuildingType → жилые (IZH / MKD_* / HIGHRISE).
+
+    - mode="non_residential"
+      * target_col="functional_target" – нежилая площадь;
+      * BuildingType → BIZ_*, IND_*, TR_*, SPEC_* в зависимости от zone/floors_avg.
+
+    - mode="mixed"
+      * сейчас таргет оптимизации задан через target_col (обычно "la_target");
+      * выбор BuildingType для business/unknown идёт через BIZ_*.
+      * дальнейшее разделение living/functional делается глубже по пайплайну.
+    """
+
     def __init__(
         self,
         params_provider: ParamsProvider,
         building_params_provider: BuildingParamsProvider,
+        capacity_optimizer: CapacityOptimizer,
     ):
         self._params = params_provider
         self._building_params = building_params_provider
+        self.capacity_optimizer = capacity_optimizer
 
         self.base_L = None
         self.base_W = None
@@ -41,9 +63,9 @@ class PlotsGenerator:
         self.block_area = None
         self.far_initial = None
         self.la_target = None
-        self.plot_indices = []
-        self.options_per_plot = {}
-        self.current_choice = {}
+        self.plot_indices: list[int] = []
+        self.options_per_plot: dict[int, list[dict]] = {}
+        self.current_choice: dict[int, dict] = {}
 
     @property
     def generation_parameters(self) -> GenParams:
@@ -122,7 +144,7 @@ class PlotsGenerator:
         _append_geom(corner_bl, "corner", "corner_bl")
         _append_geom(corner_br, "corner", "corner_br")
         _append_geom(corner_tl, "corner", "corner_tl")
-        _append_geom(corner_tr, "corner", "corner_tr")
+        _append_geom(corner_tr, "corner_tr", "corner_tr")
 
         return out
 
@@ -175,7 +197,6 @@ class PlotsGenerator:
             rows_data = []
 
             if width >= height:
-
                 x = minx
                 while x < maxx:
                     x2 = min(x + plot_side, maxx)
@@ -192,7 +213,6 @@ class PlotsGenerator:
                         rows_data.append(data)
                     x = x2
             else:
-
                 y = miny
                 while y < maxy:
                     y2 = min(y + plot_side, maxy)
@@ -210,12 +230,11 @@ class PlotsGenerator:
                     y = y2
 
             if not geoms:
-
                 row_dict = {k: row[k] for k in row.index}
                 return gpd.GeoDataFrame([row_dict], geometry="geometry", crs=crs)
 
             return gpd.GeoDataFrame(rows_data, geometry=geoms, crs=crs)
-
+        
         parts_rot = self._make_side_buffers_rotated(poly_rot, plot_depth)
         if not parts_rot:
             return gpd.GeoDataFrame(columns=list(row.index) + ["geometry"], crs=crs)
@@ -243,7 +262,6 @@ class PlotsGenerator:
                 continue
 
             if side_name in ("bottom", "top"):
-
                 x = gminx
                 while x < gmaxx:
                     x2 = min(x + plot_side, gmaxx)
@@ -260,7 +278,6 @@ class PlotsGenerator:
                         rows_data.append(data)
                     x = x2
             else:
-
                 y = gminy
                 while y < gmaxy:
                     y2 = min(y + plot_side, gmaxy)
@@ -305,7 +322,6 @@ class PlotsGenerator:
         try:
             sindex = gdf.sindex
         except Exception:
-
             result = gdf.drop(
                 columns=["_target_area", "_area", "_is_small"], errors="ignore"
             )
@@ -331,7 +347,11 @@ class PlotsGenerator:
                 processed.add(idx)
                 continue
 
-            possible_idx = [i for i in list(sindex.intersection(geom.bounds)) if i != idx and i not in processed]
+            possible_idx = [
+                i
+                for i in list(sindex.intersection(geom.bounds))
+                if i != idx and i not in processed
+            ]
 
             best_neighbor_idx = None
             best_shared_len = 0.0
@@ -345,7 +365,6 @@ class PlotsGenerator:
                 try:
                     shared_geom = geom.boundary.intersection(other_geom.boundary)
                 except Exception:
-
                     continue
 
                 if shared_geom is None:
@@ -354,7 +373,6 @@ class PlotsGenerator:
                 try:
                     shared_len = shared_geom.length
                 except AttributeError:
-
                     continue
 
                 if shared_len <= 0:
@@ -373,7 +391,6 @@ class PlotsGenerator:
             try:
                 merged_geom = geom.union(neighbor.geometry)
             except Exception:
-
                 new_rows.append(row)
                 processed.add(idx)
                 continue
@@ -394,7 +411,12 @@ class PlotsGenerator:
         result.reset_index(drop=True, inplace=True)
         return result
 
-    def merge_small_plots_iterative(self, plots, area_factor, max_iters=10):
+    def merge_small_plots_iterative(
+        self,
+        plots: gpd.GeoDataFrame,
+        area_factor: float,
+        max_iters: int = 10,
+    ) -> gpd.GeoDataFrame:
         gdf = plots.copy()
         for _ in range(max_iters):
             gdf_new = self.merge_small_plots(gdf, area_factor=area_factor)
@@ -409,7 +431,6 @@ class PlotsGenerator:
         return gdf
 
     def _score_to_base(self, option: dict) -> tuple[float, float, float]:
-
         return (
             abs(option["living"] - self.base_living_per_building),
             abs(option["footprint"] - (self.base_L * self.base_W)),
@@ -424,7 +445,6 @@ class PlotsGenerator:
         )
 
     def _objective(self, total_la: float) -> tuple[float, float]:
-
         la_score = abs(total_la - self.la_target)
         if math.isnan(self.far_initial):
             far_score = 0.0
@@ -433,7 +453,11 @@ class PlotsGenerator:
         return la_score, far_score
 
     def _hill_climb(
-        self, direction: int, total_la: float, best_la: float, best_far: float
+        self,
+        direction: int,
+        total_la: float,
+        best_la: float,
+        best_far: float,
     ) -> tuple[float, float, float]:
 
         changed = True
@@ -471,30 +495,79 @@ class PlotsGenerator:
 
         return total_la, best_la, best_far
 
-    def _tune_block(self, group: gpd.GeoDataFrame, gdf) -> gpd.GeoDataFrame:
+    def _tune_block(
+        self,
+        group: gpd.GeoDataFrame,
+        gdf: gpd.GeoDataFrame,
+        *,
+        mode: str = "residential",
+        target_col: str = "la_target",
+    ) -> gpd.GeoDataFrame:
 
-        la_target = float(group["la_target"].iloc[0])
-        if la_target <= 0:
+        if target_col not in group.columns:
+            logger.debug(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"no '{target_col}' column, skip tuning (mode={mode})"
+            )
+            return group
+
+        try:
+            target_val = float(group[target_col].iloc[0])
+        except (TypeError, ValueError):
+            target_val = 0.0
+
+        if target_val <= 0:
+            logger.debug(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"{target_col} <= 0 ({target_val}), skip tuning (mode={mode})"
+            )
             return group
 
         angle = float(group["angle"].iloc[0])
 
         block_area = float(group["plot_area"].sum())
         if block_area <= 0:
+            logger.debug(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"block_area <= 0, skip tuning (mode={mode})"
+            )
             return group
-
-        if "floors_group" not in group.columns:
-            return group
-
-        floors_group = group["floors_group"].iloc[0]
         try:
-            building_type = BuildingType(floors_group)
-        except Exception:
+            repr_row = group.iloc[0]
+            building_type = self.capacity_optimizer._infer_building_type(
+                repr_row, mode=mode
+            )
+            logger.debug(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"mode={mode}, zone={repr_row.get('zone')}, floors_group={repr_row.get('floors_group')}, "
+                f"floors_avg={repr_row.get('floors_avg')} -> building_type={building_type}"
+            )
+        except Exception as e:
+            building_type = None
+            logger.error(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"cannot infer BuildingType (mode={mode}, zone={group.get('zone', pd.Series([None])).iloc[0]}): {e!r}"
+            )
+
+        if building_type is None:
+            logger.debug(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"building_type is None, skip tuning (mode={mode})"
+            )
             return group
 
-        building_params = self.building_generation_parameters.params_by_type[
-            building_type
-        ]
+        try:
+            building_params = self.building_generation_parameters.params_by_type[
+                building_type
+            ]
+        except KeyError:
+            logger.error(
+                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
+                f"building_type={building_type} not in params_by_type keys="
+                f"{list(self.building_generation_parameters.params_by_type.keys())} "
+                f"-> skip tuning (mode={mode})"
+            )
+            return group
 
         self.base_L = float(
             group.get(
@@ -526,7 +599,7 @@ class PlotsGenerator:
 
         self.block_area = block_area
         self.far_initial = far_initial
-        self.la_target = la_target
+        self.la_target = target_val
 
         self.plot_indices = list(group.index)
         fronts_eff: dict[int, float] = {}
@@ -644,20 +717,19 @@ class PlotsGenerator:
 
         best_la_score, best_far_score = self._objective(total_living)
 
-        if total_living < la_target:
+        if total_living < target_val:
             total_living, best_la_score, best_far_score = self._hill_climb(
                 +1, total_living, best_la_score, best_far_score
             )
-        elif total_living > la_target:
+        elif total_living > target_val:
             total_living, best_la_score, best_far_score = self._hill_climb(
                 -1, total_living, best_la_score, best_far_score
             )
-
-        if total_living < la_target:
+        if total_living < target_val:
             total_living, best_la_score, best_far_score = self._hill_climb(
                 -1, total_living, best_la_score, best_far_score
             )
-        elif total_living > la_target:
+        elif total_living > target_val:
             total_living, best_la_score, best_far_score = self._hill_climb(
                 +1, total_living, best_la_score, best_far_score
             )
@@ -684,43 +756,77 @@ class PlotsGenerator:
                 group.at[idx, "living_area"] = float(living)
 
         far_final = self._current_far(total_living)
-        la_diff = total_living - la_target
-        la_ratio = total_living / la_target if la_target > 0 else math.nan
+        la_diff = total_living - target_val
+        la_ratio = total_living / target_val if target_val > 0 else math.nan
         far_diff = far_final - far_initial if not math.isnan(far_initial) else math.nan
 
-        group.loc[:, "total_living_area"] = float(total_living)
+        group.loc[:, "total_usable_area"] = float(total_living)
         group.loc[:, "la_diff"] = float(la_diff)
         group.loc[:, "la_ratio"] = float(la_ratio)
         group.loc[:, "far_initial"] = float(far_initial)
         group.loc[:, "far_final"] = float(far_final)
         group.loc[:, "far_diff"] = float(far_diff)
 
+        logger.debug(
+            f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'} "
+            f"done: mode={mode}, target_col={target_col}, "
+            f"target_val={target_val}, total_living={total_living}, la_diff={la_diff}, "
+            f"far_initial={far_initial}, far_final={far_final}"
+        )
+
         return group
 
-    def _recalc_buildings_for_plots(self, plots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    def _recalc_buildings_for_plots(
+        self,
+        plots: gpd.GeoDataFrame,
+        *,
+        mode: str = "residential",
+        target_col: str = "la_target",
+    ) -> gpd.GeoDataFrame:
 
-        required_cols = {"src_index", "la_target", "angle"}
+        required_cols = {"src_index", "angle", target_col}
         if not required_cols.issubset(plots.columns):
+            logger.debug(
+                f"[_recalc_buildings_for_plots] missing required columns {required_cols - set(plots.columns)}, "
+                f"skip recalc (mode={mode}, target_col={target_col})"
+            )
             return plots
 
         gdf = plots.copy()
         gdf["plot_area"] = gdf.geometry.area
 
         gdf = gdf.groupby("src_index", group_keys=False).apply(
-            lambda x: self._tune_block(x, gdf)
+            lambda x: self._tune_block(x, gdf, mode=mode, target_col=target_col)
         )
         return gdf
 
-    def generate_plots(self, segments: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    def generate_plots(
+        self,
+        segments: gpd.GeoDataFrame,
+        *,
+        mode: str = "residential",
+        target_col: str = "la_target",
+    ) -> gpd.GeoDataFrame:
+
+        logger.debug(
+            f"[generate_plots] start: mode={mode}, target_col={target_col}, "
+            f"segments_count={len(segments)}"
+        )
+
         segments = segments.dropna(subset=["plot_depth"]).copy()
         crs = segments.crs
 
-        parts_list = []
+        parts_list: list[gpd.GeoDataFrame] = []
         for _, r in segments.iterrows():
             p = self._slice_segment_with_plots(r, crs=crs)
             if p is not None and not p.empty:
                 parts_list.append(p)
+
         if not parts_list:
+            logger.debug(
+                f"[generate_plots] no plots produced from segments "
+                f"(mode={mode}, target_col={target_col})"
+            )
             return gpd.GeoDataFrame(
                 columns=list(segments.columns),
                 geometry="geometry",
@@ -741,6 +847,15 @@ class PlotsGenerator:
         result["plot_area"] = result.geometry.area
         result = result[result["plot_area"] > 0]
 
-        result = self._recalc_buildings_for_plots(result)
+        result = self._recalc_buildings_for_plots(
+            result,
+            mode=mode,
+            target_col=target_col,
+        )
+
+        logger.debug(
+            f"[generate_plots] done: mode={mode}, target_col={target_col}, "
+            f"plots_count={len(result)}"
+        )
 
         return result

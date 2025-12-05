@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import List, Dict, Any, Iterator
+from typing import List, Dict, Any
 import contextvars
 import contextlib
 
@@ -11,6 +11,22 @@ class BuildingType(str, Enum):
     MKD_5_8 = "medium"
     MKD_9_16 = "high"
     HIGHRISE = "extreme"
+
+    BIZ_LOW = "business_low"       
+    BIZ_MID = "business_mid"        
+    BIZ_TOWER = "business_tower"    
+    BIZ_MALL = "business_mall"     
+
+    IND_LIGHT = "industrial_light"         
+    IND_WAREHOUSE = "industrial_warehouse" 
+    IND_HEAVY = "industrial_heavy"          
+
+    TR_STATION = "transport_station"    
+    TR_DEPOT = "transport_depot"        
+    TR_PARKING = "transport_parking"    
+
+    SPEC_TECH = "special_technical"     
+    SPEC_WASTE = "special_waste"       
 
 
 @dataclass(frozen=True)
@@ -70,12 +86,119 @@ PARAMS_BY_TYPE: Dict[BuildingType, BuildingParams] = {
         plot_area_max=10000.0,
         la_coef=0.40,
     ),
+    BuildingType.BIZ_LOW: BuildingParams(
+        building_length_range=list(range(24, 61, 2)),   
+        building_width_range=list(range(16, 31, 2)),    
+        building_height=list(range(2, 5)),              
+        plot_side=list(range(40, 81, 5)),               
+        plot_area_min=1200.0,                          
+        plot_area_max=4000.0,                         
+        la_coef=0.80,                                   
+    ),
+    BuildingType.BIZ_MID: BuildingParams(
+        building_length_range=list(range(36, 101, 2)), 
+        building_width_range=list(range(20, 41, 2)),    
+        building_height=list(range(3, 9)),              
+        plot_side=list(range(60, 141, 5)),              
+        plot_area_min=3000.0,                          
+        plot_area_max=15000.0,                          
+        la_coef=0.78,                                   
+    ),
+    BuildingType.BIZ_TOWER: BuildingParams(
+        building_length_range=list(range(24, 41, 2)),   
+        building_width_range=list(range(20, 41, 2)),
+        building_height=list(range(12, 31)),           
+        plot_side=list(range(40, 101, 5)),              
+        plot_area_min=1600.0,                           
+        plot_area_max=8000.0,                          
+        la_coef=0.82,                                  
+    ),
+    BuildingType.BIZ_MALL: BuildingParams(
+        building_length_range=list(range(60, 161, 5)), 
+        building_width_range=list(range(40, 121, 5)),  
+        building_height=list(range(1, 5)),              
+        plot_side=list(range(80, 241, 10)),             
+        plot_area_min=5000.0,                          
+        plot_area_max=30000.0,                          
+        la_coef=0.75,                                   
+    ),
+    BuildingType.IND_LIGHT: BuildingParams(
+        building_length_range=list(range(40, 121, 5)),  
+        building_width_range=list(range(24, 61, 4)),   
+        building_height=list(range(1, 5)),             
+        plot_side=list(range(80, 201, 10)),             
+        plot_area_min=5000.0,                         
+        plot_area_max=20000.0,                          
+        la_coef=0.65,                                   
+    ),
+    BuildingType.IND_WAREHOUSE: BuildingParams(
+        building_length_range=list(range(60, 201, 5)), 
+        building_width_range=list(range(30, 81, 5)),    
+        building_height=list(range(1, 4)),             
+        plot_side=list(range(100, 261, 10)),            
+        plot_area_min=8000.0,                           
+        plot_area_max=40000.0,                         
+        la_coef=0.60,
+    ),
+    BuildingType.IND_HEAVY: BuildingParams(
+        building_length_range=list(range(80, 201, 10)), 
+        building_width_range=list(range(40, 161, 10)),  
+        building_height=list(range(1, 4)),             
+        plot_side=list(range(150, 321, 10)),            
+        plot_area_min=10000.0,                         
+        plot_area_max=60000.0,                         
+        la_coef=0.55,
+    ),
+    BuildingType.TR_STATION: BuildingParams(
+        building_length_range=list(range(60, 151, 5)),  
+        building_width_range=list(range(20, 61, 5)),   
+        building_height=list(range(1, 4)),             
+        plot_side=list(range(80, 201, 10)),             
+        plot_area_min=4000.0,                           
+        plot_area_max=20000.0,                          
+        la_coef=0.70,
+    ),
+    BuildingType.TR_DEPOT: BuildingParams(
+        building_length_range=list(range(80, 241, 10)), 
+        building_width_range=list(range(24, 61, 4)),    
+        building_height=list(range(1, 3)),              
+        plot_side=list(range(120, 281, 10)),            
+        plot_area_min=8000.0,                          
+        plot_area_max=35000.0,                          
+        la_coef=0.55,
+    ),
+    BuildingType.TR_PARKING: BuildingParams(
+        building_length_range=list(range(30, 81, 5)),  
+        building_width_range=list(range(20, 51, 5)),   
+        building_height=list(range(4, 11)),             
+        plot_side=list(range(50, 121, 5)),              
+        plot_area_min=1500.0,                          
+        plot_area_max=8000.0,                          
+        la_coef=0.70,
+    ),
+    BuildingType.SPEC_TECH: BuildingParams(
+        building_length_range=list(range(20, 81, 5)),  
+        building_width_range=list(range(16, 41, 4)),   
+        building_height=list(range(1, 5)),              
+        plot_side=list(range(60, 181, 10)),            
+        plot_area_min=3000.0,                           
+        plot_area_max=20000.0,                          
+        la_coef=0.50,
+    ),
+    BuildingType.SPEC_WASTE: BuildingParams(
+        building_length_range=list(range(40, 121, 10)), 
+        building_width_range=list(range(24, 61, 4)),    
+        building_height=list(range(1, 3)),              
+        plot_side=list(range(120, 301, 10)),            
+        plot_area_min=10000.0,                          
+        plot_area_max=50000.0,                         
+        la_coef=0.40,
+    ),
 }
 
 
 @dataclass(frozen=True)
 class BuildingGenParams:
-
     params_by_type: Dict[BuildingType, BuildingParams] = field(default_factory=dict)
 
     def patched(self, patch: Dict[str, Any]) -> "BuildingGenParams":
@@ -105,7 +228,6 @@ class BuildingGenParams:
         new_mapping: Dict[BuildingType, BuildingParams] = {}
         for bt_key, params_dict in raw_params_by_type.items():
             bt = _normalize_bt(bt_key)
-
             new_mapping[bt] = BuildingParams(**params_dict)
 
         return BuildingGenParams(params_by_type=new_mapping)

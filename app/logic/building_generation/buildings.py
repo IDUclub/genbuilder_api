@@ -9,31 +9,79 @@ from shapely.geometry import Polygon
 
 class ResidentialBuildingsGenerator:
     """
-    Generates residential building footprints inside plot polygons.
+    Генератор контуров зданий по участкам (plots).
 
-    Given a GeoDataFrame of plots with preset building dimensions and attributes
-    (length, width, floors, living area), this class:
-    - filters valid plot geometries (non-empty polygons with positive area);
-    - orients each building along the longest edge of the plot’s minimum
-        rotated rectangle;
-    - places a single rectangular building at the plot centroid with the
-        requested length and width;
-    - returns a GeoDataFrame of building footprints with geometry and
-        key attributes (dimensions, floors, living_area, src_index).
+    Вход: GeoDataFrame участков с геометрией и параметрами здания
+    (длина, ширина, этажность, полезная площадь).
 
-    Main entry point:
-    - generate_buildings_from_plots(...) – static method that converts plots
-        GeoDataFrame into a buildings GeoDataFrame.
+    Что делает:
+    - фильтрует валидные геометрии (непустые полигоны с положительной площадью);
+    - ориентирует здание вдоль самой длинной стороны minimum rotated rectangle;
+    - ставит один прямоугольный контур здания по центру участка с заданными L, W;
+    - считает:
+        * living_area / functional_area — в зависимости от режима;
+        * building_area – суммарная площадь по этажам = footprint_area * floors_count;
+    - возвращает GeoDataFrame с контурами зданий и ключевыми атрибутами.
+
+    Режимы:
+    - mode="residential"
+        * вся полезная площадь идёт в living_area, functional_area = 0;
+
+    - mode="non_residential"
+        * вся полезная площадь идёт в functional_area, living_area = 0;
+
+    - mode="mixed"
+        * на текущем этапе всё трактуем как living_area (functional_area = 0);
+          реальный 1:1 баланс реализуется выше по пайплайну, когда
+          многокритериальный оптимизатор будет допилен.
     """
 
     @staticmethod
     def generate_buildings_from_plots(
         plots_gdf: gpd.GeoDataFrame,
+        *,
+        mode: str = "residential",
         len_col: str = "building_length",
         width_col: str = "building_width",
         floors_col: str = "floors_count",
-        la_col: str = "living_area",
+        area_col: str = "living_area",
     ) -> gpd.GeoDataFrame:
+        """
+        Преобразовать участки в здания.
+
+        Parameters
+        ----------
+        plots_gdf : GeoDataFrame
+            Участки с заданными параметрами здания.
+        mode : {"residential", "non_residential", "mixed"}
+            Режим интерпретации полезной площади.
+        len_col : str
+            Имя колонки с длиной здания (L).
+        width_col : str
+            Имя колонки с шириной здания (W).
+        floors_col : str
+            Имя колонки с числом этажей.
+        area_col : str
+            Имя колонки с «полезной» площадью на участок/здание
+            (обычно living_area, но для нежилых это функциональная площадь).
+
+        Returns
+        -------
+        GeoDataFrame
+            Здания с колонками:
+            - building_length
+            - building_width
+            - floors_count
+            - living_area
+            - functional_area
+            - building_area (footprint * floors_count)
+            - src_index (если был в plots_gdf)
+            - geometry (Polygon)
+        """
+
+        mode = str(mode).lower()
+        if mode not in {"residential", "non_residential", "mixed"}:
+            raise ValueError(f"Unknown buildings generation mode: {mode!r}")
 
         plots = plots_gdf.copy()
         plots = plots[plots.geometry.notna() & ~plots.geometry.is_empty]
@@ -52,11 +100,13 @@ class ResidentialBuildingsGenerator:
             W = r.get(width_col)
             if L is None or W is None:
                 continue
+
             try:
                 L = float(L)
                 W = float(W)
             except (TypeError, ValueError):
                 continue
+
             if L <= 0 or W <= 0:
                 continue
 
@@ -115,13 +165,41 @@ class ResidentialBuildingsGenerator:
             if building_geom.is_empty:
                 continue
 
+            floors_val = r.get(floors_col)
+            try:
+                floors = float(floors_val) if floors_val is not None else float("nan")
+            except (TypeError, ValueError):
+                floors = float("nan")
+            usable_raw = r.get(area_col)
+            try:
+                usable_area = float(usable_raw) if usable_raw is not None else 0.0
+            except (TypeError, ValueError):
+                usable_area = 0.0
+            if mode == "residential":
+                living_area = usable_area
+                functional_area = 0.0
+            elif mode == "non_residential":
+                living_area = 0.0
+                functional_area = usable_area
+            else:
+                living_area = usable_area
+                functional_area = 0.0
+                
+            footprint_area = building_geom.area
+            if math.isfinite(floors) and floors > 0:
+                building_area = footprint_area * floors
+            else:
+                building_area = float("nan")
+
             buildings.append(
                 {
                     "geometry": building_geom,
                     "building_length": L,
                     "building_width": W,
-                    "floors_count": r.get(floors_col),
-                    "living_area": r.get(la_col),
+                    "floors_count": floors_val,
+                    "living_area": living_area,
+                    "functional_area": functional_area,
+                    "building_area": building_area,
                     "src_index": r.get("src_index"),
                 }
             )
@@ -133,6 +211,8 @@ class ResidentialBuildingsGenerator:
                     "building_width",
                     "floors_count",
                     "living_area",
+                    "functional_area",
+                    "building_area",
                     "src_index",
                     "geometry",
                 ],

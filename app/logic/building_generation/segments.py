@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import math
 from typing import Any, Dict, Tuple
 
 from loguru import logger
-from tqdm.auto import tqdm
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -27,6 +25,22 @@ class SegmentsAllocator:
     - choose a consistent (L, W, H, plot_front) scenario per block;
     - compute how many plots/buildings fit into each segment;
     - update blocks with final capacity/FAR and segments with plot_front/depth.
+
+    Supports multiple generation modes:
+
+    - mode="residential"
+        * target_col="la_target" – жилплощадь
+        * типы зданий – жилые (IZH / MKD_* / HIGHRISE и т.п.)
+
+    - mode="non_residential"
+        * target_col="functional_target" – нежилая площадь
+        * типы зданий – BIZ_*, IND_*, TR_*, SPEC_* в зависимости от zone/floors_avg
+
+    - mode="mixed"
+        * target_col обычно "la_target" – базовый таргет на жилую часть;
+          многокритериальный баланс с functional_target реализуется глубже
+          (на уровне PlotsGenerator / BuildingsGenerator).
+        * в бизнес/unknown блоках формы выбираются через те же пресеты BIZ_*.
     """
 
     def __init__(
@@ -49,14 +63,17 @@ class SegmentsAllocator:
         *,
         building_params: BuildingParams,
         la_ratio: float | None = None,
+        mode: str = "residential",
+        target_col: str = "la_target",
     ) -> Tuple[Dict[str, Any], gpd.GeoDataFrame]:
 
         block_id = row.name
         floors_group = row.get("floors_group")
-        la_target_raw = row.get("la_target")
+        target_raw = row.get(target_col, 0.0)
+
         logger.debug(
-            f"[solve_block] start: block_id={block_id}, far={far}, "
-            f"floors_group={floors_group}, la_target={la_target_raw}, "
+            f"[solve_block] start: block_id={block_id}, mode={mode}, far={far}, "
+            f"floors_group={floors_group}, target_col={target_col}, target_raw={target_raw}, "
             f"rects_count={len(rects_block)}, "
             f"building_params.la_coef={building_params.la_coef}, "
             f"plot_side_range=({min(building_params.plot_side)}, {max(building_params.plot_side)})"
@@ -64,11 +81,13 @@ class SegmentsAllocator:
 
         if la_ratio is None:
             la_ratio = building_params.la_coef
-        logger.debug(f"[solve_block] block_id={block_id}: using la_ratio={la_ratio}")
+        logger.debug(
+            f"[solve_block] block_id={block_id}, mode={mode}: using la_ratio={la_ratio}"
+        )
 
         if rects_block.empty:
             logger.debug(
-                f"[solve_block] block_id={block_id}: rects_block is EMPTY, return zeros/NaN"
+                f"[solve_block] block_id={block_id}, mode={mode}: rects_block is EMPTY, return zeros/NaN"
             )
             rects_block = rects_block.copy()
             rects_block["plots_capacity"] = 0
@@ -87,7 +106,7 @@ class SegmentsAllocator:
                 "plot_depth": row.get("plot_depth", np.nan),
                 "plot_area": row.get("plot_area", np.nan),
                 "living_per_building": row.get("living_per_building", np.nan),
-                "total_living_area": row.get("total_living_area", np.nan),
+                "total_usable_area": row.get("total_usable_area", np.nan),
                 "la_diff": row.get("la_diff", np.nan),
                 "la_ratio": row.get("la_ratio", np.nan),
                 "far_initial": row.get("far_initial", np.nan),
@@ -95,12 +114,20 @@ class SegmentsAllocator:
                 "far_diff": row.get("far_diff", np.nan),
             }, rects_block
 
-        target_la = float(row["la_target"])
-        logger.debug(f"[solve_block] block_id={block_id}: target_la={target_la}")
-        if target_la <= 0:
+        try:
+            target_val = float(target_raw)
+        except (TypeError, ValueError):
+            target_val = 0.0
+
+        logger.debug(
+            f"[solve_block] block_id={block_id}, mode={mode}: target_val={target_val} "
+            f"(from column '{target_col}')"
+        )
+
+        if target_val <= 0:
             logger.debug(
-                f"[solve_block] block_id={block_id}: target_la <= 0 "
-                f"(target_la={target_la}), return zeros/NaN"
+                f"[solve_block] block_id={block_id}, mode={mode}: target_val <= 0 "
+                f"(target_val={target_val}), return zeros/NaN"
             )
             rects_block = rects_block.copy()
             rects_block["plots_capacity"] = 0
@@ -119,14 +146,14 @@ class SegmentsAllocator:
                 "plot_depth": np.nan,
                 "plot_area": 0.0,
                 "living_per_building": 0.0,
-                "total_living_area": 0.0,
+                "total_usable_area": 0.0,
                 "la_diff": 0.0,
                 "la_ratio": np.nan,
                 "far_initial": row.get("far_initial", np.nan),
                 "far_final": np.nan,
                 "far_diff": np.nan,
             }, rects_block
-
+        
         area_min, area_max, area_base = self.capacity_optimizer.get_plot_area_params(
             far,
             building_params,
@@ -153,7 +180,7 @@ class SegmentsAllocator:
         )
 
         logger.debug(
-            f"[solve_block] block_id={block_id}: "
+            f"[solve_block] block_id={block_id}, mode={mode}: "
             f"area_min={area_min}, area_max={area_max}, area_base={area_base}, "
             f"base_L={base_L}, base_W={base_W}, base_H={base_H}, base_F={base_F}, "
             f"far_initial={far_initial}"
@@ -172,7 +199,8 @@ class SegmentsAllocator:
             seg_depths.append(seg_depth)
 
         logger.debug(
-            f"[solve_block] block_id={block_id}: seg_fronts={seg_fronts}, seg_depths={seg_depths}"
+            f"[solve_block] block_id={block_id}, mode={mode}: "
+            f"seg_fronts={seg_fronts}, seg_depths={seg_depths}"
         )
 
         capacity_by_front_idx: list[int] = []
@@ -188,13 +216,13 @@ class SegmentsAllocator:
 
         max_cap = max(capacity_by_front_idx) if capacity_by_front_idx else 0
         logger.debug(
-            f"[solve_block] block_id={block_id}: "
+            f"[solve_block] block_id={block_id}, mode={mode}: "
             f"capacity_by_front_idx={capacity_by_front_idx}, max_capacity={max_cap}"
         )
 
         if max_cap <= 0:
             logger.debug(
-                f"[solve_block] block_id={block_id}: max_capacity <= 0, "
+                f"[solve_block] block_id={block_id}, mode={mode}: max_capacity <= 0, "
                 f"return zeros/NaN for plots"
             )
             rects_block["plots_capacity"] = 0
@@ -213,8 +241,8 @@ class SegmentsAllocator:
                 "plot_depth": np.nan,
                 "plot_area": plot_area_base,
                 "living_per_building": row.get("living_per_building", np.nan),
-                "total_living_area": 0.0,
-                "la_diff": -target_la,
+                "total_usable_area": 0.0,
+                "la_diff": -target_val,
                 "la_ratio": 0.0,
                 "far_initial": far_initial,
                 "far_final": np.nan,
@@ -241,8 +269,8 @@ class SegmentsAllocator:
             H = float(building_params.building_height[H_idx])
             F = float(building_params.plot_side[F_idx])
 
-            living_per_building = L * W * H * la_ratio
-            if living_per_building <= 0:
+            usable_per_building = L * W * H * la_ratio 
+            if usable_per_building <= 0:
                 return
 
             if F > 0:
@@ -253,7 +281,9 @@ class SegmentsAllocator:
             is_long_side_along_front = F >= plot_depth
 
             building_need = (
-                int(math.ceil(target_la / living_per_building)) if target_la > 0 else 0
+                int(math.ceil(target_val / usable_per_building))
+                if target_val > 0
+                else 0
             )
 
             capacity_total = int(capacity_by_front_idx[F_idx])
@@ -262,7 +292,7 @@ class SegmentsAllocator:
                 buildings_count_fallback = min(capacity_total, building_need)
             else:
                 buildings_count_fallback = capacity_total
-            total_la_fallback = buildings_count_fallback * living_per_building
+            total_la_fallback = buildings_count_fallback * usable_per_building
 
             if total_la_fallback > fallback_total_la:
                 far_final_fb = (
@@ -277,12 +307,12 @@ class SegmentsAllocator:
                     "building_need": building_need,
                     "building_capacity": capacity_total,
                     "buildings_count": buildings_count_fallback,
-                    "living_per_building": living_per_building,
-                    "total_living_area": total_la_fallback,
+                    "living_per_building": usable_per_building,
+                    "total_usable_area": total_la_fallback,
                     "far_final": far_final_fb,
                 }
                 logger.debug(
-                    f"[solve_block] block_id={block_id}: fallback updated -> "
+                    f"[solve_block] block_id={block_id}, mode={mode}: fallback updated -> "
                     f"L={L}, W={W}, H={H}, F={F}, "
                     f"capacity_total={capacity_total}, total_la_fallback={total_la_fallback}"
                 )
@@ -294,8 +324,8 @@ class SegmentsAllocator:
                 return
 
             buildings_count = building_need
-            total_la = buildings_count * living_per_building
-            la_diff_abs = abs(total_la - target_la)
+            total_la = buildings_count * usable_per_building
+            la_diff_abs = abs(total_la - target_val)
 
             far_final = (
                 (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
@@ -324,19 +354,19 @@ class SegmentsAllocator:
                     "building_need": building_need,
                     "building_capacity": capacity_total,
                     "buildings_count": buildings_count,
-                    "living_per_building": living_per_building,
-                    "total_living_area": total_la,
+                    "living_per_building": usable_per_building,
+                    "total_usable_area": total_la,
                     "far_final": far_final,
                 }
                 logger.debug(
-                    f"[solve_block] block_id={block_id}: best_success updated -> "
+                    f"[solve_block] block_id={block_id}, mode={mode}: best_success updated -> "
                     f"L={L}, W={W}, H={H}, F={F}, "
                     f"building_need={building_need}, capacity_total={capacity_total}, "
                     f"total_la={total_la}, score={score}"
                 )
 
         logger.debug(
-            f"[solve_block] block_id={block_id}: "
+            f"[solve_block] block_id={block_id}, mode={mode}: "
             f"searching candidates: len(L_range)={len(building_params.building_length_range)}, "
             f"len(W_range)={len(building_params.building_width_range)}, "
             f"len(H_range)={len(building_params.building_height)}, "
@@ -351,7 +381,7 @@ class SegmentsAllocator:
 
         if best_success is None:
             logger.debug(
-                f"[solve_block] block_id={block_id}: no best_success after L/W scan, "
+                f"[solve_block] block_id={block_id}, mode={mode}: no best_success after L/W scan, "
                 f"trying H-range with fixed F"
             )
             for H_idx in range(base_H_idx, len(building_params.building_height)):
@@ -367,7 +397,7 @@ class SegmentsAllocator:
 
         if best_success is None:
             logger.debug(
-                f"[solve_block] block_id={block_id}: still no best_success, "
+                f"[solve_block] block_id={block_id}, mode={mode}: still no best_success, "
                 f"trying smaller F with only_long_front=True"
             )
             for F_idx in range(base_F_idx, 0, -1):
@@ -384,7 +414,7 @@ class SegmentsAllocator:
 
         if best_success is None:
             logger.debug(
-                f"[solve_block] block_id={block_id}: no best_success yet, "
+                f"[solve_block] block_id={block_id}, mode={mode}: no best_success yet, "
                 f"allowing short-front (only_long_front=False)"
             )
             for F_idx in range(base_F_idx, 0, -1):
@@ -402,7 +432,7 @@ class SegmentsAllocator:
         chosen = best_success or fallback
         if chosen is None:
             logger.debug(
-                f"[solve_block] block_id={block_id}: chosen is None "
+                f"[solve_block] block_id={block_id}, mode={mode}: chosen is None "
                 f"(no best_success and no fallback) -> return zeros/NaN for plots"
             )
             rects_block["plots_capacity"] = 0
@@ -421,8 +451,8 @@ class SegmentsAllocator:
                 "plot_depth": np.nan,
                 "plot_area": plot_area_base,
                 "living_per_building": row.get("living_per_building", np.nan),
-                "total_living_area": 0.0,
-                "la_diff": -target_la,
+                "total_usable_area": 0.0,
+                "la_diff": -target_val,
                 "la_ratio": 0.0,
                 "far_initial": far_initial,
                 "far_final": np.nan,
@@ -436,23 +466,23 @@ class SegmentsAllocator:
         building_need = chosen["building_need"]
         building_capacity = chosen["building_capacity"]
         buildings_count = chosen["buildings_count"]
-        living_per_building = chosen["living_per_building"]
-        total_living_area = chosen["total_living_area"]
+        usable_per_building = chosen["living_per_building"]
+        total_usable_area = chosen["total_usable_area"]
         far_final = chosen["far_final"]
 
-        la_diff = total_living_area - target_la
-        la_ratio_block = total_living_area / target_la if target_la > 0 else np.nan
+        la_diff = total_usable_area - target_val
+        la_ratio_block = total_usable_area / target_val if target_val > 0 else np.nan
 
         plot_front = F
         plot_area = plot_area_base
         plot_depth = plot_area / plot_front if plot_front > 0 else np.nan
 
         logger.debug(
-            f"[solve_block] block_id={block_id}: CHOSEN -> "
+            f"[solve_block] block_id={block_id}, mode={mode}: CHOSEN -> "
             f"L={L}, W={W}, H={H}, F={F}, "
             f"building_need={building_need}, building_capacity={building_capacity}, "
             f"buildings_count={buildings_count}, "
-            f"living_per_building={living_per_building}, total_living_area={total_living_area}, "
+            f"living_per_building={usable_per_building}, total_usable_area={total_usable_area}, "
             f"plot_front={plot_front}, plot_depth={plot_depth}, "
             f"far_initial={far_initial}, far_final={far_final}, la_diff={la_diff}"
         )
@@ -485,14 +515,14 @@ class SegmentsAllocator:
             plots_capacity_total += cap_seg
 
         logger.debug(
-            f"[solve_block] block_id={block_id}: "
+            f"[solve_block] block_id={block_id}, mode={mode}: "
             f"plots_capacity_total={plots_capacity_total}, "
             f"initial_building_capacity={building_capacity}"
         )
 
         if plots_capacity_total != building_capacity:
             logger.debug(
-                f"[solve_block] block_id={block_id}: "
+                f"[solve_block] block_id={block_id}, mode={mode}: "
                 f"plots_capacity_total ({plots_capacity_total}) != building_capacity ({building_capacity}), "
                 f"overriding building_capacity"
             )
@@ -509,8 +539,8 @@ class SegmentsAllocator:
             "plot_side_used": float(plot_front),
             "plot_depth": float(plot_depth) if not np.isnan(plot_depth) else np.nan,
             "plot_area": float(plot_area),
-            "living_per_building": float(living_per_building),
-            "total_living_area": float(total_living_area),
+            "living_per_building": float(usable_per_building),
+            "total_usable_area": float(total_usable_area),
             "la_diff": float(la_diff),
             "la_ratio": float(la_ratio_block),
             "far_initial": float(far_initial),
@@ -519,7 +549,7 @@ class SegmentsAllocator:
         }
 
         logger.debug(
-            f"[solve_block] block_id={block_id}: DONE -> "
+            f"[solve_block] block_id={block_id}, mode={mode}: DONE -> "
             f"building_capacity={block_result['building_capacity']}, "
             f"buildings_count={block_result['buildings_count']}, "
             f"plot_front={block_result['plot_front']}, "
@@ -533,14 +563,17 @@ class SegmentsAllocator:
         blocks_gdf: gpd.GeoDataFrame,
         rects_gdf: gpd.GeoDataFrame,
         far: str,
+        *,
+        mode: str = "residential",
+        target_col: str = "la_target",
     ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
 
         blocks = blocks_gdf.copy()
         rects = rects_gdf.copy()
 
         logger.debug(
-            f"[update_blocks] start: blocks_count={len(blocks)}, "
-            f"rects_count={len(rects)}, far={far}"
+            f"[update_blocks] start: mode={mode}, target_col={target_col}, "
+            f"blocks_count={len(blocks)}, rects_count={len(rects)}, far={far}"
         )
 
         if rects.empty:
@@ -560,23 +593,27 @@ class SegmentsAllocator:
         except Exception:
             unique_src = "N/A"
 
-        logger.debug(f"[update_blocks] rects.src_index.unique={unique_src}")
+        logger.debug(
+            f"[update_blocks] mode={mode}: rects.src_index.unique={unique_src}"
+        )
 
         for idx, row in blocks.iterrows():
             fg = row.get("floors_group")
-            la_target = row.get("la_target")
+            target_val = row.get(target_col)
             logger.debug(
-                f"[update_blocks] block_idx={idx}: floors_group={fg}, la_target={la_target}"
+                f"[update_blocks] block_idx={idx}, mode={mode}: "
+                f"floors_group={fg}, target_col={target_col}, target_val={target_val}"
             )
 
             block_rects = rects[rects["src_index"] == idx]
             logger.debug(
-                f"[update_blocks] block_idx={idx}: matched_rects_count={len(block_rects)}"
+                f"[update_blocks] block_idx={idx}, mode={mode}: "
+                f"matched_rects_count={len(block_rects)}"
             )
 
             if block_rects.empty:
                 logger.debug(
-                    f"[update_blocks] block_idx={idx}: NO rects for this block, "
+                    f"[update_blocks] block_idx={idx}, mode={mode}: NO rects for this block, "
                     f"set building_capacity=0, buildings_count=0"
                 )
                 blocks.at[idx, "building_capacity"] = 0
@@ -584,16 +621,23 @@ class SegmentsAllocator:
                 continue
 
             try:
-                building_type = BuildingType(fg)
+                building_type = self.capacity_optimizer._infer_building_type(
+                    row, mode=mode
+                )
                 logger.debug(
-                    f"[update_blocks] block_idx={idx}: mapped floors_group={fg} "
+                    f"[update_blocks] block_idx={idx}, mode={mode}: "
+                    f"mapped zone={row.get('zone')} floors_group={fg} "
                     f"-> building_type={building_type}"
                 )
             except Exception as e:
+                building_type = None
                 logger.error(
-                    f"[update_blocks] block_idx={idx}: cannot map floors_group={fg} "
-                    f"to BuildingType: {e!r}, set building_capacity=0, buildings_count=0"
+                    f"[update_blocks] block_idx={idx}, mode={mode}: cannot infer BuildingType "
+                    f"from row (zone={row.get('zone')}, floors_group={fg}): {e!r}, "
+                    f"set building_capacity=0, buildings_count=0"
                 )
+
+            if building_type is None:
                 blocks.at[idx, "building_capacity"] = 0
                 blocks.at[idx, "buildings_count"] = 0
                 continue
@@ -602,9 +646,9 @@ class SegmentsAllocator:
                 building_params = self.building_generation_parameters.params_by_type[
                     building_type
                 ]
-            except KeyError as e:
+            except KeyError:
                 logger.error(
-                    f"[update_blocks] block_idx={idx}: building_type={building_type} "
+                    f"[update_blocks] block_idx={idx}, mode={mode}: building_type={building_type} "
                     f"not in params_by_type keys="
                     f"{list(self.building_generation_parameters.params_by_type.keys())} "
                     f"-> set building_capacity=0, buildings_count=0"
@@ -614,7 +658,7 @@ class SegmentsAllocator:
                 continue
 
             logger.debug(
-                f"[update_blocks] block_idx={idx}: calling solve_block_with_segments "
+                f"[update_blocks] block_idx={idx}, mode={mode}: calling solve_block_with_segments "
                 f"with {len(block_rects)} rects, building_type={building_type}"
             )
 
@@ -624,10 +668,12 @@ class SegmentsAllocator:
                 far=far,
                 building_params=building_params,
                 la_ratio=building_params.la_coef,
+                mode=mode,
+                target_col=target_col,
             )
 
             logger.debug(
-                f"[update_blocks] block_idx={idx}: solve_block_with_segments returned -> "
+                f"[update_blocks] block_idx={idx}, mode={mode}: solve_block_with_segments returned -> "
                 f"building_capacity={block_res.get('building_capacity')}, "
                 f"buildings_count={block_res.get('buildings_count')}, "
                 f"plot_front={block_res.get('plot_front')}, "
@@ -642,7 +688,7 @@ class SegmentsAllocator:
             ] = block_rects_res[["plots_capacity", "plot_front", "plot_depth"]].values
 
             rects.loc[block_rects_res.index, "src_index"] = idx
-            rects.loc[block_rects_res.index, "la_target"] = row.get("la_target", np.nan)
+            rects.loc[block_rects_res.index, target_col] = row.get(target_col, np.nan)
 
             rects.loc[block_rects_res.index, "far_initial"] = block_res.get(
                 "far_initial",
@@ -665,9 +711,9 @@ class SegmentsAllocator:
             )
 
             logger.debug(
-                f"[update_blocks] block_idx={idx}: rects updated for indices "
+                f"[update_blocks] block_idx={idx}, mode={mode}: rects updated for indices "
                 f"{list(block_rects_res.index)}"
             )
 
-        logger.debug("[update_blocks] DONE")
+        logger.debug(f"[update_blocks] DONE, mode={mode}")
         return blocks, rects

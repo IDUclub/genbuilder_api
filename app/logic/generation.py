@@ -1,119 +1,90 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Dict, Optional, List
 
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
-from shapely.geometry import mapping, shape
 from iduconfig import Config
 
 from app.schema.dto import BlockFeatureCollection
-from app.exceptions.http_exception_wrapper import http_exception
-
-from app.dependencies import GenbuilderInferenceAPI
 from app.dependencies import UrbanDBAPI
-from app.logic.centroids_normalization import Snapper
-from app.logic.postprocessing.buildings_generation import BuildingGenerator
-from app.logic.postprocessing.services_generation import ServiceGenerator
-from app.logic.postprocessing.attributes_calculation import BuildingAttributes
-from app.logic.postprocessing.isolines import DensityIsolines
-from app.logic.postprocessing.built_grid import GridGenerator
-from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.logic.postprocessing.generation_params import ParamsProvider
 
-from app.logic.building_generation.building_params import BuildingGenParams, BuildingParamsProvider
+from app.logic.building_generation.building_params import (
+    BuildingGenParams,
+    BuildingParamsProvider,
+)
 from app.logic.building_generation.residential_generator import ResidentialGenBuilder
-from app.logic.building_generation.residential_service_generation import ResidentialServiceGenerator
+from app.logic.building_generation.residential_service_generation import (
+    ResidentialServiceGenerator,
+)
+
 
 class Genbuilder:
     """
     Asynchronous orchestrator for the full Genbuilder pipeline.
 
-    Runs centroid inference and snapping, grid and isoline construction,
-    residential building generation, attribute assignment and service generation.
-    Use `run` to execute the full pipeline and get generated buildings.
+    Unified pipeline:
+
+    - Splits input blocks into three groups by `zone`:
+        * residential:      zone == "residential"
+        * mixed:            zone in {"business", "unknown"}
+        * non-residential:  zone in {"industrial", "transport", "special"}
+      Blocks with zones like "recreation" / "agriculture" / others are ignored.
+
+    - For each group it calls the updated generation orchestrator
+      (ResidentialGenBuilder with different `mode`):
+        * mode="residential"      – uses la_target / density_scenario /
+                                    default_floor_group
+        * mode="non_residential"  – uses coverage_area / floors_avg
+        * mode="mixed"            – uses both la_target and coverage_area,
+                                    with a multi-objective optimizer
+                                    (1:1 balance guaranteed at zone level,
+                                     by block where possible).
+
+    - Residential service buildings are generated on top of residential
+      outputs using ResidentialServiceGenerator and service normatives
+      from UrbanDBAPI.
+
+    - The final output is a single GeoJSON FeatureCollection of buildings
+      with:
+        * floors_count
+        * living_area        – residential area (m²), 0 for pure non-res
+        * functional_area    – non-res area (m²), 0 for чисто жилых
+        * building_area      – суммарная площадь по этажам (footprint * floors)
+        * service            – list[ {service_name: capacity} ] or []
+        * zone               – functional zone label, from original blocks
+        * geometry           – building footprint (EPSG:4326)
     """
-    def __init__(self, config: Config, urban_api: UrbanDBAPI, genbuilder_inference_api: GenbuilderInferenceAPI, 
-                snapper: Snapper, density_isolines: DensityIsolines, grid_generator: GridGenerator, 
-                buildings_generator: BuildingGenerator, service_generator: ServiceGenerator, attributes_calculator: BuildingAttributes, params_provider: ParamsProvider,
-                residential_buildings_generator: ResidentialGenBuilder, residential_service_generator: ResidentialServiceGenerator, 
-                buildings_params_provider: BuildingParamsProvider):
+
+    def __init__(
+        self,
+        config: Config,
+        urban_api: UrbanDBAPI,
+        params_provider: ParamsProvider,
+        residential_buildings_generator: ResidentialGenBuilder,
+        residential_service_generator: ResidentialServiceGenerator,
+        buildings_params_provider: BuildingParamsProvider,
+    ):
         self.config = config
         self.urban_api = urban_api
-        self.genbuilder_inference_api = genbuilder_inference_api
-        self.snapper = snapper
-        self.density_isolines = density_isolines
-        self.grid_generator = grid_generator
-        self.buildings_generator = buildings_generator
-        self.service_generator = service_generator
-        self.attributes_calculator = attributes_calculator
         self.generation_parameters = params_provider
         self.residential_buildings_generator = residential_buildings_generator
         self.residential_service_generator = residential_service_generator
         self.buildings_generation_parameters = buildings_params_provider
 
-    async def infer_centroids_for_gdf(
-        self,
-        gdf: gpd.GeoDataFrame,
-        infer_params: Dict[str, Any],
-        la_target: dict[str, float],
-        floors_avg: dict[str, float],
-    ) -> gpd.GeoDataFrame:
-
-        tasks = []
-        for _, row in gdf.iterrows():
-            zone_label = str(row.get("zone", "")).strip()
-            la_value = la_target.get(zone_label)
-            floors_value = floors_avg.get(zone_label)
-
-            feature = {
-                "type": "Feature",
-                "geometry": mapping(row.geometry),
-                "properties": {k: v for k, v in row.items() if k != "geometry"},
-            }
-
-            tasks.append(
-                self.genbuilder_inference_api.generate_centroids(
-                    feature=feature,
-                    zone_label=zone_label,
-                    infer_params=infer_params,
-                    la_target=la_value,
-                    floors_avg=floors_value,
-                )
-            )
-
-        results = await asyncio.gather(*tasks)
-
-        rows: list[dict] = []
-        for result in results:
-            for feature in result.get("features", []):
-                props = dict(feature.get("properties") or {})
-                props["geometry"] = shape(feature["geometry"])
-                rows.append(props)
-        if not rows:
-            raise http_exception(
-                404,
-                f"No centroids generated with current parameters"
-            )
-        else:
-            gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs=gdf.crs)
-            gdf.geometry = gdf.centroid
-
-        return gdf
-
     async def run(
         self,
         targets_by_zone: Dict[str, Dict[str, float]],
-        infer_params: Dict[str, Any],
         blocks: Optional[BlockFeatureCollection] = None,
         scenario_id: Optional[int] = None,
         year: Optional[int] = None,
         source: Optional[str] = None,
         functional_zone_types: Optional[List[str]] = None,
         generation_parameters_override: dict | None = None,
-        buildings_parameters_override: dict | None = None
+        buildings_parameters_override: dict | None = None,
     ):
         base_parameters = self.generation_parameters.current()
         new_parameters = (
@@ -121,98 +92,378 @@ class Genbuilder:
             if generation_parameters_override
             else base_parameters
         )
-        base_residential_parameters = self.buildings_generation_parameters.current() 
-        new_residential_parameters = (
-            base_residential_parameters.patched(buildings_parameters_override)
-            if buildings_parameters_override
-            else base_residential_parameters
-        )
 
+        base_building_parameters: BuildingGenParams = (
+            self.buildings_generation_parameters.current()
+        )
+        new_building_parameters = (
+            base_building_parameters.patched(buildings_parameters_override)
+            if buildings_parameters_override
+            else base_building_parameters
+        )
         if blocks is not None:
             dumped = blocks.model_dump()
             gdf_blocks = gpd.GeoDataFrame.from_features(dumped["features"])
+            logger.info(
+                f"Genbuilder.run: using blocks from request, count={len(gdf_blocks)}"
+            )
         else:
-            gdf_blocks = await self.urban_api.get_territories_for_buildings(scenario_id, year, source)
+            gdf_blocks = await self.urban_api.get_territories_for_buildings(
+                scenario_id, year, source
+            )
+            logger.info(
+                f"Genbuilder.run: loaded blocks from UrbanDB, count={len(gdf_blocks)}"
+            )
             if functional_zone_types:
+                before = len(gdf_blocks)
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
+                logger.info(
+                    f"Genbuilder.run: filtered by functional_zone_types={functional_zone_types}, "
+                    f"before={before}, after={len(gdf_blocks)}"
+                )
+
+        if gdf_blocks.empty:
+            logger.warning("Genbuilder.run: no blocks to process, returning empty FC")
+            empty = gpd.GeoDataFrame(
+                columns=[
+                    "floors_count",
+                    "living_area",
+                    "functional_area",
+                    "building_area",
+                    "service",
+                    "zone",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs="EPSG:4326",
+            )
+            return json.loads(empty.to_json())
         utm = gdf_blocks.estimate_utm_crs()
         gdf_blocks = gdf_blocks.to_crs(utm)
-        non_residential_blocks = gdf_blocks[gdf_blocks['zone'] != 'residential']
-        residential_blocks = gdf_blocks[gdf_blocks['zone'] == 'residential']
-        territory_id = await self.urban_api.get_territory_by_scenario(scenario_id)
-        service_normatives = await self.urban_api.get_normatives_for_territory(territory_id)
-        with self.generation_parameters.override(new_parameters):
-            if len(non_residential_blocks) > 0:
-                centroids = await self.infer_centroids_for_gdf(
-                    non_residential_blocks,
-                    infer_params,
-                    targets_by_zone["la_target"],
-                    targets_by_zone["floors_avg"],
-                )
-                logger.info(f"Centroids generated, {len(centroids)} total")
-                snapper_result = await asyncio.to_thread(self.snapper.run, centroids, non_residential_blocks)
-                logger.info("Centroids snapped")
-                centroids = snapper_result["centroids"]
-                midline = snapper_result["midline"]
-                empty_grid = await asyncio.to_thread(
-                    self.grid_generator.make_grid_for_blocks,
-                    blocks_gdf=non_residential_blocks,
-                    midlines=gpd.GeoSeries([midline], crs=non_residential_blocks.crs),
-                    block_id_col="block_id",
-                )
-                isolines = await asyncio.to_thread(
-                    self.density_isolines.build, non_residential_blocks, centroids, zone_id_col="zone"
-                )
-                logger.info("Isolines generated")
-                grid = await asyncio.to_thread(self.grid_generator.fit_transform, empty_grid, isolines)
-                logger.info("Grid created")
-                building_stage = await self.buildings_generator.fit_transform(
-                    grid, non_residential_blocks, zone_name_aliases=["zone"]
-                )
-                cells_with_buildings = building_stage["cells"]         
-                buildings = building_stage["buildings"] 
-                logger.info("Buildings generated")
-                attributes_result = await asyncio.to_thread(
-                    self.attributes_calculator.fit_transform,
-                    buildings,
-                    non_residential_blocks,
-                    targets_by_zone,
-                )
-                buildings = attributes_result["buildings"]
-                living_area_per_zone = attributes_result["allocated_by_zone"]
-                logger.info("Building attributes generated")
-                services = await self.service_generator.fit_transform(
-                        cells_with_buildings, living_area_per_zone, service_normatives
-                    )
-                logger.info("Service buildings generated")
-            else:
-                buildings = None
-                services = None
+        res_blocks = gdf_blocks[gdf_blocks["zone"] == "residential"].copy()
 
-            with self.buildings_generation_parameters.override(new_residential_parameters): # TODO: spread this logic to non-residential zones
-                residential_la_target = targets_by_zone.get('la_target', {}).get('residential', 0)
-                residential_density_scenario = targets_by_zone.get('density_scenario', {}).get('residential', 'min')
-                residential_default_floors_group = targets_by_zone.get('default_floors_group', {}).get('residential', 'medium')
-                if residential_la_target > 0:
-                    residential_blocks, plots, residential_buildings = await self.residential_buildings_generator.run(residential_la_target, 
-                        residential_density_scenario, residential_default_floors_group, residential_blocks)
-                    logger.info(f"Residential buildings generated: {len(residential_buildings)}")
-                    residential_services = self.residential_service_generator.generate_services(residential_blocks, plots, 
-                                                                                                residential_buildings, service_normatives, utm)
-                    logger.info(f"Residential services generated: {len(residential_services)}")
-                else:
-                    residential_buildings = None
-                    residential_services = None
+        mixed_blocks = gdf_blocks[
+            gdf_blocks["zone"].isin(["business", "unknown"])
+        ].copy()
 
-                buildings_all = pd.concat([buildings, residential_buildings, services, residential_services
-                                           ], ignore_index=True)
-                buildings_all['living_area'] = buildings_all['living_area'].fillna(0).round(0)
-                buildings_all["service"] = [
-                    [{service: capacity}] if mask else []
-                    for mask, service, capacity in zip(buildings_all["service"].notna(), 
-                                                    buildings_all["service"], buildings_all["capacity"])
+        nonres_blocks = gdf_blocks[
+            gdf_blocks["zone"].isin(["industrial", "transport", "special"])
+        ].copy()
+
+        ignored_blocks = gdf_blocks[
+            ~gdf_blocks["zone"].isin(
+                [
+                    "residential",
+                    "business",
+                    "unknown",
+                    "industrial",
+                    "transport",
+                    "special",
                 ]
-                buildings_all = buildings_all[['floors_count', 'living_area', 'service', 'geometry']]
-                buildings_all = gpd.sjoin(buildings_all, gdf_blocks[["zone", "geometry"]])
-                buildings_all = buildings_all.drop(columns=['index_right']).to_crs(4326)
-                return json.loads(buildings_all.to_json())
+            )
+        ].copy()
+
+        logger.info(
+            f"Genbuilder.run: blocks split by zone: "
+            f"residential={len(res_blocks)}, mixed={len(mixed_blocks)}, "
+            f"non_residential={len(nonres_blocks)}, ignored={len(ignored_blocks)}"
+        )
+        la_by_zone: Dict[str, float] = targets_by_zone.get("la_target", {}) or {}
+        coverage_by_zone: Dict[str, float] = (
+            targets_by_zone.get("coverage_area", {}) or {}
+        )
+        floors_avg_by_zone: Dict[str, float] = (
+            targets_by_zone.get("floors_avg", {}) or {}
+        )
+        density_by_zone: Dict[str, str] = (
+            targets_by_zone.get("density_scenario", {}) or {}
+        )
+
+        default_fg_by_zone: Dict[str, str] = (
+            targets_by_zone.get("default_floor_group") or {}
+        )
+        res_la_target = float(la_by_zone.get("residential", 0.0))
+        res_density_scenario = str(density_by_zone.get("residential", "min"))
+        res_default_fg = str(default_fg_by_zone.get("residential", "medium"))
+
+        logger.info(
+            f"Genbuilder.run: residential group -> blocks={len(res_blocks)}, "
+            f"la_target={res_la_target}, "
+            f"density_scenario={res_density_scenario}, "
+            f"default_floor_group='{res_default_fg}'"
+        )
+        nonres_coverage_by_zone: Dict[str, float] = {
+            z: float(coverage_by_zone.get(z, 0.0))
+            for z in ("industrial", "transport", "special")
+        }
+        total_nonres_cov_target = float(sum(nonres_coverage_by_zone.values()))
+
+        floors_avg_nonres: Dict[str, float] = {
+            z: float(floors_avg_by_zone[z])
+            for z in nonres_coverage_by_zone
+            if z in floors_avg_by_zone
+        }
+        logger.info(
+            f"Genbuilder.run: non-residential group -> blocks={len(nonres_blocks)}, "
+            f"coverage_by_zone={nonres_coverage_by_zone}, "
+            f"total_coverage_target={total_nonres_cov_target}, "
+            f"floors_avg_nonres={floors_avg_nonres}"
+        )
+        mixed_la_target = float(
+            la_by_zone.get("business", 0.0) + la_by_zone.get("unknown", 0.0)
+        )
+        mixed_cov_target = float(
+            coverage_by_zone.get("business", 0.0)
+            + coverage_by_zone.get("unknown", 0.0)
+        )
+
+        mixed_density_scenario = str(
+            density_by_zone.get("business")
+            or density_by_zone.get("unknown")
+            or "min"
+        )
+        mixed_default_fg = str(
+            default_fg_by_zone.get("business")
+            or default_fg_by_zone.get("unknown")
+            or "high"
+        )
+
+        floors_avg_mixed: Dict[str, float] = {
+            z: float(floors_avg_by_zone[z])
+            for z in ("business", "unknown")
+            if z in floors_avg_by_zone
+        }
+
+        logger.info(
+            f"Genbuilder.run: mixed group (business+unknown) -> blocks={len(mixed_blocks)}, "
+            f"la_target={mixed_la_target}, coverage_target={mixed_cov_target}, "
+            f"density_scenario={mixed_density_scenario}, "
+            f"default_floor_group='{mixed_default_fg}', "
+            f"floors_avg_mixed={floors_avg_mixed}"
+        )
+
+        service_normatives = None
+        if scenario_id is not None:
+            territory_id = await self.urban_api.get_territory_by_scenario(scenario_id)
+            service_normatives = await self.urban_api.get_normatives_for_territory(
+                territory_id
+            )
+            logger.info(
+                f"Genbuilder.run: loaded service normatives for territory_id={territory_id}"
+            )
+        else:
+            logger.warning(
+                "Genbuilder.run: scenario_id is None, service normatives are not loaded"
+            )
+
+        res_blocks_out = res_plots = res_buildings = None
+        nonres_blocks_out = nonres_plots = nonres_buildings = None
+        mixed_blocks_out = mixed_plots = mixed_buildings = None
+        residential_services = None
+
+        with self.generation_parameters.override(new_parameters):
+            with self.buildings_generation_parameters.override(
+                new_building_parameters
+            ):
+                if len(res_blocks) > 0 and res_la_target > 0:
+                    logger.info(
+                        "Genbuilder.run: starting residential generation pipeline"
+                    )
+                    res_blocks_out, res_plots, res_buildings = (
+                        await self.residential_buildings_generator.run(
+                            mode="residential",
+                            blocks=res_blocks,
+                            la_target=res_la_target,
+                            density_scenario=res_density_scenario,
+                            default_floor_group=res_default_fg,
+                        )
+                    )
+                    logger.info(
+                        f"Genbuilder.run: residential generation finished, "
+                        f"blocks={len(res_blocks_out)}, plots={len(res_plots)}, "
+                        f"buildings={len(res_buildings)}"
+                    )
+
+                    if (
+                        service_normatives is not None
+                        and res_blocks_out is not None
+                        and res_plots is not None
+                        and res_buildings is not None
+                        and len(res_buildings) > 0
+                    ):
+                        residential_services = (
+                            self.residential_service_generator.generate_services(
+                                res_blocks_out,
+                                res_plots,
+                                res_buildings,
+                                service_normatives,
+                                utm,
+                            )
+                        )
+                        logger.info(
+                            f"Genbuilder.run: residential services generated, "
+                            f"count={len(residential_services)}"
+                        )
+                    else:
+                        logger.info(
+                            "Genbuilder.run: residential services not generated "
+                            "(missing normatives or buildings)"
+                        )
+                else:
+                    logger.info(
+                        "Genbuilder.run: residential generation skipped "
+                        "(no blocks or la_target <= 0)"
+                    )
+                if len(nonres_blocks) > 0 and total_nonres_cov_target > 0:
+                    logger.info(
+                        "Genbuilder.run: starting non-residential generation pipeline"
+                    )
+                    nonres_blocks_out, nonres_plots, nonres_buildings = (
+                        await self.residential_buildings_generator.run(
+                            mode="non_residential",
+                            blocks=nonres_blocks,
+                            coverage_target_by_zone=nonres_coverage_by_zone,
+                            floors_avg_by_zone=floors_avg_nonres,
+                        )
+                    )
+                    logger.info(
+                        f"Genbuilder.run: non-residential generation finished, "
+                        f"blocks={len(nonres_blocks_out)}, plots={len(nonres_plots)}, "
+                        f"buildings={len(nonres_buildings)}"
+                    )
+                else:
+                    logger.info(
+                        "Genbuilder.run: non-residential generation skipped "
+                        "(no blocks or coverage_target <= 0)"
+                    )
+                if (
+                    len(mixed_blocks) > 0
+                    and (mixed_la_target > 0 or mixed_cov_target > 0)
+                ):
+                    logger.info(
+                        "Genbuilder.run: starting mixed generation pipeline "
+                        "(business + unknown)"
+                    )
+                    mixed_blocks_out, mixed_plots, mixed_buildings = (
+                        await self.residential_buildings_generator.run(
+                            mode="mixed",
+                            blocks=mixed_blocks,
+                            la_target=mixed_la_target,
+                            coverage_target=mixed_cov_target,
+                            density_scenario=mixed_density_scenario,
+                            default_floor_group=mixed_default_fg,
+                            floors_avg_by_zone=floors_avg_mixed,
+                        )
+                    )
+                    logger.info(
+                        f"Genbuilder.run: mixed generation finished, "
+                        f"blocks={len(mixed_blocks_out)}, plots={len(mixed_plots)}, "
+                        f"buildings={len(mixed_buildings)}"
+                    )
+                else:
+                    logger.info(
+                        "Genbuilder.run: mixed generation skipped "
+                        "(no blocks or both targets are 0)"
+                    )
+
+        frames: List[gpd.GeoDataFrame] = []
+
+        if nonres_buildings is not None and len(nonres_buildings) > 0:
+            frames.append(nonres_buildings)
+        if mixed_buildings is not None and len(mixed_buildings) > 0:
+            frames.append(mixed_buildings)
+        if res_buildings is not None and len(res_buildings) > 0:
+            frames.append(res_buildings)
+        if residential_services is not None and len(residential_services) > 0:
+            frames.append(residential_services)
+
+        if not frames:
+            logger.warning(
+                "Genbuilder.run: no buildings generated in any zone group, "
+                "returning empty FeatureCollection"
+            )
+            empty = gpd.GeoDataFrame(
+                columns=[
+                    "floors_count",
+                    "living_area",
+                    "functional_area",
+                    "building_area",
+                    "service",
+                    "zone",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs="EPSG:4326",
+            )
+            return json.loads(empty.to_json())
+
+        buildings_all = gpd.GeoDataFrame(
+            pd.concat(frames, ignore_index=True),
+            geometry="geometry",
+            crs=utm,
+        )
+        if "living_area" not in buildings_all.columns:
+            buildings_all["living_area"] = 0.0
+        buildings_all["living_area"] = buildings_all["living_area"].fillna(0).round(0)
+
+        if "functional_area" not in buildings_all.columns:
+            buildings_all["functional_area"] = 0.0
+        buildings_all["functional_area"] = buildings_all["functional_area"].fillna(0.0)
+        if "floors_count" not in buildings_all.columns:
+            buildings_all["floors_count"] = 0.0
+        buildings_all["floors_count"] = buildings_all["floors_count"].fillna(0.0)
+        footprint_area = buildings_all.geometry.area
+        floors = buildings_all["floors_count"]
+        buildings_all["building_area"] = footprint_area * floors
+        if "service" in buildings_all.columns and "capacity" in buildings_all.columns:
+            buildings_all["service"] = [
+                [{service: capacity}]
+                if (pd.notna(service) and pd.notna(capacity))
+                else []
+                for service, capacity in zip(
+                    buildings_all["service"], buildings_all["capacity"]
+                )
+            ]
+        else:
+            if "service" not in buildings_all.columns:
+                buildings_all["service"] = [[] for _ in range(len(buildings_all))]
+        buildings_all = buildings_all[
+            [
+                "floors_count",
+                "living_area",
+                "functional_area",
+                "building_area",
+                "service",
+                "geometry",
+            ]
+        ]
+        buildings_all = gpd.sjoin(
+            buildings_all,
+            gdf_blocks[["zone", "geometry"]],
+            how="left",
+            predicate="intersects",
+        )
+        buildings_all = buildings_all.drop(columns=["index_right"])
+        if "zone" not in buildings_all.columns:
+            buildings_all["zone"] = None
+
+        res_mask = buildings_all["zone"] == "residential"
+        nonres_mask = buildings_all["zone"].isin(
+            ["industrial", "transport", "special"]
+        )
+        mixed_mask = buildings_all["zone"].isin(["business", "unknown"])
+        buildings_all.loc[res_mask, "functional_area"] = 0.0
+        buildings_all.loc[nonres_mask, "living_area"] = 0.0
+        logger.info(
+            f"Genbuilder.run: final zones distribution in buildings: "
+            f"residential={res_mask.sum()}, mixed={mixed_mask.sum()}, "
+            f"non_residential={nonres_mask.sum()}"
+        )
+        buildings_all = buildings_all.to_crs(4326)
+
+        logger.info(
+            f"Genbuilder.run: final buildings count={len(buildings_all)}, "
+            f"crs={buildings_all.crs}"
+        )
+
+        return json.loads(buildings_all.to_json())
