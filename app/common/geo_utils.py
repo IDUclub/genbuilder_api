@@ -5,21 +5,11 @@ import geopandas as gpd
 from shapely.geometry.base import BaseGeometry
 from shapely.validation import make_valid
 
-
-# ---------- 1. Угол MRR (из п.2, на всякий случай целиком) ----------
-
 def longest_edge_angle_mrr(
     poly: BaseGeometry,
     *,
     degrees: bool = False,
 ) -> float:
-    """
-    Угол самой длинной стороны minimum rotated rectangle для полигона.
-
-    Возвращает:
-        - в радианах (по умолчанию) или
-        - в градусах, если degrees=True.
-    """
     if poly is None or poly.is_empty:
         return 0.0
 
@@ -49,15 +39,7 @@ def longest_edge_angle_mrr(
     except Exception:
         return 0.0
 
-
-# ---------- 2. safe_float (п.5) ----------
-
 def safe_float(value, default: float = 0.0) -> float:
-    """
-    Надёжный каст к float с обработкой None / строк / NaN.
-
-    Если не получается привести или значение невалидно — возвращает default.
-    """
     try:
         if value is None:
             return default
@@ -68,15 +50,7 @@ def safe_float(value, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
 
-
-# ---------- 3. Геометрия: safe_make_valid (п.4) ----------
-
 def safe_make_valid(geom: Optional[BaseGeometry]) -> Optional[BaseGeometry]:
-    """
-    Попытаться привести геометрию к валидной через make_valid / buffer(0).
-
-    Если ничего не вышло — вернуть None.
-    """
     if geom is None or geom.is_empty:
         return geom
 
@@ -95,17 +69,11 @@ def safe_make_valid(geom: Optional[BaseGeometry]) -> Optional[BaseGeometry]:
         return None
     return geom
 
-
-# ---------- 4. Фильтрация GDF (валидные полигоны) (п.4) ----------
-
 def filter_valid_polygons(
     gdf: gpd.GeoDataFrame,
     *,
     min_area: float = 0.0,
 ) -> gpd.GeoDataFrame:
-    """
-    Оставляет только непустые Polygon/MultiPolygon, опционально с порогом по площади.
-    """
     if gdf.empty:
         return gdf
 
@@ -120,15 +88,9 @@ def filter_valid_polygons(
 
     return gdf
 
-
-# ---------- 5. CRS helper (ensure_crs) (п.4/5) ----------
-
 def ensure_crs(gdf: gpd.GeoDataFrame, target_crs) -> gpd.GeoDataFrame:
-    """
-    Убедиться, что GDF в нужном CRS. Если нет — перепроецировать.
-    """
     if gdf.crs is None:
-        raise ValueError("GeoDataFrame без CRS, не ясно, как перепроецировать.")
+        raise ValueError("GeoDataFrame wthout CRS.")
     if str(gdf.crs) != str(target_crs):
         return gdf.to_crs(target_crs)
     return gdf

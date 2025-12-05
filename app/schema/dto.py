@@ -43,17 +43,6 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
 
 
 class ScenarioBody(BaseModel):
-    """
-    Scenario-level parameters for functional zones.
-
-    Semantics:
-    - la_target[z]:       суммарная ЖИЛАЯ площадь (living area) для зоны z (м²)
-    - coverage_area[z]:   суммарная НЕЖИЛАЯ площадь (functional/non-res area) для зоны z (м²)
-    - floors_avg[z]:      средняя этажность застройки в зоне z
-    - density_scenario[z]:сценарий плотности/FAR для жилой компоненты ("min"/"mean"/"max")
-    - default_floor_group[z]: дефолтный floors_group для жилой компоненты зоны z
-    """
-
     targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
             "la_target": {
@@ -135,17 +124,6 @@ class ScenarioBody(BaseModel):
 
 
 class TerritoryRequest(BaseModel):
-    """
-    Request for direct territory-based generation (no scenario lookup).
-
-    Semantics of targets_by_zone:
-    - la_target[z]:           суммарная ЖИЛАЯ площадь (living area) для зоны z (м²)
-    - coverage_area[z]:       суммарная НЕЖИЛАЯ площадь (functional/non-res area) для зоны z (м²)
-    - floors_avg[z]:          средняя этажность застройки в зоне z
-    - density_scenario[z]:    сценарий плотности/FAR для жилой компоненты зоны z
-    - default_floor_group[z]:дефолтный floors_group для жилой компоненты зоны z
-    """
-
     blocks: BlockFeatureCollection = Field(
         ...,
         description=(
@@ -271,18 +249,6 @@ class TerritoryRequest(BaseModel):
 
 
 class BuildingFeatureCollection(BaseModel):
-    """
-    Output FeatureCollection of generated buildings.
-
-    Expected properties per feature:
-    - living_area:      residential living area (m²), 0 for pure non-res blocks
-    - functional_area:  non-res functional area (м²), 0 for чисто жилых
-    - building_area:    суммарная площадь здания по этажам (footprint * floors_count)
-    - floors_count:     этажность здания
-    - service:          optional list of {service_name: capacity}
-    - zone:             functional zone label of the block
-    """
-
     type: str = Field(...)
     features: list = Field(
         ...,

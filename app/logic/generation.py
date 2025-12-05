@@ -24,39 +24,10 @@ from app.logic.residential_service_generation import (
 
 class Genbuilder:
     """
-    Asynchronous orchestrator for the full Genbuilder pipeline.
-
-    Unified pipeline:
-
-    - Splits input blocks into three groups by `zone`:
-        * residential:      zone == "residential"
-        * mixed:            zone in {"business", "unknown"}
-        * non-residential:  zone in {"industrial", "transport", "special"}
-      Blocks with zones like "recreation" / "agriculture" / others are ignored.
-
-    - For each group it calls the updated generation orchestrator
-      (ResidentialGenBuilder with different `mode`):
-        * mode="residential"      – uses la_target / density_scenario /
-                                    default_floor_group
-        * mode="non_residential"  – uses coverage_area / floors_avg
-        * mode="mixed"            – uses both la_target and coverage_area,
-                                    with a multi-objective optimizer
-                                    (1:1 balance guaranteed at zone level,
-                                     by block where possible).
-
-    - Residential service buildings are generated on top of residential
-      outputs using ResidentialServiceGenerator and service normatives
-      from UrbanDBAPI.
-
-    - The final output is a single GeoJSON FeatureCollection of buildings
-      with:
-        * floors_count
-        * living_area        – residential area (m²), 0 for pure non-res
-        * functional_area    – non-res area (m²), 0 for чисто жилых
-        * building_area      – суммарная площадь по этажам (footprint * floors)
-        * service            – list[ {service_name: capacity} ] or []
-        * zone               – functional zone label, from original blocks
-        * geometry           – building footprint (EPSG:4326)
+    Async orchestrator for the full Genbuilder pipeline that loads or receives
+    urban blocks, runs residential / non-residential / mixed generation flows
+    with optional parameter overrides and service normatives, and returns a
+    unified GeoJSON FeatureCollection of buildings with key attributes.
     """
 
     def __init__(

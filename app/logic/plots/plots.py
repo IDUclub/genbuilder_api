@@ -21,10 +21,9 @@ from app.logic.plots.plot_tuner import PlotTuner
 
 class PlotsGenerator:
     """
-    Оркестратор:
-    - режет сегменты на участки;
-    - мерджит мелкие;
-    - подбирает параметры зданий.
+    Orchestrates the plots pipeline: slices segments into plots, iteratively
+    merges undersized plots, and retunes per-plot building parameters for the
+    chosen generation mode and target column.
     """
 
     def __init__(
@@ -66,8 +65,6 @@ class PlotsGenerator:
 
         segments = segments.dropna(subset=["plot_depth"]).copy()
         crs = segments.crs
-
-        # 1. сегменты → участки
         parts_list: list[gpd.GeoDataFrame] = []
         for _, r in segments.iterrows():
             p = self.slicer._slice_segment_with_plots(r, crs=crs)
@@ -91,10 +88,7 @@ class PlotsGenerator:
             crs=crs,
         )
 
-        # 2. слияние мелких участков
         result = self.merger.merge_small_plots_iterative(result, area_factor=0.5)
-
-        # 3. базовая фильтрация геометрий
         result = result[result.geometry.notna() & ~result.geometry.is_empty]
         result = result[result.geom_type.isin(["Polygon", "MultiPolygon"])]
 

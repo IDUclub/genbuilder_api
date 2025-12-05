@@ -24,18 +24,10 @@ from app.common.geo_utils import ensure_crs
 
 class ResidentialServiceGenerator:
     """
-    Generates service buildings (schools, kindergartens, clinics, etc.) for
-    *residential* blocks based on built living area and service normatives.
-
-    Адаптация под новый пайплайн:
-    - Используется только жилой жилой фонд (living_area) из жилого пайплайна
-      (mode="residential") для расчёта населения и сервисных мощностей;
-    - Генерируемые сервисные здания трактуются как НЕжилые:
-        * living_area = 0.0
-        * functional_area = building_area (по этажам)
-      (точное разбиение можно будет уточнить позже, но уже сейчас они
-       корректно попадают в функциональную площадь в финальном FC);
-    - Все расчёты делаются в метрике (тот же CRS, что и у residential blocks).
+    Generates non-residential service buildings for residential blocks by
+    converting built living area into per-block service capacity targets,
+    sampling service sites in block free space, and placing template-based
+    buildings (from OSM-derived projects) into those sites.
     """
 
     def __init__(self, params_provider: ParamsProvider):
@@ -51,21 +43,6 @@ class ResidentialServiceGenerator:
         buildings: gpd.GeoDataFrame,
         service_normatives: pd.DataFrame,
     ) -> Dict[Any, Dict[str, float]]:
-        """
-        Преобразует построенную жилую площадь в потребность в сервисах
-        (по кварталам, через src_index).
-
-        blocks:
-            Жилые кварталы после генерации (residential pipeline),
-            индекс – тот же, что в src_index у buildings
-            (после reset_index + rename).
-        buildings:
-            Здания жилого пайплайна (mode="residential") с колонкой living_area.
-        service_normatives:
-            Таблица с нормативами:
-            - service_name
-            - service_capacity (на 1000 жителей).
-        """
         la_per_block = buildings.groupby("src_index", dropna=False)["living_area"].sum()
 
         blocks = blocks.copy()
@@ -123,10 +100,6 @@ class ResidentialServiceGenerator:
         block_geom: BaseGeometry,
         plots_gdf: gpd.GeoDataFrame,
     ) -> BaseGeometry:
-        """
-        Свободная площадь квартала: block_geom MINUS residential plots.
-        """
-
         if block_geom is None or block_geom.is_empty:
             return block_geom
 
@@ -174,12 +147,7 @@ class ResidentialServiceGenerator:
 
     @staticmethod
     def _compute_main_axis_angle(poly: BaseGeometry) -> float:
-        """
-        Оценка главной оси квартала по minimum rotated rectangle (в градусах).
-        """
         angle = longest_edge_angle_mrr(poly, degrees=True)
-
-        # Нормализация под [-90; 90], как было в исходном коде
         if angle < -90.0:
             angle += 180.0
         elif angle >= 90.0:
@@ -197,10 +165,6 @@ class ResidentialServiceGenerator:
         existing_centroids: Optional[List[Point]] = None,
         min_dist_between_centers: Optional[float] = None,
     ) -> Optional[Polygon]:
-        """
-        Сэмплинг прямоугольных площадок внутри свободной части квартала
-        под сервисные объекты.
-        """
         if poly.is_empty:
             return None
 
@@ -267,10 +231,6 @@ class ResidentialServiceGenerator:
     def _place_building_in_plot(
         self, building_template: BaseGeometry, plot_geom: BaseGeometry
     ) -> Optional[BaseGeometry]:
-        """
-        Вписать прототип здания внутрь выбранной площадки plot_geom
-        с отступом INNER_BORDER.
-        """
         allowed_area = plot_geom.buffer(-self.generation_parameters.INNER_BORDER)
         if allowed_area.is_empty:
             return None
@@ -298,9 +258,6 @@ class ResidentialServiceGenerator:
         service_projects: gpd.GeoDataFrame,
         remaining_capacity: float,
     ) -> List[pd.Series]:
-        """
-        Подбор прототипов по близости к remaining_capacity.
-        """
         if service_projects.empty:
             return []
 
@@ -318,17 +275,6 @@ class ResidentialServiceGenerator:
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
     ) -> gpd.GeoDataFrame:
-        """
-        Генерирует сервисные здания внутри жилых кварталов.
-
-        ВАЖНО:
-        - На вход подаются только residential blocks и жилые plots,
-          чтобы свободная площадь считалась корректно.
-        - На выходе сервисные здания уже снабжены:
-            * living_area = 0.0
-            * functional_area = building_area (footprint * floors)
-          (в финальном пайплайне эти значения сохранятся).
-        """
         projects_local = ensure_crs(projects_gdf, blocks_crs)
         normalized_buildings: Dict[Any, BaseGeometry] = {}
         for row in projects_local.itertuples():
@@ -516,16 +462,6 @@ class ResidentialServiceGenerator:
         service_normatives: pd.DataFrame,
         crs: int | str,
     ) -> gpd.GeoDataFrame:
-        """
-        Высокоуровневый пайплайн генерации сервисов поверх жилого пайплайна.
-
-        Предполагается, что сюда приходят:
-        - blocks: residential blocks (выход из ResidentialGenBuilder для mode="residential");
-        - plots: residential plots;
-        - buildings: residential buildings (living_area > 0);
-        - service_normatives: норматива по сервисам;
-        - crs: метрика (тот же CRS, что и для residential pipeline).
-        """
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
 

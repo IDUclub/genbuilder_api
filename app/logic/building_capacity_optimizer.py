@@ -20,34 +20,9 @@ from app.common.building_math import (
 
 class CapacityOptimizer:
     """
-    Helper class for block-level capacity planning in generation pipeline.
-
-    It uses building parameter presets (via BuildingParamsProvider) and a chosen
-    FAR scenario ("min", "mean", "max") to:
-
-    - select representative building and plot dimensions;
-    - estimate usable area per building (living/functional, depending on target);
-    - compute the required number of buildings to reach target area;
-    - derive initial FAR and plot geometry attributes for each block.
-
-    The main entry points are:
-    - solve_block_initial(...) – compute parameters for a single block;
-    - compute_block(...) – wrapper for a pandas row with mode/target_col;
-    - compute_blocks_for_gdf(...) – apply the logic to an entire GeoDataFrame.
-
-    Supported modes:
-    - "residential":
-        * target_col="la_target" (living area, m²)
-        * building type выбирается по floors_group / floors_avg для жилых типов
-    - "non_residential":
-        * target_col="functional_target" (non-res area, m²)
-        * building type выбирается по zone + floors_avg (IND_*, TR_*, SPEC_*)
-    - "mixed":
-        * базовый capacity считается по target_col (обычно "la_target"),
-          но дальнейшая многокритериальная оптимизация учитывает
-          и la_target, и functional_target глубже по пайплайну
-        * building type для блоков business/unknown выбирается по
-          zone + floors_avg (BIZ_*)
+    Block-level capacity planner that uses preset building parameters and a FAR
+    scenario to derive representative building/plot dimensions and initial
+    capacity metrics for individual blocks or entire GeoDataFrames.
     """
 
     def __init__(
@@ -108,14 +83,6 @@ class CapacityOptimizer:
         building_params: BuildingParams,
         la_ratio: float | None = None,
     ) -> dict:
-        """
-        Solve initial capacity for a block given a target "usable" area.
-
-        target_area:
-            For residential: living area target (la_target).
-            For non-res: functional area target (functional_target).
-            Units must be m² in both cases.
-        """
 
         if la_ratio is None:
             la_ratio = building_params.la_coef
@@ -159,13 +126,7 @@ class CapacityOptimizer:
         target_col: str = "la_target",
         mode: str = "residential",
     ) -> pd.Series:
-        """
-        Compute capacity parameters for a single block (row) given:
 
-        - FAR scenario `far`,
-        - target column name (`la_target` / `functional_target`),
-        - generation mode (residential / non_residential / mixed).
-        """
         try:
             building_type = infer_building_type(row, mode=mode)
         except Exception:
@@ -269,10 +230,6 @@ class CapacityOptimizer:
         target_col: str = "la_target",
         mode: str = "residential",
     ) -> pd.DataFrame:
-        """
-        Apply compute_block(...) to each row of blocks_gdf and
-        concatenate the resulting capacity columns.
-        """
 
         base_cols = blocks_gdf.apply(
             lambda row: self.compute_block(

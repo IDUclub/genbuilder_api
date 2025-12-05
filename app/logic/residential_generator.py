@@ -8,7 +8,7 @@ from loguru import logger
 
 from app.logic.building_capacity_optimizer import CapacityOptimizer
 from app.logic.maximum_inscribed_rectangle import MIR
-from app.logic.segments import SegmentsAllocator
+from app.logic.segments.segments import SegmentsAllocator
 from app.logic.plots.plots import PlotsGenerator
 from app.logic.buildings import ResidentialBuildingsGenerator
 from app.logic.generation_params import GenParams, ParamsProvider
@@ -16,34 +16,9 @@ from app.logic.generation_params import GenParams, ParamsProvider
 
 class ResidentialGenBuilder:
     """
-    Orchestrates the full generation pipeline for different zone types.
-
-    Supported modes:
-    - mode="residential"
-        * uses a global la_target (sum residential living area in m²)
-        * distributes la_target across blocks proportionally to block area
-        * relies on `floors_group` (existing or default_floor_group)
-        * uses density_scenario ("min" / "mean" / "max") as FAR scenario
-
-    - mode="non_residential"
-        * uses coverage_target_by_zone (per-zone sum of non-res area in m²)
-          for zones: "industrial", "transport", "special"
-        * distributes coverage targets across blocks of each zone
-          proportionally to block area
-        * writes per-block `functional_target` (аналог la_target, но для нежилых)
-        * floors_avg_by_zone используется глубже (через CapacityOptimizer /
-          BuildingParamsProvider) для выбора типов зданий; здесь только
-          кладём его в колонку `floors_avg`, если передан
-
-    - mode="mixed"
-        * uses la_target (sum residential area for business+unknown) AND
-          coverage_target (sum non-res area for business+unknown)
-        * distributes оба таргета по площади блоков
-        * баланс 1:1 гарантирован на уровне всей mixed-группы,
-          по кварталам — по возможности обеспечивается многокритериальным
-          оптимизатором глубже по пайплайну
-        * default_floor_group применяется к жилой части (по аналогии
-          с residential), floors_avg_by_zone — к нежилой части
+    Orchestrates the full block → segments → plots → buildings pipeline for
+    residential, non-residential, and mixed zones, distributing targets by area,
+    computing capacity, packing rectangles, and generating building footprints.
     """
 
     def __init__(
@@ -72,9 +47,6 @@ class ResidentialGenBuilder:
         total_target: float,
         target_col: str,
     ) -> gpd.GeoDataFrame:
-        """
-        Distribute a scalar target across blocks proportionally to geometry.area.
-        """
         gdf = gdf.copy()
         gdf[target_col] = 0.0
 
@@ -95,9 +67,6 @@ class ResidentialGenBuilder:
         target_by_zone: Dict[str, float],
         target_col: str,
     ) -> gpd.GeoDataFrame:
-        """
-        Distribute zone-specific targets across blocks within each zone.
-        """
         gdf = gdf.copy()
         gdf[target_col] = 0.0
 
@@ -132,48 +101,12 @@ class ResidentialGenBuilder:
         coverage_target_by_zone: Optional[Dict[str, float]] = None,
         floors_avg_by_zone: Optional[Dict[str, float]] = None,
     ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
-        """
-        Unified entry point for all generation modes.
-
-        Parameters
-        ----------
-        mode:
-            "residential" | "non_residential" | "mixed"
-
-        blocks:
-            GeoDataFrame of input blocks in metric CRS (same as in Genbuilder).
-
-        la_target:
-            Sum of residential living area (m²) for this group of blocks.
-            Used in "residential" and "mixed" modes.
-
-        density_scenario:
-            FAR scenario label ("min" / "mean" / "max").
-            Used for "residential" and "mixed" (residential component).
-
-        default_floor_group:
-            Default floors_group to assign where missing in residential/mixed
-            blocks (for residential part).
-
-        coverage_target:
-            Sum of non-res functional area (m²) for this group of blocks.
-            Used in "mixed" mode.
-
-        coverage_target_by_zone:
-            Mapping from zone -> coverage target (m²). Used in
-            "non_residential" mode for zones "industrial", "transport",
-            "special".
-
-        floors_avg_by_zone:
-            Mapping from zone -> mean floors count for non-res / mixed
-            parts. Used deeper down the pipeline through building params.
-        """
 
         mode = str(mode).lower()
         if mode not in {"residential", "non_residential", "mixed"}:
             raise ValueError(f"Unknown generation mode: {mode!r}")
 
-        logger.info(
+        logger.debug(
             f"ResidentialGenBuilder.run: mode='{mode}', blocks={len(blocks)}, "
             f"la_target={la_target}, coverage_target={coverage_target}, "
             f"coverage_target_by_zone={coverage_target_by_zone}, "
@@ -203,7 +136,7 @@ class ResidentialGenBuilder:
                 )
 
             far_scenario = density_scenario or "min"
-            logger.info(
+            logger.debug(
                 f"ResidentialGenBuilder.run[residential]: blocks={len(blocks_gdf)}, "
                 f"la_total={la_total}, far='{far_scenario}', "
                 f"default_floor_group='{default_fg}'"
@@ -217,7 +150,7 @@ class ResidentialGenBuilder:
                 blocks_gdf, cov_by_zone, target_col="functional_target"
             )
             far_scenario = "mean"
-            logger.info(
+            logger.debug(
                 f"ResidentialGenBuilder.run[non_residential]: blocks={len(blocks_gdf)}, "
                 f"coverage_target_by_zone={cov_by_zone}, far='{far_scenario}'"
             )
@@ -244,7 +177,7 @@ class ResidentialGenBuilder:
                 )
 
             far_scenario = density_scenario or "min"
-            logger.info(
+            logger.debug(
                 f"ResidentialGenBuilder.run[mixed]: blocks={len(blocks_gdf)}, "
                 f"la_total={la_total}, coverage_total={cov_total}, "
                 f"far='{far_scenario}', default_floor_group='{default_fg}'"
@@ -286,7 +219,7 @@ class ResidentialGenBuilder:
             mode=mode,
         )
 
-        logger.info(
+        logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: capacity computed for "
             f"{len(blocks_with_capacity)} blocks"
         )
@@ -297,7 +230,7 @@ class ResidentialGenBuilder:
             n_jobs=self.generation_parameters.jobs_number,
         )
 
-        logger.info(
+        logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: segments generated, count={len(segments)}"
         )
         (
@@ -311,7 +244,7 @@ class ResidentialGenBuilder:
             target_col=target_col,
         )
 
-        logger.info(
+        logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: blocks and segments updated "
             f"(blocks={len(blocks_final)}, segments={len(segments_final)})"
         )
@@ -321,7 +254,7 @@ class ResidentialGenBuilder:
             target_col=target_col,
         )
 
-        logger.info(
+        logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: plots generated, count={len(plots)}"
         )
         buildings_gdf = self.buildings_generator.generate_buildings_from_plots(
@@ -329,7 +262,7 @@ class ResidentialGenBuilder:
             mode=mode,
         )
 
-        logger.info(
+        logger.debug(
             f"ResidentialGenBuilder.run[{mode}]: buildings generated, count={len(buildings_gdf)}"
         )
 

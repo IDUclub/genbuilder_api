@@ -22,11 +22,9 @@ from app.logic.building_type_resolver import infer_building_type
 
 class PlotTuner:
     """
-    Инкапсулирует:
-    - расчет эффективных размеров участков;
-    - генерацию дискретных опций L/W/H;
-    - hill-climbing по суммарной living area / FAR;
-    - запись результатов назад в GeoDataFrame.
+    Tunes per-plot building dimensions by generating discrete L/W/H options,
+    running a hill-climbing search to match block-level living area and FAR
+    targets, and writing the chosen parameters back into the plots GeoDataFrame.
     """
 
     def __init__(

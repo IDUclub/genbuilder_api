@@ -10,9 +10,9 @@ from shapely import affinity
 
 class PlotSegmentSlicer:
     """
-    Отвечает только за геометрию:
-    - делает кольцо квартала (ring);
-    - нарезает один сегмент на участки по plot_front/plot_depth.
+    Handles pure geometry operations for segmenting blocks: builds a ring
+    buffer around a block polygon and slices individual segments into plots
+    using plot_front / plot_depth along the segment’s main axis.
     """
 
     @staticmethod

@@ -5,17 +5,6 @@ from app.logic.building_params import BuildingType
 from app.common.geo_utils import safe_float
 
 def infer_building_type(row: pd.Series, mode: str) -> BuildingType | None:
-    """
-    Infer BuildingType from row data:
-
-    - сначала пробуем floors_group как прямое значение Enum;
-    - если не получилось, используем zone + floors_avg;
-    - residential → IZH/MKD_*;
-    - business/unknown → BIZ_*;
-    - industrial → IND_*;
-    - transport → TR_*;
-    - special → SPEC_*.
-    """
     zone = str(row.get("zone", "")).strip().lower()
     floors_group = row.get("floors_group")
     floors_avg_raw = row.get("floors_avg")

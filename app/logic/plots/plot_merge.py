@@ -5,7 +5,9 @@ import geopandas as gpd
 
 class PlotMerger:
     """
-    Отвечает за слияние участков по площади.
+    Merges undersized plots by unioning each small polygon with its best
+    shared-boundary neighbour, with an optional iterative pass until plots
+    reach a target area based on plot_front * plot_depth.
     """
     @staticmethod
     def merge_small_plots(

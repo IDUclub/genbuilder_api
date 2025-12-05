@@ -6,38 +6,14 @@ import geopandas as gpd
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
-from app.common.geo_utils import longest_edge_angle_mrr
-from app.common.geo_utils import filter_valid_polygons, safe_float
+from app.common.geo_utils import longest_edge_angle_mrr, filter_valid_polygons, safe_float
 
 class ResidentialBuildingsGenerator:
     """
-    Генератор контуров зданий по участкам (plots).
-
-    Вход: GeoDataFrame участков с геометрией и параметрами здания
-    (длина, ширина, этажность, полезная площадь).
-
-    Что делает:
-    - фильтрует валидные геометрии (непустые полигоны с положительной площадью);
-    - ориентирует здание вдоль самой длинной стороны minimum rotated rectangle;
-    - ставит один прямоугольный контур здания по центру участка с заданными L, W;
-    - считает:
-        * living_area / functional_area — в зависимости от режима;
-        * building_area – суммарная площадь по этажам = footprint_area * floors_count;
-    - возвращает GeoDataFrame с контурами зданий и ключевыми атрибутами.
-
-    Режимы:
-    - mode="residential"
-        * вся полезная площадь идёт в living_area, functional_area = 0;
-
-    - mode="non_residential"
-        * вся полезная площадь идёт в functional_area, living_area = 0;
-
-    - mode="mixed"
-        * на текущем этапе всё трактуем как living_area (functional_area = 0);
-          реальный 1:1 баланс реализуется выше по пайплайну, когда
-          многокритериальный оптимизатор будет допилен.
+    Generates rectangular building footprints from plot polygons by centering
+    a single L×W rectangle on each valid plot, aligned to its longest edge,
+    and computing living/functional areas and total building area per mode.
     """
-
     @staticmethod
     def generate_buildings_from_plots(
         plots_gdf: gpd.GeoDataFrame,
@@ -48,39 +24,6 @@ class ResidentialBuildingsGenerator:
         floors_col: str = "floors_count",
         area_col: str = "living_area",
     ) -> gpd.GeoDataFrame:
-        """
-        Преобразовать участки в здания.
-
-        Parameters
-        ----------
-        plots_gdf : GeoDataFrame
-            Участки с заданными параметрами здания.
-        mode : {"residential", "non_residential", "mixed"}
-            Режим интерпретации полезной площади.
-        len_col : str
-            Имя колонки с длиной здания (L).
-        width_col : str
-            Имя колонки с шириной здания (W).
-        floors_col : str
-            Имя колонки с числом этажей.
-        area_col : str
-            Имя колонки с «полезной» площадью на участок/здание
-            (обычно living_area, но для нежилых это функциональная площадь).
-
-        Returns
-        -------
-        GeoDataFrame
-            Здания с колонками:
-            - building_length
-            - building_width
-            - floors_count
-            - living_area
-            - functional_area
-            - building_area (footprint * floors_count)
-            - src_index (если был в plots_gdf)
-            - geometry (Polygon)
-        """
-
         mode = str(mode).lower()
         if mode not in {"residential", "non_residential", "mixed"}:
             raise ValueError(f"Unknown buildings generation mode: {mode!r}")
