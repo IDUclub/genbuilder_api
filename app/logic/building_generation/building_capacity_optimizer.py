@@ -8,8 +8,13 @@ import pandas as pd
 from app.logic.building_generation.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
-    BuildingType,
     BuildingParams,
+)
+from app.logic.building_generation.building_type_resolver import infer_building_type
+from app.common.building_math import (
+    usable_per_building,
+    far_from_dims,
+    building_need,
 )
 
 
@@ -95,95 +100,6 @@ class CapacityOptimizer:
 
         return params.plot_area_min, params.plot_area_max, area_base
 
-    def _infer_building_type(self, row: pd.Series, mode: str) -> BuildingType | None:
-        """
-        Infer BuildingType from row data:
-
-        - сначала пробуем floors_group как прямое значение Enum;
-        - если не получилось, используем zone + floors_avg;
-        - residential → IZH/MKD_*;
-        - business/unknown → BIZ_*;
-        - industrial → IND_*;
-        - transport → TR_*;
-        - special → SPEC_*.
-        """
-        zone = str(row.get("zone", "")).strip().lower()
-        floors_group = row.get("floors_group")
-        floors_avg_raw = row.get("floors_avg")
-        if isinstance(floors_group, str) and floors_group:
-            fg = floors_group.strip()
-            try:
-                return BuildingType(fg)
-            except ValueError:
-                try:
-                    return BuildingType[fg]
-                except KeyError:
-                    pass
-
-        floors_avg: float | None
-        try:
-            if floors_avg_raw is None:
-                floors_avg = None
-            else:
-                floors_avg_val = float(floors_avg_raw)
-                if math.isnan(floors_avg_val):
-                    floors_avg = None
-                else:
-                    floors_avg = floors_avg_val
-        except (TypeError, ValueError):
-            floors_avg = None
-        try:
-            geom = row.geometry
-            block_area = float(geom.area) if geom is not None else 0.0
-        except Exception:
-            block_area = 0.0
-        if zone == "residential" or mode == "residential":
-            if floors_avg is None:
-                return BuildingType.MKD_5_8
-            if floors_avg < 3:
-                return BuildingType.MKD_2_4
-            if floors_avg < 9:
-                return BuildingType.MKD_5_8
-            if floors_avg < 17:
-                return BuildingType.MKD_9_16
-            return BuildingType.HIGHRISE
-        if zone in {"business", "unknown"}:
-            if floors_avg is None:
-                return BuildingType.BIZ_MID
-
-            if floors_avg <= 4:
-                if block_area >= 15000.0:
-                    return BuildingType.BIZ_MALL
-                else:
-                    return BuildingType.BIZ_LOW
-            if floors_avg <= 8:
-                return BuildingType.BIZ_MID
-            return BuildingType.BIZ_TOWER
-
-        if zone == "industrial":
-            if floors_avg is None:
-                return BuildingType.IND_LIGHT
-            if floors_avg < 2:
-                return BuildingType.IND_WAREHOUSE
-            if floors_avg < 4:
-                return BuildingType.IND_LIGHT
-            return BuildingType.IND_HEAVY
-
-        if zone == "transport":
-            if floors_avg is None:
-                return BuildingType.TR_STATION
-            if floors_avg <= 2:
-                return BuildingType.TR_DEPOT
-            if floors_avg <= 4:
-                return BuildingType.TR_STATION
-            return BuildingType.TR_PARKING
-
-        if zone == "special":
-            if block_area >= 20000.0:
-                return BuildingType.SPEC_WASTE
-            return BuildingType.SPEC_TECH
-        return None
-
     def solve_block_initial(
         self,
         target_area: float,
@@ -218,20 +134,10 @@ class CapacityOptimizer:
         plot_area_base = float(area_base)
         plot_depth_base = plot_area_base / F if F > 0 else float("nan")
 
-        base_house_area = L * W
-        usable_per_building = base_house_area * H * la_ratio
-
-        if target_area > 0 and usable_per_building > 0:
-            building_need = int(math.ceil(target_area / usable_per_building))
-        else:
-            building_need = 0
-
-        far_target = (
-            (base_house_area * H) / plot_area_base
-            if plot_area_base > 0
-            else float("nan")
-        )
-
+        usable_one = usable_per_building(L, W, H, la_ratio)
+        building_need_val = building_need(target_area, usable_one)
+        far_target = far_from_dims(L, W, H, plot_area_base)
+        
         return {
             "building_length": L,
             "building_width": W,
@@ -239,8 +145,8 @@ class CapacityOptimizer:
             "plot_front": F,
             "plot_depth": plot_depth_base,
             "plot_area": plot_area_base,
-            "living_per_building": float(usable_per_building),
-            "building_need": int(building_need),
+            "living_per_building": float(usable_one),
+            "building_need": int(building_need_val),
             "building_capacity": None,
             "far_target": float(far_target),
         }
@@ -261,7 +167,7 @@ class CapacityOptimizer:
         - generation mode (residential / non_residential / mixed).
         """
         try:
-            building_type = self._infer_building_type(row, mode=mode)
+            building_type = infer_building_type(row, mode=mode)
         except Exception:
             building_type = None
 

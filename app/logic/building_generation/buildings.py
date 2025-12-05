@@ -6,6 +6,8 @@ import geopandas as gpd
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
+from app.common.geo_utils import longest_edge_angle_mrr
+from app.common.geo_utils import filter_valid_polygons, safe_float
 
 class ResidentialBuildingsGenerator:
     """
@@ -83,9 +85,7 @@ class ResidentialBuildingsGenerator:
         if mode not in {"residential", "non_residential", "mixed"}:
             raise ValueError(f"Unknown buildings generation mode: {mode!r}")
 
-        plots = plots_gdf.copy()
-        plots = plots[plots.geometry.notna() & ~plots.geometry.is_empty]
-        plots = plots[plots.geom_type.isin(["Polygon", "MultiPolygon"])]
+        plots = filter_valid_polygons(plots_gdf)
         if "plot_area" in plots.columns:
             plots = plots[plots["plot_area"] > 0]
 
@@ -110,32 +110,9 @@ class ResidentialBuildingsGenerator:
             if L <= 0 or W <= 0:
                 continue
 
-            mrr = poly.minimum_rotated_rectangle
-
-            if mrr.geom_type == "Polygon":
-                coords = list(mrr.exterior.coords)[:-1]
-            elif mrr.geom_type == "LineString":
-                coords = list(mrr.coords)
-            else:
+            angle = longest_edge_angle_mrr(poly, degrees=False)
+            if angle == 0.0 and poly.minimum_rotated_rectangle.is_empty:
                 continue
-
-            if len(coords) < 2:
-                continue
-
-            max_d = -1.0
-            dx = dy = 0.0
-            for i in range(len(coords) - 1):
-                x1, y1 = coords[i]
-                x2, y2 = coords[i + 1]
-                d = (x2 - x1) ** 2 + (y2 - y1) ** 2
-                if d > max_d:
-                    max_d = d
-                    dx, dy = x2 - x1, y2 - y1
-
-            if max_d <= 0:
-                continue
-
-            angle = math.atan2(dy, dx)
 
             cx, cy = poly.centroid.x, poly.centroid.y
             ux, uy = math.cos(angle), math.sin(angle)
@@ -166,15 +143,9 @@ class ResidentialBuildingsGenerator:
                 continue
 
             floors_val = r.get(floors_col)
-            try:
-                floors = float(floors_val) if floors_val is not None else float("nan")
-            except (TypeError, ValueError):
-                floors = float("nan")
+            floors = safe_float(floors_val, default=float("nan"))
             usable_raw = r.get(area_col)
-            try:
-                usable_area = float(usable_raw) if usable_raw is not None else 0.0
-            except (TypeError, ValueError):
-                usable_area = 0.0
+            usable_area = safe_float(usable_raw, default=0.0)
             if mode == "residential":
                 living_area = usable_area
                 functional_area = 0.0

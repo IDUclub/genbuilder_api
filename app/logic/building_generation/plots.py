@@ -25,6 +25,8 @@ from app.logic.postprocessing.generation_params import (
     ParamsProvider,
 )
 
+from app.logic.building_generation.building_type_resolver import infer_building_type
+
 
 class PlotsGenerator:
     """
@@ -534,7 +536,7 @@ class PlotsGenerator:
             return group
         try:
             repr_row = group.iloc[0]
-            building_type = self.capacity_optimizer._infer_building_type(
+            building_type = infer_building_type(
                 repr_row, mode=mode
             )
             logger.debug(

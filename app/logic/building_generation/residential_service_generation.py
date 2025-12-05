@@ -17,6 +17,10 @@ from shapely.validation import make_valid
 
 from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
 
+from app.common.geo_utils import longest_edge_angle_mrr
+from app.common.geo_utils import safe_make_valid
+from app.common.geo_utils import ensure_crs
+
 
 class ResidentialServiceGenerator:
     """
@@ -115,14 +119,6 @@ class ResidentialServiceGenerator:
         return projects_gdf
 
     @staticmethod
-    def _ensure_crs(gdf: gpd.GeoDataFrame, target_crs) -> gpd.GeoDataFrame:
-        if gdf.crs is None:
-            raise ValueError("GeoDataFrame без CRS, не ясно, как перепроецировать.")
-        if str(gdf.crs) != str(target_crs):
-            return gdf.to_crs(target_crs)
-        return gdf
-
-    @staticmethod
     def _get_block_free_area(
         block_geom: BaseGeometry,
         plots_gdf: gpd.GeoDataFrame,
@@ -134,13 +130,10 @@ class ResidentialServiceGenerator:
         if block_geom is None or block_geom.is_empty:
             return block_geom
 
-        try:
-            if not block_geom.is_valid:
-                block_geom = make_valid(block_geom)
-                if not block_geom.is_valid:
-                    block_geom = block_geom.buffer(0)
-        except Exception:
-            block_geom = block_geom.buffer(0)
+        block_geom_valid = safe_make_valid(block_geom)
+        if block_geom_valid is None or block_geom_valid.is_empty:
+            return block_geom
+        block_geom = block_geom_valid
 
         if plots_gdf.empty:
             return block_geom
@@ -149,21 +142,12 @@ class ResidentialServiceGenerator:
         for g in plots_gdf.geometry:
             if g is None or g.is_empty:
                 continue
-            try:
-                if not g.is_valid:
-                    g = make_valid(g)
-                    if not g.is_valid:
-                        g = g.buffer(0)
-            except Exception:
-                try:
-                    g = g.buffer(0)
-                except Exception:
-                    g = None
 
-            if g is None or g.is_empty:
+            g_valid = safe_make_valid(g)
+            if g_valid is None or g_valid.is_empty:
                 continue
 
-            cleaned_geoms.append(g)
+            cleaned_geoms.append(g_valid)
 
         if not cleaned_geoms:
             return block_geom
@@ -193,32 +177,15 @@ class ResidentialServiceGenerator:
         """
         Оценка главной оси квартала по minimum rotated rectangle (в градусах).
         """
-        try:
-            mrr = poly.minimum_rotated_rectangle
-            coords = list(mrr.exterior.coords)
-            if len(coords) < 4:
-                return 0.0
+        angle = longest_edge_angle_mrr(poly, degrees=True)
 
-            max_len = 0.0
-            best_angle = 0.0
-            for i in range(len(coords) - 1):
-                x1, y1 = coords[i]
-                x2, y2 = coords[i + 1]
-                dx = x2 - x1
-                dy = y2 - y1
-                seg_len = math.hypot(dx, dy)
-                if seg_len > max_len:
-                    max_len = seg_len
-                    best_angle = math.degrees(math.atan2(dy, dx))
+        # Нормализация под [-90; 90], как было в исходном коде
+        if angle < -90.0:
+            angle += 180.0
+        elif angle >= 90.0:
+            angle -= 180.0
 
-            if best_angle < -90.0:
-                best_angle += 180.0
-            elif best_angle >= 90.0:
-                best_angle -= 180.0
-
-            return best_angle
-        except Exception:
-            return 0.0
+        return angle
 
     def _sample_rect_in_polygon(
         self,
@@ -362,7 +329,7 @@ class ResidentialServiceGenerator:
             * functional_area = building_area (footprint * floors)
           (в финальном пайплайне эти значения сохранятся).
         """
-        projects_local = self._ensure_crs(projects_gdf, blocks_crs)
+        projects_local = ensure_crs(projects_gdf, blocks_crs)
         normalized_buildings: Dict[Any, BaseGeometry] = {}
         for row in projects_local.itertuples():
             type_id = getattr(row, "type_id")

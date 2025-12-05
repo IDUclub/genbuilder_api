@@ -16,6 +16,13 @@ from app.logic.building_generation.building_params import (
     BuildingParams,
 )
 
+from app.logic.building_generation.building_type_resolver import infer_building_type
+from app.common.building_math import (
+    usable_per_building,
+    far_from_dims,
+    building_need,
+)
+
 
 class SegmentsAllocator:
     """
@@ -269,8 +276,8 @@ class SegmentsAllocator:
             H = float(building_params.building_height[H_idx])
             F = float(building_params.plot_side[F_idx])
 
-            usable_per_building = L * W * H * la_ratio 
-            if usable_per_building <= 0:
+            usable_one = usable_per_building(L, W, H, la_ratio)
+            if usable_one <= 0:
                 return
 
             if F > 0:
@@ -280,34 +287,28 @@ class SegmentsAllocator:
 
             is_long_side_along_front = F >= plot_depth
 
-            building_need = (
-                int(math.ceil(target_val / usable_per_building))
-                if target_val > 0
-                else 0
-            )
+            building_need_val = building_need(target_val, usable_one)
 
             capacity_total = int(capacity_by_front_idx[F_idx])
 
-            if building_need > 0:
-                buildings_count_fallback = min(capacity_total, building_need)
+            if building_need_val > 0:
+                buildings_count_fallback = min(capacity_total, building_need_val)
             else:
                 buildings_count_fallback = capacity_total
-            total_la_fallback = buildings_count_fallback * usable_per_building
+            total_la_fallback = buildings_count_fallback * usable_one
 
             if total_la_fallback > fallback_total_la:
-                far_final_fb = (
-                    (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
-                )
+                far_final_fb = far_from_dims(L, W, H, plot_area_base)
                 fallback_total_la = float(total_la_fallback)
                 fallback = {
                     "L": L,
                     "W": W,
                     "H": H,
                     "F": F,
-                    "building_need": building_need,
+                    "building_need": building_need_val,
                     "building_capacity": capacity_total,
                     "buildings_count": buildings_count_fallback,
-                    "living_per_building": usable_per_building,
+                    "living_per_building": usable_one,
                     "total_usable_area": total_la_fallback,
                     "far_final": far_final_fb,
                 }
@@ -317,19 +318,17 @@ class SegmentsAllocator:
                     f"capacity_total={capacity_total}, total_la_fallback={total_la_fallback}"
                 )
 
-            if building_need <= 0 or capacity_total < building_need:
+            if building_need_val <= 0 or capacity_total < building_need_val:
                 return
 
             if only_long_front and not is_long_side_along_front:
                 return
 
-            buildings_count = building_need
-            total_la = buildings_count * usable_per_building
+            buildings_count = building_need_val
+            total_la = buildings_count * usable_one
             la_diff_abs = abs(total_la - target_val)
 
-            far_final = (
-                (L * W * H) / plot_area_base if plot_area_base > 0 else float("nan")
-            )
+            far_final = far_from_dims(L, W, H, plot_area_base)
             far_diff_abs = abs(far_final - far_initial)
 
             front_reduction = base_F - F
@@ -343,7 +342,6 @@ class SegmentsAllocator:
                 floor_delta,
                 area_diff_abs,
             )
-
             if (best_success_score is None) or (score < best_success_score):
                 best_success_score = score
                 best_success = {
@@ -351,10 +349,10 @@ class SegmentsAllocator:
                     "W": W,
                     "H": H,
                     "F": F,
-                    "building_need": building_need,
+                    "building_need": building_need_val,
                     "building_capacity": capacity_total,
                     "buildings_count": buildings_count,
-                    "living_per_building": usable_per_building,
+                    "living_per_building": usable_one,
                     "total_usable_area": total_la,
                     "far_final": far_final,
                 }
@@ -463,10 +461,10 @@ class SegmentsAllocator:
         W = chosen["W"]
         H = chosen["H"]
         F = chosen["F"]
-        building_need = chosen["building_need"]
+        building_need_val = chosen["building_need"]
         building_capacity = chosen["building_capacity"]
         buildings_count = chosen["buildings_count"]
-        usable_per_building = chosen["living_per_building"]
+        usable_one = chosen["living_per_building"]
         total_usable_area = chosen["total_usable_area"]
         far_final = chosen["far_final"]
 
@@ -529,7 +527,7 @@ class SegmentsAllocator:
             building_capacity = plots_capacity_total
 
         block_result = {
-            "building_need": int(building_need),
+            "building_need": int(building_need_val),
             "building_capacity": int(building_capacity),
             "buildings_count": int(buildings_count),
             "building_length": float(L),
@@ -539,7 +537,7 @@ class SegmentsAllocator:
             "plot_side_used": float(plot_front),
             "plot_depth": float(plot_depth) if not np.isnan(plot_depth) else np.nan,
             "plot_area": float(plot_area),
-            "living_per_building": float(usable_per_building),
+            "living_per_building": float(usable_one),
             "total_usable_area": float(total_usable_area),
             "la_diff": float(la_diff),
             "la_ratio": float(la_ratio_block),
@@ -621,7 +619,7 @@ class SegmentsAllocator:
                 continue
 
             try:
-                building_type = self.capacity_optimizer._infer_building_type(
+                building_type = infer_building_type(
                     row, mode=mode
                 )
                 logger.debug(
