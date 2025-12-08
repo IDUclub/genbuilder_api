@@ -85,7 +85,14 @@ class ResidentialBuildingsGenerator:
 
             if building_geom.is_empty:
                 continue
-
+            try:
+                inner_plot = poly.buffer(-3.0)
+            except GEOSException:
+                inner_plot = None
+            if inner_plot is None or inner_plot.is_empty:
+                continue
+            if not building_geom.within(inner_plot):
+                continue
             floors_val = r.get(floors_col)
             floors = safe_float(floors_val, default=float("nan"))
             usable_raw = r.get(area_col)
@@ -99,7 +106,6 @@ class ResidentialBuildingsGenerator:
             else:
                 living_area = usable_area
                 functional_area = 0.0
-                
             footprint_area = building_geom.area
             if math.isfinite(floors) and floors > 0:
                 building_area = footprint_area * floors
