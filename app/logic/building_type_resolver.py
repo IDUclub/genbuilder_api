@@ -19,46 +19,53 @@ def infer_building_type(row: pd.Series, mode: str) -> BuildingType | None:
     if zone == "residential" or mode == "residential":
         if floors_avg is None:
             return BuildingType.MKD_5_8
-        if floors_avg < 3:
+        elif floors_avg < 3:
             return BuildingType.MKD_2_4
-        if floors_avg < 9:
+        elif floors_avg < 9:
             return BuildingType.MKD_5_8
-        if floors_avg < 17:
+        elif floors_avg < 17:
             return BuildingType.MKD_9_16
-        return BuildingType.HIGHRISE
-    if zone in {"business", "unknown"}:
+        else:
+            return BuildingType.HIGHRISE
+
+    elif zone in {"business", "unknown"}:
         if floors_avg is None:
             return BuildingType.BIZ_MID
-
-        if floors_avg <= 4:
+        elif floors_avg <= 4:
             if block_area >= 15000.0:
                 return BuildingType.BIZ_MALL
             else:
                 return BuildingType.BIZ_LOW
-        if floors_avg <= 8:
+        elif floors_avg <= 8:
             return BuildingType.BIZ_MID
-        return BuildingType.BIZ_TOWER
+        else:
+            return BuildingType.BIZ_TOWER
 
-    if zone == "industrial":
+    elif zone == "industrial":
         if floors_avg is None:
             return BuildingType.IND_LIGHT
-        if floors_avg < 2:
+        elif floors_avg < 2:
             return BuildingType.IND_WAREHOUSE
-        if floors_avg < 4:
+        elif floors_avg < 4:
             return BuildingType.IND_LIGHT
-        return BuildingType.IND_HEAVY
+        else:
+            return BuildingType.IND_HEAVY
 
-    if zone == "transport":
+    elif zone == "transport":
         if floors_avg is None:
             return BuildingType.TR_STATION
-        if floors_avg <= 2:
+        elif floors_avg <= 2:
             return BuildingType.TR_DEPOT
-        if floors_avg <= 4:
+        elif floors_avg <= 4:
             return BuildingType.TR_STATION
-        return BuildingType.TR_PARKING
+        else:
+            return BuildingType.TR_PARKING
 
-    if zone == "special":
+    elif zone == "special":
         if block_area >= 20000.0:
             return BuildingType.SPEC_WASTE
-        return BuildingType.SPEC_TECH
-    return None
+        else:
+            return BuildingType.SPEC_TECH
+
+    else:
+        return None

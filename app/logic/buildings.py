@@ -54,7 +54,8 @@ class ResidentialBuildingsGenerator:
                 continue
 
             angle = longest_edge_angle_mrr(poly, degrees=False)
-            if angle == 0.0 and poly.minimum_rotated_rectangle.is_empty:
+            EPS = 1e-6
+            if abs(angle) < EPS and poly.minimum_rotated_rectangle.is_empty:
                 continue
 
             cx, cy = poly.centroid.x, poly.centroid.y
