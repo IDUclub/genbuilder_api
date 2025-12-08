@@ -49,75 +49,77 @@ class ScenarioBody(BaseModel):
                 "residential": 20000,
                 "business": 10000,
                 "unknown": 10000,
-                "industrial": 0, # TODO: remove after implementation of new logic
-                "transport": 0, # TODO: remove after implementation of new logic
-                "special": 0 # TODO: remove after implementation of new logic
+                "industrial": 0,
+                "transport": 0,
+                "special": 0,
+            },
+            "coverage_area": {
+                "business": 10000,
+                "unknown": 10000,
+                "industrial": 20000,
+                "transport": 10000,
+                "special": 10000,
             },
             "floors_avg": {
-                "residential": 5, # TODO: remove after implementation of new logic
+                "residential": 5,
                 "business": 7,
                 "unknown": 5,
                 "industrial": 5,
                 "transport": 1,
-                "special": 3
+                "special": 3,
             },
             "density_scenario": {
                 "residential": "min",
                 "business": "min",
-                "unknown": "min"
+                "unknown": "min",
             },
             "default_floor_group": {
                 "residential": "medium",
                 "business": "high",
-                "unknown": "high"
+                "unknown": "high",
             },
-            "coverage_area": {
-                "unknown": 0.7,
-                "business": 0.6,
-                "industrial": 0.7,
-                "transport": 0.5,
-                "special": 0.5
-            }
         },
-        description="Spatial and target parameters for functional zone types",
+        description=(
+            "Spatial and target parameters for functional zone types.\n"
+            "- la_target: residential living area targets (m²)\n"
+            "- coverage_area: non-res functional area targets (m²)\n"
+            "- floors_avg: mean floors for each zone\n"
+            "- density_scenario: FAR scenario for residential component\n"
+            "- default_floor_group: default floors_group for residential component"
+        ),
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {"residential": 20000, "business": 6000, "industrial": 0}, # TODO: remove after implementation of new logic
-                    "floors_avg": {"business": 7, "industrial": 5, "residential": 5},# TODO: remove after implementation of new logic
-                    "density_scenario": {"residential": "min", "business": "min"},
-                    "default_floor_group": {"residential": "medium", "business": "high"},
-                    "coverage_area": {"industrial": 0.7, "business": 0.6}
+                    "la_target": {
+                        "residential": 20000,
+                        "business": 6000,
+                        "industrial": 0,
+                    },
+                    "coverage_area": {
+                        "business": 6000,
+                        "industrial": 20000,
+                    },
+                    "floors_avg": {
+                        "residential": 5,
+                        "business": 7,
+                        "industrial": 5,
+                    },
+                    "density_scenario": {
+                        "residential": "min",
+                        "business": "mean",
+                    },
+                    "default_floor_group": {
+                        "residential": "medium",
+                        "business": "high",
+                    },
                 }
             ]
-        }
-    )
-
-    params: Optional[Dict[str, Any]] = Field(
-        default={
-            "knn": 8,
-            "e_thr": 0.8,
-            "il_thr": 0.5,
-            "sv1_thr": 0.5,
-            "slots": 5000
         },
-        description="Inference hyperparameters",
-        json_schema_extra={
-            "examples": [
-                {
-                    "knn": 8,
-                    "e_thr": 0.8,
-                    "il_thr": 0.5,
-                    "sv1_thr": 0.5,
-                    "slots": 5000
-                }
-            ]
-        }
     )
     generation_parameters: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Generation parameters, override base ones",
-        json_schema_extra={ "examples": [ { "cell_size_m": 10 }] }
+        json_schema_extra={"examples": [{"rectangle_finder_step": 5}]},
     )
 
 
@@ -140,7 +142,15 @@ class TerritoryRequest(BaseModel):
                 "transport": 0,
                 "special": 0,
                 "agriculture": 5000,
-                "recreation": 0
+                "recreation": 0,
+            },
+            "coverage_area": {
+                "business": 10000,
+                "industrial": 20000,
+                "transport": 10000,
+                "special": 10000,
+                "agriculture": 0,
+                "recreation": 0,
             },
             "floors_avg": {
                 "residential": 12,
@@ -149,18 +159,55 @@ class TerritoryRequest(BaseModel):
                 "transport": 1,
                 "special": 3,
                 "agriculture": 3,
-                "recreation": 1
-            }
+                "recreation": 1,
+            },
+            "density_scenario": {
+                "residential": "min",
+                "business": "min",
+                "unknown": "min",
+            },
+            "default_floor_group": {
+                "residential": "medium",
+                "business": "high",
+                "unknown": "high",
+            },
         },
-        description="Sum of living area and mean of floors count for functional zone types",
+        description=(
+            "Per-zone targets for generation:\n"
+            "- la_target: residential living area (m²)\n"
+            "- coverage_area: non-res functional area (m²)\n"
+            "- floors_avg: mean floors per zone\n"
+            "- density_scenario: FAR scenario for residential component\n"
+            "- default_floor_group: default floors_group for residential component"
+        ),
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {"residential": 20000, "business": 6000, "industrial": 0},
-                    "floors_avg": {"residential": 12, "business": 7, "industrial": 5},
+                    "la_target": {
+                        "residential": 20000,
+                        "business": 6000,
+                        "industrial": 0,
+                    },
+                    "coverage_area": {
+                        "business": 6000,
+                        "industrial": 20000,
+                    },
+                    "floors_avg": {
+                        "residential": 12,
+                        "business": 7,
+                        "industrial": 5,
+                    },
+                    "density_scenario": {
+                        "residential": "min",
+                        "business": "mean",
+                    },
+                    "default_floor_group": {
+                        "residential": "medium",
+                        "business": "high",
+                    },
                 }
             ]
-        }
+        },
     )
 
     params: Optional[Dict[str, Any]] = Field(
@@ -169,9 +216,9 @@ class TerritoryRequest(BaseModel):
             "e_thr": 0.8,
             "il_thr": 0.5,
             "sv1_thr": 0.5,
-            "slots": 5000
+            "slots": 5000,
         },
-        description="Inference hyperparameters",
+        description="Inference hyperparameters (kept for backward compatibility)",
         json_schema_extra={
             "examples": [
                 {
@@ -179,15 +226,16 @@ class TerritoryRequest(BaseModel):
                     "e_thr": 0.8,
                     "il_thr": 0.5,
                     "sv1_thr": 0.5,
-                    "slots": 5000
+                    "slots": 5000,
                 }
             ]
-        }
+        },
     )
+
     generation_parameters: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Generation parameters, override base ones",
-        json_schema_extra={ "examples": [ { "cell_size_m": 10 }] }
+        json_schema_extra={"examples": [{"cell_size_m": 10}]},
     )
 
     @model_validator(mode="after")
@@ -202,7 +250,15 @@ class TerritoryRequest(BaseModel):
 
 class BuildingFeatureCollection(BaseModel):
     type: str = Field(...)
-    features: list = Field(..., description="List of building features, service optional (else - null)")
+    features: list = Field(
+        ...,
+        description=(
+            "List of building features. "
+            "`properties` should at least contain "
+            "`floors_count`, `living_area`, `functional_area`, `building_area`, "
+            "`zone`; `service` is optional (else - empty list or null)."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -215,8 +271,11 @@ class BuildingFeatureCollection(BaseModel):
                             "type": "Feature",
                             "properties": {
                                 "living_area": 10636.33,
+                                "functional_area": 0.0,
+                                "building_area": 74453.31,
                                 "floors_count": 7,
-                                "service": [{"Школа": 350}]
+                                "service": [{"Школа": 350}],
+                                "zone": "residential",
                             },
                             "geometry": {
                                 "type": "Polygon",
@@ -226,9 +285,9 @@ class BuildingFeatureCollection(BaseModel):
                                         [31.04196685516627, 59.920231764344585],
                                         [31.04196685516627, 59.922346520462526],
                                         [31.03664649794203, 59.922346520462526],
-                                        [31.03664649794203, 59.920231764344585]
+                                        [31.03664649794203, 59.920231764344585],
                                     ]
-                                ]
+                                ],
                             },
                         }
                     ],
@@ -237,10 +296,11 @@ class BuildingFeatureCollection(BaseModel):
         }
     }
 
+
 __all__ = [
     "BlockFeatureCollection",
     "TerritoryRequest",
     "PIPELINE_EXAMPLE",
     "ScenarioRequest",
-    "BuildingFeatureCollection"
+    "BuildingFeatureCollection",
 ]

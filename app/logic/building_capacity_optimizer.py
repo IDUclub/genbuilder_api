@@ -5,29 +5,24 @@ import math
 import numpy as np
 import pandas as pd
 
-from app.logic.building_generation.building_params import (
+from app.logic.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
-    BuildingType,
     BuildingParams,
+)
+from app.logic.building_type_resolver import infer_building_type
+from app.common.building_math import (
+    usable_per_building,
+    far_from_dims,
+    building_need,
 )
 
 
 class CapacityOptimizer:
     """
-    Helper class for block-level capacity planning in residential generation.
-
-    It uses building parameter presets (via BuildingParamsProvider) and a chosen
-    FAR scenario ("min", "mean", "max") to:
-    - select representative building and plot dimensions;
-    - estimate living area per building;
-    - compute the required number of buildings to reach target living area;
-    - derive initial FAR and plot geometry attributes for each block.
-
-    The main entry points are:
-    - solve_block_initial(...) – compute parameters for a single block;
-    - compute_block(...) – wrapper for a pandas row;
-    - compute_blocks_for_gdf(...) – apply the logic to an entire GeoDataFrame.
+    Block-level capacity planner that uses preset building parameters and a FAR
+    scenario to derive representative building/plot dimensions and initial
+    capacity metrics for individual blocks or entire GeoDataFrames.
     """
 
     def __init__(
@@ -82,7 +77,7 @@ class CapacityOptimizer:
 
     def solve_block_initial(
         self,
-        target_la: float,
+        target_area: float,
         far: str,
         *,
         building_params: BuildingParams,
@@ -106,20 +101,10 @@ class CapacityOptimizer:
         plot_area_base = float(area_base)
         plot_depth_base = plot_area_base / F if F > 0 else float("nan")
 
-        base_house_area = L * W
-        living_per_building = base_house_area * H * la_ratio
-
-        if target_la > 0 and living_per_building > 0:
-            building_need = int(math.ceil(target_la / living_per_building))
-        else:
-            building_need = 0
-
-        far_target = (
-            (base_house_area * H) / plot_area_base
-            if plot_area_base > 0
-            else float("nan")
-        )
-
+        usable_one = usable_per_building(L, W, H, la_ratio)
+        building_need_val = building_need(target_area, usable_one)
+        far_target = far_from_dims(L, W, H, plot_area_base)
+        
         return {
             "building_length": L,
             "building_width": W,
@@ -127,16 +112,27 @@ class CapacityOptimizer:
             "plot_front": F,
             "plot_depth": plot_depth_base,
             "plot_area": plot_area_base,
-            "living_per_building": float(living_per_building),
-            "building_need": int(building_need),
+            "living_per_building": float(usable_one),
+            "building_need": int(building_need_val),
             "building_capacity": None,
             "far_target": float(far_target),
         }
 
-    def compute_block(self, row: pd.Series, far: str) -> pd.Series:
+    def compute_block(
+        self,
+        row: pd.Series,
+        far: str,
+        *,
+        target_col: str = "la_target",
+        mode: str = "residential",
+    ) -> pd.Series:
+
         try:
-            building_type = BuildingType(row["floors_group"])
+            building_type = infer_building_type(row, mode=mode)
         except Exception:
+            building_type = None
+
+        if building_type is None:
             return pd.Series(
                 {
                     "building_need": np.nan,
@@ -150,7 +146,7 @@ class CapacityOptimizer:
                     "building_width": np.nan,
                     "floors_count": np.nan,
                     "living_per_building": np.nan,
-                    "total_living_area": np.nan,
+                    "total_usable_area": np.nan,
                     "la_diff": np.nan,
                     "la_ratio": np.nan,
                     "far_initial": np.nan,
@@ -159,23 +155,50 @@ class CapacityOptimizer:
                 }
             )
 
-        building_params = self.building_generation_parameters.params_by_type[
-            building_type
-        ]
-        target_la = float(row["la_target"])
+        try:
+            building_params = self.building_generation_parameters.params_by_type[
+                building_type
+            ]
+        except KeyError:
+            return pd.Series(
+                {
+                    "building_need": np.nan,
+                    "building_capacity": np.nan,
+                    "buildings_count": 0,
+                    "plot_front": np.nan,
+                    "plot_depth": np.nan,
+                    "plot_area": np.nan,
+                    "plot_side_used": np.nan,
+                    "building_length": np.nan,
+                    "building_width": np.nan,
+                    "floors_count": np.nan,
+                    "living_per_building": np.nan,
+                    "total_usable_area": np.nan,
+                    "la_diff": np.nan,
+                    "la_ratio": np.nan,
+                    "far_initial": np.nan,
+                    "far_final": np.nan,
+                    "far_diff": np.nan,
+                }
+            )
+        try:
+            target_val_raw = row.get(target_col, 0.0)
+            target_val = float(target_val_raw)
+        except (TypeError, ValueError):
+            target_val = 0.0
 
         res = self.solve_block_initial(
-            target_la=target_la,
+            target_area=target_val,
             far=far,
             building_params=building_params,
             la_ratio=building_params.la_coef,
         )
 
         building_need = res["building_need"]
-        living_per_building = res["living_per_building"]
-        total_la = building_need * living_per_building
-        la_diff = total_la - target_la
-        la_ratio_block = total_la / target_la if target_la > 0 else np.nan
+        usable_per_building = res["living_per_building"]
+        total_usable = building_need * usable_per_building
+        la_diff = total_usable - target_val
+        la_ratio_block = total_usable / target_val if target_val > 0 else np.nan
 
         return pd.Series(
             {
@@ -189,8 +212,8 @@ class CapacityOptimizer:
                 "building_length": res["building_length"],
                 "building_width": res["building_width"],
                 "floors_count": res["floors"],
-                "living_per_building": living_per_building,
-                "total_living_area": total_la,
+                "living_per_building": usable_per_building,
+                "total_usable_area": total_usable,
                 "la_diff": la_diff,
                 "la_ratio": la_ratio_block,
                 "far_initial": res["far_target"],
@@ -201,12 +224,20 @@ class CapacityOptimizer:
 
     def compute_blocks_for_gdf(
         self,
-        blocks_gdf,
+        blocks_gdf: pd.DataFrame,
         far: str,
-    ):
+        *,
+        target_col: str = "la_target",
+        mode: str = "residential",
+    ) -> pd.DataFrame:
 
         base_cols = blocks_gdf.apply(
-            lambda row: self.compute_block(row, far=far),
+            lambda row: self.compute_block(
+                row,
+                far=far,
+                target_col=target_col,
+                mode=mode,
+            ),
             axis=1,
         )
         return pd.concat([blocks_gdf, base_cols], axis=1)

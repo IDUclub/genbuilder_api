@@ -6,38 +6,29 @@ import geopandas as gpd
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
+from app.common.geo_utils import longest_edge_angle_mrr, filter_valid_polygons, safe_float
 
 class ResidentialBuildingsGenerator:
     """
-    Generates residential building footprints inside plot polygons.
-
-    Given a GeoDataFrame of plots with preset building dimensions and attributes
-    (length, width, floors, living area), this class:
-    - filters valid plot geometries (non-empty polygons with positive area);
-    - orients each building along the longest edge of the plot’s minimum
-        rotated rectangle;
-    - places a single rectangular building at the plot centroid with the
-        requested length and width;
-    - returns a GeoDataFrame of building footprints with geometry and
-        key attributes (dimensions, floors, living_area, src_index).
-
-    Main entry point:
-    - generate_buildings_from_plots(...) – static method that converts plots
-        GeoDataFrame into a buildings GeoDataFrame.
+    Generates rectangular building footprints from plot polygons by centering
+    a single L×W rectangle on each valid plot, aligned to its longest edge,
+    and computing living/functional areas and total building area per mode.
     """
-
     @staticmethod
     def generate_buildings_from_plots(
         plots_gdf: gpd.GeoDataFrame,
+        *,
+        mode: str = "residential",
         len_col: str = "building_length",
         width_col: str = "building_width",
         floors_col: str = "floors_count",
-        la_col: str = "living_area",
+        area_col: str = "living_area",
     ) -> gpd.GeoDataFrame:
+        mode = str(mode).lower()
+        if mode not in {"residential", "non_residential", "mixed"}:
+            raise ValueError(f"Unknown buildings generation mode: {mode!r}")
 
-        plots = plots_gdf.copy()
-        plots = plots[plots.geometry.notna() & ~plots.geometry.is_empty]
-        plots = plots[plots.geom_type.isin(["Polygon", "MultiPolygon"])]
+        plots = filter_valid_polygons(plots_gdf)
         if "plot_area" in plots.columns:
             plots = plots[plots["plot_area"] > 0]
 
@@ -52,40 +43,20 @@ class ResidentialBuildingsGenerator:
             W = r.get(width_col)
             if L is None or W is None:
                 continue
+
             try:
                 L = float(L)
                 W = float(W)
             except (TypeError, ValueError):
                 continue
+
             if L <= 0 or W <= 0:
                 continue
 
-            mrr = poly.minimum_rotated_rectangle
-
-            if mrr.geom_type == "Polygon":
-                coords = list(mrr.exterior.coords)[:-1]
-            elif mrr.geom_type == "LineString":
-                coords = list(mrr.coords)
-            else:
+            angle = longest_edge_angle_mrr(poly, degrees=False)
+            EPS = 1e-6
+            if abs(angle) < EPS and poly.minimum_rotated_rectangle.is_empty:
                 continue
-
-            if len(coords) < 2:
-                continue
-
-            max_d = -1.0
-            dx = dy = 0.0
-            for i in range(len(coords) - 1):
-                x1, y1 = coords[i]
-                x2, y2 = coords[i + 1]
-                d = (x2 - x1) ** 2 + (y2 - y1) ** 2
-                if d > max_d:
-                    max_d = d
-                    dx, dy = x2 - x1, y2 - y1
-
-            if max_d <= 0:
-                continue
-
-            angle = math.atan2(dy, dx)
 
             cx, cy = poly.centroid.x, poly.centroid.y
             ux, uy = math.cos(angle), math.sin(angle)
@@ -115,13 +86,35 @@ class ResidentialBuildingsGenerator:
             if building_geom.is_empty:
                 continue
 
+            floors_val = r.get(floors_col)
+            floors = safe_float(floors_val, default=float("nan"))
+            usable_raw = r.get(area_col)
+            usable_area = safe_float(usable_raw, default=0.0)
+            if mode == "residential":
+                living_area = usable_area
+                functional_area = 0.0
+            elif mode == "non_residential":
+                living_area = 0.0
+                functional_area = usable_area
+            else:
+                living_area = usable_area
+                functional_area = 0.0
+                
+            footprint_area = building_geom.area
+            if math.isfinite(floors) and floors > 0:
+                building_area = footprint_area * floors
+            else:
+                building_area = float("nan")
+
             buildings.append(
                 {
                     "geometry": building_geom,
                     "building_length": L,
                     "building_width": W,
-                    "floors_count": r.get(floors_col),
-                    "living_area": r.get(la_col),
+                    "floors_count": floors_val,
+                    "living_area": living_area,
+                    "functional_area": functional_area,
+                    "building_area": building_area,
                     "src_index": r.get("src_index"),
                 }
             )
@@ -133,6 +126,8 @@ class ResidentialBuildingsGenerator:
                     "building_width",
                     "floors_count",
                     "living_area",
+                    "functional_area",
+                    "building_area",
                     "src_index",
                     "geometry",
                 ],

@@ -4,8 +4,8 @@ from typing import Dict, Any, List, Tuple, Optional, Hashable
 
 import math
 import random
+import asyncio
 
-import pandas as pd
 import pandas as pd
 import geopandas as gpd
 
@@ -16,26 +16,19 @@ from shapely.affinity import rotate, translate
 from shapely.errors import GEOSException
 from shapely.validation import make_valid
 
-from app.logic.postprocessing.generation_params import GenParams, ParamsProvider
+from app.logic.generation_params import GenParams, ParamsProvider
+
+from app.common.geo_utils import longest_edge_angle_mrr
+from app.common.geo_utils import safe_make_valid
+from app.common.geo_utils import ensure_crs
 
 
 class ResidentialServiceGenerator:
     """
-    Generates service buildings (schools, kindergartens, clinics, etc.) for
-    residential blocks based on population and OSM-based prototype projects.
-
-    Responsibilities:
-    - compute_service_limits_for_blocks(...) – converts built living area
-        into per-block service capacity targets using normatives;
-    - load_service_projects_from_osm_osmnx(...) – loads and parameterizes
-        prototype buildings from OSM links in service_projects;
-    - place_service_buildings(...) – places service sites inside blocks:
-        - uses free area (block minus residential plots);
-        - orients sites along the block’s main axis;
-        - enforces spacing between sites;
-        - fits prototype footprints into sampled plots;
-    - generate_services(...) – high-level entry point that ties everything
-        together and returns a GeoDataFrame of service buildings.
+    Generates non-residential service buildings for residential blocks by
+    converting built living area into per-block service capacity targets,
+    sampling service sites in block free space, and placing template-based
+    buildings (from OSM-derived projects) into those sites.
     """
 
     def __init__(self, params_provider: ParamsProvider):
@@ -51,20 +44,18 @@ class ResidentialServiceGenerator:
         buildings: gpd.GeoDataFrame,
         service_normatives: pd.DataFrame,
     ) -> Dict[Any, Dict[str, float]]:
-        la_per_block = buildings.groupby("src_index")["living_area"].sum()
+        la_per_block = buildings.groupby("src_index", dropna=False)["living_area"].sum()
 
         blocks = blocks.copy()
         blocks["actual_la"] = blocks["src_index"].map(la_per_block).fillna(0.0)
 
         all_limits: Dict[Any, Dict[str, float]] = {}
-        people_per_zone: Dict[Any, float] = {}
 
         for _, row in blocks.iterrows():
             zid = row["src_index"]
             actual_la = float(row["actual_la"])
 
             people = actual_la / self.generation_parameters.la_per_person
-            people_per_zone[zid] = people
 
             limits: Dict[str, float] = {}
 
@@ -79,11 +70,10 @@ class ResidentialServiceGenerator:
 
         return all_limits
 
-    def load_service_projects(
-        self
-    ) -> gpd.GeoDataFrame:
+    def load_service_projects(self) -> gpd.GeoDataFrame:
         projects_gdf = gpd.read_file(self.generation_parameters.service_projects_file)
         projects_gdf = projects_gdf.to_crs("EPSG:4326")
+
         expected_cols = [
             "service",
             "type_id",
@@ -101,19 +91,10 @@ class ResidentialServiceGenerator:
         ]
         missing = [c for c in expected_cols if c not in projects_gdf.columns]
         if missing:
-            raise ValueError(
-                f"Columns are missing: {missing}. "
-            )
+            raise ValueError(f"Columns are missing: {missing}.")
+
         projects_gdf = projects_gdf[expected_cols]
         return projects_gdf
-
-    @staticmethod
-    def _ensure_crs(gdf: gpd.GeoDataFrame, target_crs) -> gpd.GeoDataFrame:
-        if gdf.crs is None:
-            raise ValueError("GeoDataFrame без CRS, не ясно, как перепроецировать.")
-        if str(gdf.crs) != str(target_crs):
-            return gdf.to_crs(target_crs)
-        return gdf
 
     @staticmethod
     def _get_block_free_area(
@@ -122,89 +103,58 @@ class ResidentialServiceGenerator:
     ) -> BaseGeometry:
         if block_geom is None or block_geom.is_empty:
             return block_geom
-        try:
-            if not block_geom.is_valid:
-                block_geom = make_valid(block_geom)
-                if not block_geom.is_valid:
-                    block_geom = block_geom.buffer(0)
-        except Exception:
-            block_geom = block_geom.buffer(0)
+
+        block_geom_valid = safe_make_valid(block_geom)
+        if block_geom_valid is None or block_geom_valid.is_empty:
+            return block_geom
+        block_geom = block_geom_valid
 
         if plots_gdf.empty:
             return block_geom
+
         cleaned_geoms: List[BaseGeometry] = []
         for g in plots_gdf.geometry:
             if g is None or g.is_empty:
                 continue
-            try:
-                if not g.is_valid:
-                    g = make_valid(g)
-                    if not g.is_valid:
-                        g = g.buffer(0)
-            except Exception:
 
-                try:
-                    g = g.buffer(0)
-                except Exception:
-                    g = None
-
-            if g is None or g.is_empty:
+            g_valid = safe_make_valid(g)
+            if g_valid is None or g_valid.is_empty:
                 continue
 
-            cleaned_geoms.append(g)
+            cleaned_geoms.append(g_valid)
 
         if not cleaned_geoms:
-
             return block_geom
+
         try:
             plots_union = unary_union(cleaned_geoms)
         except GEOSException:
-
             union_geom = cleaned_geoms[0]
             for g in cleaned_geoms[1:]:
                 try:
                     union_geom = union_geom.union(g)
                 except GEOSException:
-
                     continue
             plots_union = union_geom
+
         try:
             free_area = block_geom.difference(plots_union)
         except GEOSException:
-
             block_fixed = make_valid(block_geom)
             plots_fixed = make_valid(plots_union)
             free_area = block_fixed.difference(plots_fixed)
+
         return free_area
 
     @staticmethod
     def _compute_main_axis_angle(poly: BaseGeometry) -> float:
-        try:
-            mrr = poly.minimum_rotated_rectangle
-            coords = list(mrr.exterior.coords)
-            if len(coords) < 4:
-                return 0.0
+        angle = longest_edge_angle_mrr(poly, degrees=True)
+        if angle < -90.0:
+            angle += 180.0
+        elif angle >= 90.0:
+            angle -= 180.0
 
-            max_len = 0.0
-            best_angle = 0.0
-            for i in range(len(coords) - 1):
-                x1, y1 = coords[i]
-                x2, y2 = coords[i + 1]
-                dx = x2 - x1
-                dy = y2 - y1
-                seg_len = math.hypot(dx, dy)
-                if seg_len > max_len:
-                    max_len = seg_len
-                    best_angle = math.degrees(math.atan2(dy, dx))
-
-            if best_angle < -90.0:
-                best_angle += 180.0
-            elif best_angle >= 90.0:
-                best_angle -= 180.0
-
-            return best_angle
-        except Exception:
-            return 0.0
+        return angle
 
     def _sample_rect_in_polygon(
         self,
@@ -228,7 +178,6 @@ class ResidentialServiceGenerator:
 
         if preferred_angle is not None:
             base = preferred_angle
-
             angle_candidates = [
                 base,
                 base + 5.0,
@@ -239,7 +188,6 @@ class ResidentialServiceGenerator:
                 base - 90.0,
             ]
         else:
-
             angle_candidates = [0.0, 90.0, 45.0, -45.0, 30.0, -30.0]
 
         for _ in range(max_attempts):
@@ -328,8 +276,7 @@ class ResidentialServiceGenerator:
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
     ) -> gpd.GeoDataFrame:
-
-        projects_local = self._ensure_crs(projects_gdf, blocks_crs)
+        projects_local = ensure_crs(projects_gdf, blocks_crs)
         normalized_buildings: Dict[Any, BaseGeometry] = {}
         for row in projects_local.itertuples():
             type_id = getattr(row, "type_id")
@@ -359,7 +306,6 @@ class ResidentialServiceGenerator:
             plots_block = plots_gdf[plots_gdf["src_index"] == block_id]
 
             free_area = self._get_block_free_area(block_geom, plots_block)
-
             if free_area.is_empty:
                 continue
 
@@ -423,7 +369,6 @@ class ResidentialServiceGenerator:
                         )
 
                         if plot_geom is None:
-
                             continue
 
                         building_oriented_main = rotate(
@@ -451,8 +396,16 @@ class ResidentialServiceGenerator:
                             )
 
                         if building_geom is None:
-
                             continue
+                        footprint_area = building_geom.area
+                        try:
+                            floors_val = float(floors) if floors is not None else 0.0
+                        except (TypeError, ValueError):
+                            floors_val = 0.0
+
+                        building_area = (
+                            footprint_area * floors_val if floors_val > 0 else 0.0
+                        )
 
                         row_out: Dict[str, Any] = {
                             "src_index": block_id,
@@ -460,6 +413,8 @@ class ResidentialServiceGenerator:
                             "project_id": type_id,
                             "capacity": capacity,
                             "floors_count": floors,
+                            "living_area": 0.0,              
+                            "functional_area": building_area,
                             "osm_url": osm_url,
                             "address": address,
                             "geometry": building_geom,
@@ -471,13 +426,11 @@ class ResidentialServiceGenerator:
                         placed_in_iteration = True
 
                         free_area = free_area.difference(plot_geom)
-
                         placed_plot_centers.append(plot_geom.centroid)
 
                         break
 
                     if not placed_in_iteration:
-
                         break
 
         if not service_buildings_rows:
@@ -486,6 +439,8 @@ class ResidentialServiceGenerator:
                     "service",
                     "capacity",
                     "floors_count",
+                    "living_area",
+                    "functional_area",
                     "geometry",
                 ],
                 geometry="geometry",
@@ -500,18 +455,29 @@ class ResidentialServiceGenerator:
 
         return service_buildings_gdf
 
-    def generate_services(self, blocks, plots, buildings, service_normatives, crs):
+    async def generate_services(
+        self,
+        blocks: gpd.GeoDataFrame,
+        plots: gpd.GeoDataFrame,
+        buildings: gpd.GeoDataFrame,
+        service_normatives: pd.DataFrame,
+        crs: int | str,
+    ) -> gpd.GeoDataFrame:
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
-        projects_gdf = self.load_service_projects()
-        all_limits = self.compute_service_limits_for_blocks(
-            blocks, buildings, service_normatives
+        projects_gdf = await asyncio.to_thread(self.load_service_projects)
+        all_limits = await asyncio.to_thread(
+            self.compute_service_limits_for_blocks,
+            blocks,
+            buildings,
+            service_normatives,
         )
-        services_buildings_gdf = self.place_service_buildings(
-            blocks=blocks,
-            plots_gdf=plots,
-            all_limits=all_limits,
-            projects_gdf=projects_gdf,
-            blocks_crs=crs,
+        services_buildings_gdf = await asyncio.to_thread(
+            self.place_service_buildings,
+            blocks,
+            plots,
+            all_limits,
+            projects_gdf,
+            crs,
         )
         return services_buildings_gdf
