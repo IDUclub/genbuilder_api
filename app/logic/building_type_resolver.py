@@ -17,13 +17,13 @@ def infer_building_type(row: pd.Series, mode: str) -> BuildingType | None:
     except Exception:
         block_area = 0.0
     if zone == "residential" or mode == "residential":
-        if floors_avg is None:
-            return BuildingType.MKD_5_8
-        elif floors_avg < 3:
+        if floors_group == 'private':
+            return BuildingType.IZH
+        elif floors_group == 'low':
             return BuildingType.MKD_2_4
-        elif floors_avg < 9:
+        elif floors_group == 'medium':
             return BuildingType.MKD_5_8
-        elif floors_avg < 17:
+        elif floors_group == 'high':
             return BuildingType.MKD_9_16
         else:
             return BuildingType.HIGHRISE
