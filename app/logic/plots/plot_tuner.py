@@ -17,7 +17,6 @@ from app.logic.generation_params import (
     GenParams,
     ParamsProvider,
 )
-from app.logic.building_type_resolver import infer_building_type
 
 
 class PlotTuner:
@@ -122,9 +121,8 @@ class PlotTuner:
         self,
         group: gpd.GeoDataFrame,
         gdf: gpd.GeoDataFrame,
-        *,
-        mode: str = "residential",
-        target_col: str = "la_target",
+        mode: str,
+        target_col: str,
     ) -> gpd.GeoDataFrame:
 
         if target_col not in group.columns:
@@ -155,21 +153,14 @@ class PlotTuner:
                 f"block_area <= 0, skip tuning (mode={mode})"
             )
             return group
-        try:
-            repr_row = group.iloc[0]
-            building_type = infer_building_type(
-                repr_row, mode=mode
-            )
+        
+        repr_row = group.iloc[0]
+        building_type = None
+        if "building_type" in repr_row.index:
+            building_type = repr_row.get("building_type")
             logger.debug(
                 f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
-                f"mode={mode}, zone={repr_row.get('zone')}, floors_group={repr_row.get('floors_group')}, "
-                f"floors_avg={repr_row.get('floors_avg')} -> building_type={building_type}"
-            )
-        except Exception as e:
-            building_type = None
-            logger.error(
-                f"[_tune_block] src_index={group['src_index'].iloc[0] if 'src_index' in group.columns else 'N/A'}: "
-                f"cannot infer BuildingType (mode={mode}, zone={group.get('zone', pd.Series([None])).iloc[0]}): {e!r}"
+                f"mode={mode}, using existing building_type from plots -> {building_type}"
             )
 
         if building_type is None:
@@ -402,9 +393,8 @@ class PlotTuner:
     def _recalc_buildings_for_plots(
         self,
         plots: gpd.GeoDataFrame,
-        *,
-        mode: str = "residential",
-        target_col: str = "la_target",
+        mode: str,
+        target_col: str,
     ) -> gpd.GeoDataFrame:
 
         required_cols = {"src_index", "angle", target_col}

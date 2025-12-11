@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pandas as pd
 
@@ -104,7 +102,7 @@ class CapacityOptimizer:
         usable_one = usable_per_building(L, W, H, la_ratio)
         building_need_val = building_need(target_area, usable_one)
         far_target = far_from_dims(L, W, H, plot_area_base)
-        
+
         return {
             "building_length": L,
             "building_width": W,
@@ -122,39 +120,11 @@ class CapacityOptimizer:
         self,
         row: pd.Series,
         far: str,
-        *,
-        target_col: str = "la_target",
-        mode: str = "residential",
+        target_col: str,
+        mode: str,
     ) -> pd.Series:
 
-        try:
-            building_type = infer_building_type(row, mode=mode)
-        except Exception:
-            building_type = None
-
-        if building_type is None:
-            return pd.Series(
-                {
-                    "building_need": np.nan,
-                    "building_capacity": np.nan,
-                    "buildings_count": 0,
-                    "plot_front": np.nan,
-                    "plot_depth": np.nan,
-                    "plot_area": np.nan,
-                    "plot_side_used": np.nan,
-                    "building_length": np.nan,
-                    "building_width": np.nan,
-                    "floors_count": np.nan,
-                    "living_per_building": np.nan,
-                    "total_usable_area": np.nan,
-                    "la_diff": np.nan,
-                    "la_ratio": np.nan,
-                    "far_initial": np.nan,
-                    "far_final": np.nan,
-                    "far_diff": np.nan,
-                }
-            )
-
+        building_type = infer_building_type(row, mode=mode)
         try:
             building_params = self.building_generation_parameters.params_by_type[
                 building_type
@@ -162,6 +132,7 @@ class CapacityOptimizer:
         except KeyError:
             return pd.Series(
                 {
+                    "building_type": building_type,
                     "building_need": np.nan,
                     "building_capacity": np.nan,
                     "buildings_count": 0,
@@ -202,6 +173,7 @@ class CapacityOptimizer:
 
         return pd.Series(
             {
+                "building_type": building_type,
                 "building_need": building_need,
                 "building_capacity": np.nan,
                 "buildings_count": building_need,
@@ -227,8 +199,8 @@ class CapacityOptimizer:
         blocks_gdf: pd.DataFrame,
         far: str,
         *,
-        target_col: str = "la_target",
-        mode: str = "residential",
+        target_col: str,
+        mode: str,
     ) -> pd.DataFrame:
 
         base_cols = blocks_gdf.apply(

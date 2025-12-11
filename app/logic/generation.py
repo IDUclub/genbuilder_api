@@ -21,7 +21,7 @@ from app.logic.residential_generator import ResidentialGenBuilder
 from app.logic.residential_service_generation import (
     ResidentialServiceGenerator,
 )
-
+from app.logic.restrictions import check_buildings_setbacks
 
 class Genbuilder:
     """
@@ -408,6 +408,7 @@ class Genbuilder:
         else:
             if "service" not in buildings_all.columns:
                 buildings_all["service"] = [[] for _ in range(len(buildings_all))]
+        buildings_all = check_buildings_setbacks(buildings_all)
         buildings_all['building_area'] = buildings_all['building_area'].round(0)
         buildings_all = buildings_all[
             [
@@ -415,6 +416,8 @@ class Genbuilder:
                 "living_area",
                 "building_area",
                 "service",
+                "broke_restriction_zone",
+                "building_type",
                 "geometry",
             ]
         ]

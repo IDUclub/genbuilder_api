@@ -66,6 +66,3 @@ def infer_building_type(row: pd.Series, mode: str) -> BuildingType | None:
             return BuildingType.SPEC_WASTE
         else:
             return BuildingType.SPEC_TECH
-
-    else:
-        return None

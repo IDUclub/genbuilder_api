@@ -276,4 +276,7 @@ class MIR:
             )
 
         rects_gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=gdf.crs)
+        building_type_map = gdf["building_type"]
+        rects_gdf["building_type"] = rects_gdf["src_index"].map(building_type_map)
+
         return rects_gdf

@@ -10,7 +10,6 @@ from app.logic.building_params import (
     BuildingParamsProvider,
 )
 
-from app.logic.building_type_resolver import infer_building_type
 from app.logic.segments.solver import BlockSolver
 
 
@@ -93,19 +92,12 @@ class SegmentsAllocator:
                 blocks.at[idx, "building_capacity"] = 0
                 blocks.at[idx, "buildings_count"] = 0
                 continue
-            try:
-                building_type = infer_building_type(row, mode=mode)
+            building_type = None
+            if "building_type" in row.index:
+                building_type = row.get("building_type")
                 logger.debug(
                     f"[update_blocks] block_idx={idx}, mode={mode}: "
-                    f"mapped zone={row.get('zone')} floors_group={fg} "
-                    f"-> building_type={building_type}"
-                )
-            except Exception as e:
-                building_type = None
-                logger.error(
-                    f"[update_blocks] block_idx={idx}, mode={mode}: cannot infer BuildingType "
-                    f"from row (zone={row.get('zone')}, floors_group={fg}): {e!r}, "
-                    f"set building_capacity=0, buildings_count=0"
+                    f"using existing building_type from blocks -> {building_type}"
                 )
 
             if building_type is None:
