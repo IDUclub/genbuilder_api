@@ -53,9 +53,8 @@ class PlotsGenerator:
     def generate_plots(
         self,
         segments: gpd.GeoDataFrame,
-        *,
-        mode: str = "residential",
-        target_col: str = "la_target",
+        mode: str,
+        target_col: str,
     ) -> gpd.GeoDataFrame:
 
         logger.debug(

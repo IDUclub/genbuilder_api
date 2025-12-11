@@ -8,6 +8,7 @@ from shapely.geometry import Polygon
 
 from app.common.geo_utils import longest_edge_angle_mrr, filter_valid_polygons, safe_float
 
+
 class ResidentialBuildingsGenerator:
     """
     Generates rectangular building footprints from plot polygons by centering
@@ -18,7 +19,7 @@ class ResidentialBuildingsGenerator:
     def generate_buildings_from_plots(
         plots_gdf: gpd.GeoDataFrame,
         *,
-        mode: str = "residential",
+        mode: str,
         len_col: str = "building_length",
         width_col: str = "building_width",
         floors_col: str = "floors_count",
@@ -122,6 +123,7 @@ class ResidentialBuildingsGenerator:
                     "functional_area": functional_area,
                     "building_area": building_area,
                     "src_index": r.get("src_index"),
+                    "building_type": r.get("building_type"),
                 }
             )
 
@@ -135,6 +137,7 @@ class ResidentialBuildingsGenerator:
                     "functional_area",
                     "building_area",
                     "src_index",
+                    "building_type",
                     "geometry",
                 ],
                 geometry="geometry",
