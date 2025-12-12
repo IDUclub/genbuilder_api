@@ -20,9 +20,11 @@ class UrbanDBAPI:
         logger.info(f"Fetching functional zones from API: {api_url}")
         async with aiohttp.ClientSession() as session:
             json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)
+
         features = json_data.get("features", [])
         if not features:
             raise http_exception(404, f"No functional zones found for scenario {scenario_id}")
+
         records = []
         for feature in features:
             props = feature.get("properties", {})
@@ -33,7 +35,32 @@ class UrbanDBAPI:
                 "geometry": geom,
             }
             records.append(record)
+
         zones = gpd.GeoDataFrame(records, geometry="geometry", crs=4326)
+        if not zones.empty:
+            geoms = list(zones.geometry)
+            to_drop: set[int] = set()
+
+            for i in range(len(geoms)):
+                if i in to_drop:
+                    continue
+                gi = geoms[i]
+                if gi is None or gi.is_empty:
+                    continue
+                for j in range(i + 1, len(geoms)):
+                    if j in to_drop:
+                        continue
+                    gj = geoms[j]
+                    if gj is None or gj.is_empty:
+                        continue
+                    if gi.equals(gj):
+                        to_drop.add(j)
+
+            if to_drop:
+                before = len(zones)
+                zones = zones.drop(zones.index[list(to_drop)]).reset_index(drop=True)
+                logger.info(f"Removed duplicated (equal) polygons: {before - len(zones)} items.")
+
         logger.info(f"Zones for scenario {scenario_id} collected: {len(zones)} items.")
         return zones
     
