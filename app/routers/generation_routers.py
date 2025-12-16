@@ -1,8 +1,9 @@
 from typing import Annotated, List
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Query, Depends
 
 from app.dependencies import builder
 from app.schema.dto import ScenarioBody, TerritoryRequest, BuildingFeatureCollection
+from app.utils import auth
 
 generation_router = APIRouter()
 
@@ -15,6 +16,7 @@ async def pipeline_route(
     functional_zone_types: Annotated[List[str], Query(
         ..., description="Target functional zone types"
     , example=['residential', 'business', 'industrial'])],
+    token: str = Depends(auth.verify_token),
     body: ScenarioBody = Body(
         default_factory=ScenarioBody,
         description="Targets and hyperparameters as JSON (optional)"
@@ -24,6 +26,7 @@ async def pipeline_route(
         scenario_id=scenario_id,
         year=year,
         source=source,
+        token=token,
         functional_zone_types=functional_zone_types,
         targets_by_zone=body.targets_by_zone,
         generation_parameters_override=body.generation_parameters

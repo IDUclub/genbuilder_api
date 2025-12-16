@@ -50,6 +50,7 @@ class Genbuilder:
     async def run(
         self,
         targets_by_zone: Dict[str, Dict[str, float]],
+        token: str,
         blocks: Optional[BlockFeatureCollection] = None,
         scenario_id: Optional[int] = None,
         year: Optional[int] = None,
@@ -83,7 +84,7 @@ class Genbuilder:
             )
         else:
             gdf_blocks = await self.urban_api.get_territories_for_buildings(
-                scenario_id, year, source
+                scenario_id, year, source, token
             )
             logger.info(
                 f"Genbuilder.run: loaded blocks from UrbanDB, count={len(gdf_blocks)}"
@@ -221,9 +222,9 @@ class Genbuilder:
 
         service_normatives = None
         if scenario_id is not None:
-            territory_id = await self.urban_api.get_territory_by_scenario(scenario_id)
+            territory_id = await self.urban_api.get_territory_by_scenario(scenario_id, token)
             service_normatives = await self.urban_api.get_normatives_for_territory(
-                territory_id
+                territory_id, token
             )
             logger.info(
                 f"Genbuilder.run: loaded service normatives for territory_id={territory_id}"

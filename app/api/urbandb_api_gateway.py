@@ -15,11 +15,12 @@ class UrbanDBAPI:
         self.url = config.get("UrbanDB_API")
         self.handler = APIHandler()
 
-    async def get_territories_for_buildings(self, scenario_id: int, year: int, source: str):
+    async def get_territories_for_buildings(self, scenario_id: int, year: int, source: str, token: str):
         api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones?year={year}&source={source}"
         logger.info(f"Fetching functional zones from API: {api_url}")
+        headers = {'Authorization': f'Bearer {token}'}
         async with aiohttp.ClientSession() as session:
-            json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)
+            json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
 
         features = json_data.get("features", [])
         if not features:
@@ -64,22 +65,24 @@ class UrbanDBAPI:
         logger.info(f"Zones for scenario {scenario_id} collected: {len(zones)} items.")
         return zones
     
-    async def get_territory_by_scenario(self, scenario_id: int):
+    async def get_territory_by_scenario(self, scenario_id: int, token: str):
         api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}"
+        headers = {'Authorization': f'Bearer {token}'}
         logger.info(f"Fetching service normatives from API: {api_url}")
         async with aiohttp.ClientSession() as session:
-            json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)
+            json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
         territory_id =  json_data.get("project", {}).get("region", {}).get("id", False)
         if not territory_id:
             raise http_exception(404, f"No territory id found for scenario {scenario_id}")
         logger.info(f"Territory id for scenario {scenario_id} collected.")
         return territory_id
     
-    async def get_normatives_for_territory(self, territory_id: int):
+    async def get_normatives_for_territory(self, territory_id: int, token: str):
         api_url = f"{self.url.rstrip('/')}/api/v1/territory/{territory_id}/normatives?last_only=true&include_child_territories=false&cities_only=false"
         logger.info(f"Fetching service normatives from API: {api_url}")
+        headers = {'Authorization': f'Bearer {token}'}
         async with aiohttp.ClientSession() as session:
-            json_data = await self.handler.request("GET", api_url, session=session, expect_json=True)
+            json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
         service_normatives = []
         for service in json_data:
             service_data = service.get("service_type")
