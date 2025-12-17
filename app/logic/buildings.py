@@ -9,7 +9,7 @@ from shapely.geometry import Polygon
 from app.common.geo_utils import longest_edge_angle_mrr, filter_valid_polygons, safe_float
 
 
-class ResidentialBuildingsGenerator:
+class BuildingsGenerator:
     """
     Generates rectangular building footprints from plot polygons by centering
     a single L×W rectangle on each valid plot, aligned to its longest edge,

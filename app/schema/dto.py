@@ -48,10 +48,7 @@ class ScenarioBody(BaseModel):
             "la_target": {
                 "residential": 20000,
                 "business": 10000,
-                "unknown": 10000,
-                "industrial": 0,
-                "transport": 0,
-                "special": 0,
+                "unknown": 10000
             },
             "coverage_area": {
                 "business": 10000,
@@ -61,7 +58,6 @@ class ScenarioBody(BaseModel):
                 "special": 10000,
             },
             "floors_avg": {
-                "residential": 5,
                 "business": 7,
                 "unknown": 5,
                 "industrial": 5,
@@ -90,29 +86,36 @@ class ScenarioBody(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {
-                        "residential": 20000,
-                        "business": 6000,
-                        "industrial": 0,
-                    },
-                    "coverage_area": {
-                        "business": 6000,
-                        "industrial": 20000,
-                    },
-                    "floors_avg": {
-                        "residential": 5,
-                        "business": 7,
-                        "industrial": 5,
-                    },
-                    "density_scenario": {
-                        "residential": "min",
-                        "business": "mean",
-                    },
-                    "default_floor_group": {
-                        "residential": "medium",
-                        "business": "high",
-                    },
-                }
+                "la_target": {
+                    "residential": 20000,
+                    "business": 10000,
+                    "unknown": 10000
+                },
+                "coverage_area": {
+                    "business": 10000,
+                    "unknown": 10000,
+                    "industrial": 20000,
+                    "transport": 10000,
+                    "special": 10000,
+                },
+                "floors_avg": {
+                    "business": 7,
+                    "unknown": 5,
+                    "industrial": 5,
+                    "transport": 1,
+                    "special": 3,
+                },
+                "density_scenario": {
+                    "residential": "min",
+                    "business": "min",
+                    "unknown": "min",
+                },
+                "default_floor_group": {
+                    "residential": "medium",
+                    "business": "high",
+                    "unknown": "high",
+                },
+            }
             ]
         },
     )

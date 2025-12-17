@@ -11,11 +11,11 @@ from app.logic.building_capacity_optimizer import CapacityOptimizer
 from app.logic.maximum_inscribed_rectangle import MIR
 from app.logic.segments.segments import SegmentsAllocator
 from app.logic.plots.plots import PlotsGenerator
-from app.logic.buildings import ResidentialBuildingsGenerator
+from app.logic.buildings import BuildingsGenerator
 from app.logic.generation_params import GenParams, ParamsProvider
 
 
-class ResidentialGenBuilder:
+class BlockGenerator:
     """
     Orchestrates the full block → segments → plots → buildings pipeline for
     residential, non-residential, and mixed zones, distributing targets by area,
@@ -28,7 +28,7 @@ class ResidentialGenBuilder:
         max_rectangle_finder: MIR,
         segments_allocator: SegmentsAllocator,
         plots_generator: PlotsGenerator,
-        buildings_generator: ResidentialBuildingsGenerator,
+        buildings_generator: BuildingsGenerator,
         params_provider: ParamsProvider,
     ) -> None:
         self._params = params_provider
@@ -108,7 +108,7 @@ class ResidentialGenBuilder:
             raise ValueError(f"Unknown generation mode: {mode!r}")
 
         logger.debug(
-            f"ResidentialGenBuilder.run: mode='{mode}', blocks={len(blocks)}, "
+            f"BlockGenerator.run: mode='{mode}', blocks={len(blocks)}, "
             f"la_target={la_target}, coverage_target={coverage_target}, "
             f"coverage_target_by_zone={coverage_target_by_zone}, "
             f"density_scenario={density_scenario}, "
@@ -138,7 +138,7 @@ class ResidentialGenBuilder:
 
             far_scenario = density_scenario or "min"
             logger.debug(
-                f"ResidentialGenBuilder.run[residential]: blocks={len(blocks_gdf)}, "
+                f"BlockGenerator.run[residential]: blocks={len(blocks_gdf)}, "
                 f"la_total={la_total}, far='{far_scenario}', "
                 f"default_floor_group='{default_fg}'"
             )
@@ -152,7 +152,7 @@ class ResidentialGenBuilder:
             )
             far_scenario = "mean"
             logger.debug(
-                f"ResidentialGenBuilder.run[non_residential]: blocks={len(blocks_gdf)}, "
+                f"BlockGenerator.run[non_residential]: blocks={len(blocks_gdf)}, "
                 f"coverage_target_by_zone={cov_by_zone}, far='{far_scenario}'"
             )
 
@@ -179,7 +179,7 @@ class ResidentialGenBuilder:
 
             far_scenario = density_scenario or "min"
             logger.debug(
-                f"ResidentialGenBuilder.run[mixed]: blocks={len(blocks_gdf)}, "
+                f"BlockGenerator.run[mixed]: blocks={len(blocks_gdf)}, "
                 f"la_total={la_total}, coverage_total={cov_total}, "
                 f"far='{far_scenario}', default_floor_group='{default_fg}'"
             )
@@ -203,7 +203,7 @@ class ResidentialGenBuilder:
             )
         ):
             logger.warning(
-                f"ResidentialGenBuilder.run: mode='{mode}' -> no positive targets "
+                f"BlockGenerator.run: mode='{mode}' -> no positive targets "
                 f"after distribution, returning empty outputs"
             )
             empty = gpd.GeoDataFrame(
@@ -222,7 +222,7 @@ class ResidentialGenBuilder:
         )
 
         logger.debug(
-            f"ResidentialGenBuilder.run[{mode}]: capacity computed for "
+            f"BlockGenerator.run[{mode}]: capacity computed for "
             f"{len(blocks_with_capacity)} blocks"
         )
         segments = await asyncio.to_thread(
@@ -234,7 +234,7 @@ class ResidentialGenBuilder:
         )
 
         logger.debug(
-            f"ResidentialGenBuilder.run[{mode}]: segments generated, count={len(segments)}"
+            f"BlockGenerator.run[{mode}]: segments generated, count={len(segments)}"
         )
         blocks_final, segments_final = await asyncio.to_thread(
             self.segments_allocator.update_blocks_with_segments,
@@ -246,7 +246,7 @@ class ResidentialGenBuilder:
         )
 
         logger.debug(
-            f"ResidentialGenBuilder.run[{mode}]: blocks and segments updated "
+            f"BlockGenerator.run[{mode}]: blocks and segments updated "
             f"(blocks={len(blocks_final)}, segments={len(segments_final)})"
         )
         plots = await asyncio.to_thread(
@@ -257,7 +257,7 @@ class ResidentialGenBuilder:
         )
 
         logger.debug(
-            f"ResidentialGenBuilder.run[{mode}]: plots generated, count={len(plots)}"
+            f"BlockGenerator.run[{mode}]: plots generated, count={len(plots)}"
         )
         buildings_gdf = await asyncio.to_thread(
             self.buildings_generator.generate_buildings_from_plots,
@@ -266,7 +266,7 @@ class ResidentialGenBuilder:
         )
 
         logger.debug(
-            f"ResidentialGenBuilder.run[{mode}]: buildings generated, count={len(buildings_gdf)}"
+            f"BlockGenerator.run[{mode}]: buildings generated, count={len(buildings_gdf)}"
         )
 
         return blocks_final, plots, buildings_gdf

@@ -17,9 +17,9 @@ from app.logic.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
 )
-from app.logic.residential_generator import ResidentialGenBuilder
-from app.logic.residential_service_generation import (
-    ResidentialServiceGenerator,
+from app.logic.block_generator import BlockGenerator
+from app.logic.service_generation import (
+    ServiceGenerator,
 )
 from app.logic.restrictions import check_buildings_setbacks
 
@@ -36,8 +36,8 @@ class Genbuilder:
         config: Config,
         urban_api: UrbanDBAPI,
         params_provider: ParamsProvider,
-        residential_buildings_generator: ResidentialGenBuilder,
-        residential_service_generator: ResidentialServiceGenerator,
+        residential_buildings_generator: BlockGenerator,
+        residential_service_generator: ServiceGenerator,
         buildings_params_provider: BuildingParamsProvider,
     ):
         self.config = config
