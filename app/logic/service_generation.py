@@ -23,7 +23,7 @@ from app.common.geo_utils import safe_make_valid
 from app.common.geo_utils import ensure_crs
 
 
-class ResidentialServiceGenerator:
+class ServiceGenerator:
     """
     Generates non-residential service buildings for residential blocks by
     converting built living area into per-block service capacity targets,

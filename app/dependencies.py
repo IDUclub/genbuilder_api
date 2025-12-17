@@ -17,9 +17,9 @@ from app.logic.plots.plots import PlotsGenerator
 from app.logic.plots.plot_slicer import PlotSegmentSlicer
 from app.logic.plots.plot_merge import PlotMerger
 from app.logic.plots.plot_tuner import PlotTuner
-from app.logic.buildings import ResidentialBuildingsGenerator
-from app.logic.residential_generator import ResidentialGenBuilder
-from app.logic.residential_service_generation import ResidentialServiceGenerator
+from app.logic.buildings import BuildingsGenerator
+from app.logic.block_generator import BlockGenerator
+from app.logic.service_generation import ServiceGenerator
 from app.logic.building_params import (
     BuildingGenParams,
     BuildingParamsProvider,
@@ -54,12 +54,12 @@ plor_merger = PlotMerger()
 plot_tuner = PlotTuner(params_provider, buildings_params_provider)
 plots_generator = PlotsGenerator(params_provider, buildings_params_provider, building_capacity_optimizer, plot_slicer, plor_merger, plot_tuner)
 
-residential_buildings_generator = ResidentialBuildingsGenerator()
-residential_generator = ResidentialGenBuilder(building_capacity_optimizer, max_rectangle_finder, 
-                    segments_allocator, plots_generator, residential_buildings_generator, params_provider)
-residential_service_generator = ResidentialServiceGenerator(params_provider)
+buildings_generator = BuildingsGenerator()
+block_generator = BlockGenerator(building_capacity_optimizer, max_rectangle_finder, 
+                    segments_allocator, plots_generator, buildings_generator, params_provider)
+service_generator = ServiceGenerator(params_provider)
 
 builder = Genbuilder(
     config, urban_db_api, 
-    params_provider, residential_generator, residential_service_generator, buildings_params_provider
+    params_provider, block_generator, service_generator, buildings_params_provider
 )
