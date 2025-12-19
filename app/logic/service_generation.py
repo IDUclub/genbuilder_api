@@ -25,8 +25,8 @@ from app.common.geo_utils import ensure_crs
 
 class ServiceGenerator:
     """
-    Generates non-residential service buildings for residential blocks by
-    converting built living area into per-block service capacity targets,
+    Generates non-residential service buildings for blocks by
+    converting built living area into per-zone service capacity targets,
     sampling service sites in block free space, and placing template-based
     buildings (from OSM-derived projects) into those sites.
     """
@@ -43,30 +43,36 @@ class ServiceGenerator:
         blocks: gpd.GeoDataFrame,
         buildings: gpd.GeoDataFrame,
         service_normatives: pd.DataFrame,
-    ) -> Dict[Any, Dict[str, float]]:
+    ) -> Dict[Hashable, Dict[str, float]]:
+
+        if "zone" not in blocks.columns:
+            raise ValueError("blocks must contain 'zone' column for service limits computation")
+
         la_per_block = buildings.groupby("src_index", dropna=False)["living_area"].sum()
-
         blocks = blocks.copy()
-        blocks["actual_la"] = blocks["src_index"].map(la_per_block).fillna(0.0)
+        blocks["actual_la_block"] = blocks["src_index"].map(la_per_block).fillna(0.0)
+        blocks.loc[blocks["zone"] != "residential", "actual_la_block"] = 0.0
+        la_per_zone = (
+            blocks.groupby("zone", dropna=False)["actual_la_block"].sum()
+        )
 
-        all_limits: Dict[Any, Dict[str, float]] = {}
+        all_limits: Dict[Hashable, Dict[str, float]] = {}
 
-        for _, row in blocks.iterrows():
-            zid = row["src_index"]
-            actual_la = float(row["actual_la"])
+        for zone_name, total_la in la_per_zone.items():
+            actual_la = float(total_la)
+            if actual_la <= 0.0:
+                continue
 
             people = actual_la / self.generation_parameters.la_per_person
 
             limits: Dict[str, float] = {}
-
             for _, srv in service_normatives.iterrows():
                 service_name = srv["service_name"]
                 cap_per_1000 = float(srv["service_capacity"])
-
                 target_cap = round(cap_per_1000 * (people / 1000.0), 0)
                 limits[service_name] = target_cap
 
-            all_limits[zid] = limits
+            all_limits[zone_name] = limits
 
         return all_limits
 
@@ -276,7 +282,9 @@ class ServiceGenerator:
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
     ) -> gpd.GeoDataFrame:
+        
         projects_local = ensure_crs(projects_gdf, blocks_crs)
+
         normalized_buildings: Dict[Any, BaseGeometry] = {}
         for row in projects_local.itertuples():
             type_id = getattr(row, "type_id")
@@ -285,9 +293,16 @@ class ServiceGenerator:
 
         service_buildings_rows: List[Dict[str, Any]] = []
 
+        zone_placed_capacity: Dict[Hashable, Dict[str, float]] = {}
+        zone_sites_count: Dict[Hashable, Dict[str, int]] = {}
+
         for block_row in blocks.itertuples():
             block_id = getattr(block_row, "src_index")
             block_geom = getattr(block_row, "geometry")
+            zone_id = getattr(block_row, "zone", None)
+
+            if zone_id is None:
+                continue
 
             block_angle = self._compute_main_axis_angle(block_geom)
 
@@ -309,12 +324,31 @@ class ServiceGenerator:
             if free_area.is_empty:
                 continue
 
-            block_limits = all_limits.get(block_id, {})
+            block_limits = all_limits.get(zone_id, {})
             if not block_limits:
                 continue
 
+            if zone_id not in zone_placed_capacity:
+                zone_placed_capacity[zone_id] = {srv: 0.0 for srv in block_limits}
+                zone_sites_count[zone_id] = {srv: 0 for srv in block_limits}
+
+            zone_caps = zone_placed_capacity[zone_id]
+            zone_sites = zone_sites_count[zone_id]
+
             for service_name, target_capacity in block_limits.items():
                 if target_capacity <= 0:
+                    continue
+
+                placed_so_far = float(zone_caps.get(service_name, 0.0))
+                if placed_so_far >= target_capacity:
+                    continue
+
+                sites_so_far = int(zone_sites.get(service_name, 0))
+                if (
+                    self.generation_parameters.max_sites_per_service_per_block > 0
+                    and sites_so_far
+                    >= self.generation_parameters.max_sites_per_service_per_block
+                ):
                     continue
 
                 service_projects = projects_local[
@@ -323,13 +357,16 @@ class ServiceGenerator:
                 if service_projects.empty:
                     continue
 
-                placed_capacity = 0.0
-                sites_count = 0
+                placed_capacity = placed_so_far
+                sites_count = sites_so_far
 
                 while (
                     placed_capacity < target_capacity
-                    and sites_count
-                    < self.generation_parameters.max_sites_per_service_per_block
+                    and (
+                        self.generation_parameters.max_sites_per_service_per_block <= 0
+                        or sites_count
+                        < self.generation_parameters.max_sites_per_service_per_block
+                    )
                     and not free_area.is_empty
                 ):
                     remaining_capacity = target_capacity - placed_capacity
@@ -397,6 +434,7 @@ class ServiceGenerator:
 
                         if building_geom is None:
                             continue
+
                         footprint_area = building_geom.area
                         try:
                             floors_val = float(floors) if floors is not None else 0.0
@@ -409,11 +447,12 @@ class ServiceGenerator:
 
                         row_out: Dict[str, Any] = {
                             "src_index": block_id,
+                            "zone": zone_id,
                             "service": service_name,
                             "project_id": type_id,
                             "capacity": capacity,
                             "floors_count": floors,
-                            "living_area": 0.0,              
+                            "living_area": 0.0,
                             "functional_area": building_area,
                             "osm_url": osm_url,
                             "address": address,
@@ -432,6 +471,9 @@ class ServiceGenerator:
 
                     if not placed_in_iteration:
                         break
+
+                zone_caps[service_name] = placed_capacity
+                zone_sites[service_name] = sites_count
 
         if not service_buildings_rows:
             return gpd.GeoDataFrame(
@@ -463,8 +505,29 @@ class ServiceGenerator:
         service_normatives: pd.DataFrame,
         crs: int | str,
     ) -> gpd.GeoDataFrame:
+        
+        blocks = blocks.copy()
+
+        if "zone" not in blocks.columns:
+            raise ValueError("blocks must contain 'zone' column for service generation")
+        blocks = blocks[blocks["zone"] == "residential"].copy()
+        if blocks.empty:
+            return gpd.GeoDataFrame(
+                columns=[
+                    "service",
+                    "capacity",
+                    "floors_count",
+                    "living_area",
+                    "functional_area",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs=crs,
+            )
+
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
+
         projects_gdf = await asyncio.to_thread(self.load_service_projects)
         all_limits = await asyncio.to_thread(
             self.compute_service_limits_for_blocks,
@@ -472,6 +535,7 @@ class ServiceGenerator:
             buildings,
             service_normatives,
         )
+
         services_buildings_gdf = await asyncio.to_thread(
             self.place_service_buildings,
             blocks,
