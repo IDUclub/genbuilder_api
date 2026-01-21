@@ -45,10 +45,10 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
 class ScenarioBody(BaseModel):
     targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
-            "la_target": {
-                "residential": 20000,
-                "business": 10000,
-                "unknown": 10000
+            "residents": {
+                "residential": 1100,
+                "business": 0,
+                "unknown": 0,
             },
             "coverage_area": {
                 "business": 10000,
@@ -77,7 +77,6 @@ class ScenarioBody(BaseModel):
         },
         description=(
             "Spatial and target parameters for functional zone types.\n"
-            "- la_target: residential living area targets (m²)\n"
             "- coverage_area: non-res functional area targets (m²)\n"
             "- floors_avg: mean floors for each zone\n"
             "- density_scenario: FAR scenario for residential component\n"
@@ -86,10 +85,10 @@ class ScenarioBody(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                "la_target": {
-                    "residential": 20000,
-                    "business": 10000,
-                    "unknown": 10000
+                "residents": {
+                    "residential": 1100,
+                    "business": 0,
+                    "unknown": 0,
                 },
                 "coverage_area": {
                     "business": 10000,
@@ -136,15 +135,15 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
     )
 
-    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
+    targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
-            "la_target": {
-                "residential": 20000,
-                "business": 10000,
+            "residents": {
+                "residential": 1100,
+                "business": 0,
                 "industrial": 0,
                 "transport": 0,
                 "special": 0,
-                "agriculture": 5000,
+                "agriculture": 0,
                 "recreation": 0,
             },
             "coverage_area": {
@@ -177,7 +176,6 @@ class TerritoryRequest(BaseModel):
         },
         description=(
             "Per-zone targets for generation:\n"
-            "- la_target: residential living area (m²)\n"
             "- coverage_area: non-res functional area (m²)\n"
             "- floors_avg: mean floors per zone\n"
             "- density_scenario: FAR scenario for residential component\n"
@@ -186,9 +184,9 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {
-                        "residential": 20000,
-                        "business": 6000,
+                    "residents": {
+                        "residential": 1100,
+                        "business": 0,
                         "industrial": 0,
                     },
                     "coverage_area": {
@@ -303,7 +301,7 @@ class BuildingFeatureCollection(BaseModel):
 __all__ = [
     "BlockFeatureCollection",
     "TerritoryRequest",
-    "PIPELINE_EXAMPLE",
-    "ScenarioRequest",
+    # "PIPELINE_EXAMPLE",
+    # "ScenarioRequest",
     "BuildingFeatureCollection",
 ]

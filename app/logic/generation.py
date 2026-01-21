@@ -50,7 +50,7 @@ class Genbuilder:
     async def run(
         self,
         targets_by_zone: Dict[str, Dict[str, float]],
-        token: str,
+        token: str = None,
         blocks: Optional[BlockFeatureCollection] = None,
         scenario_id: Optional[int] = None,
         year: Optional[int] = None,
@@ -146,7 +146,20 @@ class Genbuilder:
             f"residential={len(res_blocks)}, mixed={len(mixed_blocks)}, "
             f"non_residential={len(nonres_blocks)}, ignored={len(ignored_blocks)}"
         )
-        la_by_zone: Dict[str, float] = targets_by_zone.get("la_target", {}) or {}
+        la_by_zone: Dict[str, float] = {}
+        residents_by_zone: Dict[str, float] = (
+                targets_by_zone.get("residents", {}) or {}
+        )
+        if residents_by_zone:
+            la_per_person = float(new_parameters.la_per_person)
+            for zone, residents in residents_by_zone.items():
+                residents_val = float(residents or 0.0)
+                if residents_val > 0:
+                    la_by_zone[zone] = residents_val * la_per_person
+            logger.info(
+                "Genbuilder.run: converted residents to la_target using "
+                f"la_per_person={la_per_person}, residents_by_zone={residents_by_zone}"
+            )
         coverage_by_zone: Dict[str, float] = (
             targets_by_zone.get("coverage_area", {}) or {}
         )
