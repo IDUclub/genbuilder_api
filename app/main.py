@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-RedirectResponse
+from starlette.responses import RedirectResponse
 
 from app.dependencies import config, setup_logger
 from app.routers.generation_routers import generation_router

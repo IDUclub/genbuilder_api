@@ -95,4 +95,24 @@ class UrbanDBAPI:
         service_normatives.dropna(subset=['service_capacity'], inplace=True)
         logger.info(f"Normatives for territory {territory_id} collected.")
         return service_normatives
-    
+
+    async def get_scenario_functional_zones(self, scenario_id: int, source:str, year: int, token: str):
+        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones"
+        logger.info(f"Fetching functional_zones from API: {api_url} for scenario {scenario_id}")
+        headers = {'Authorization': f'Bearer {token}'}
+        params = {
+            "source": source,
+            "year": year,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            response_json = await self.handler.request(
+                method="GET",
+                url=api_url,
+                session=session,
+                headers=headers,
+                params=params,
+                expect_json=True,
+            )
+
+        return response_json

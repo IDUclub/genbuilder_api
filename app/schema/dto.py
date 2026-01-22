@@ -297,6 +297,65 @@ class BuildingFeatureCollection(BaseModel):
         }
     }
 
+class FunctionalZoneGenerationConfig(BaseModel):
+    functional_zone_id: int = Field(..., description="Functional zone ID")
+    targets_by_zone: Dict[str, Dict[str, Any]] = Field(
+        ...,
+        description="Per-zone targets for generation (same structure as ScenarioBody.targets_by_zone)",
+    )
+    generation_parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Generation parameters, override base ones for this zone",
+        json_schema_extra={"examples": [{"rectangle_finder_step": 5}]},
+    )
+
+
+class FunctionalZonesRequest(BaseModel):
+    zones: list[FunctionalZoneGenerationConfig] = Field(
+        ...,
+        description="List of functional zones with generation parameters",
+        json_schema_extra={
+            "examples": [
+                    {
+                      "functional_zone_id": 6679027,
+                      "generation_parameters": {
+                        "rectangle_finder_step": 5
+                      },
+                      "targets_by_zone": {
+                        "coverage_area": {
+                          "business": 10000,
+                          "industrial": 20000,
+                          "special": 10000,
+                          "transport": 10000,
+                          "unknown": 10000
+                        },
+                        "default_floor_group": {
+                          "business": "high",
+                          "residential": "medium",
+                          "unknown": "high"
+                        },
+                        "density_scenario": {
+                          "business": "min",
+                          "residential": "min",
+                          "unknown": "min"
+                        },
+                        "floors_avg": {
+                          "business": 7,
+                          "industrial": 5,
+                          "special": 3,
+                          "transport": 1,
+                          "unknown": 5
+                        },
+                        "residents": {
+                          "business": 0,
+                          "residential": 20000,
+                          "unknown": 0
+                        }
+                      }
+                    }
+                  ]
+        },
+    )
 
 __all__ = [
     "BlockFeatureCollection",
