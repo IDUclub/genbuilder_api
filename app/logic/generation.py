@@ -97,6 +97,9 @@ class Genbuilder:
                     f"before={before}, after={len(gdf_blocks)}"
                 )
 
+        if gdf_blocks.crs is None:
+            gdf_blocks.set_crs("EPSG:4326", inplace=True)
+
         if gdf_blocks.empty:
             logger.warning("Genbuilder.run: no blocks to process, returning empty FC")
             empty = gpd.GeoDataFrame(
