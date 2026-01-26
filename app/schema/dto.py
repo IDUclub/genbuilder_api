@@ -351,7 +351,42 @@ class FunctionalZonesRequest(BaseModel):
                                     "unknown": 0,
                                 },
                             },
-                        }
+                        },
+                        {
+                            "functional_zone_id": 6679074,
+                            "generation_parameters": {"rectangle_finder_step": 5},
+                            "targets_by_zone": {
+                                "coverage_area": {
+                                    "business": 8000,
+                                    "industrial": 15000,
+                                    "special": 5000,
+                                    "transport": 7000,
+                                    "unknown": 6000,
+                                },
+                                "default_floor_group": {
+                                    "business": "medium",
+                                    "residential": "low",
+                                    "unknown": "medium",
+                                },
+                                "density_scenario": {
+                                    "business": "min",
+                                    "residential": "min",
+                                    "unknown": "min",
+                                },
+                                "floors_avg": {
+                                    "business": 5,
+                                    "industrial": 4,
+                                    "special": 2,
+                                    "transport": 1,
+                                    "unknown": 4,
+                                },
+                                "residents": {
+                                    "business": 0,
+                                    "residential": 12000,
+                                    "unknown": 0,
+                                },
+                            },
+                        },
                     ]
                 }
             ]
