@@ -1,6 +1,6 @@
-from typing import Annotated, List
+from typing import Annotated, List, Dict, Any, Optional
 from fastapi import APIRouter, Body, Query, Depends
-from app.dependencies import builder, urban_db_api
+from app.dependencies import builder, urban_db_api, zones_service
 from app.exceptions.http_exception_wrapper import http_exception
 from app.schema.dto import (
     ScenarioBody,
@@ -14,20 +14,21 @@ from app.utils import auth
 generation_router = APIRouter()
 
 
-@generation_router.post("/generate/by_scenario", summary="Generate buildings for target scenario", response_model=BuildingFeatureCollection)
+@generation_router.post("/generate/by_scenario", summary="Generate buildings for target scenario",
+                        response_model=BuildingFeatureCollection)
 async def pipeline_route(
-    scenario_id: Annotated[int,  Query(..., description="Scenario ID", example=198)],
-    year:       Annotated[int,  Query(..., description="Data year", example=2024)],
-    source:     Annotated[str,  Query(..., description="Data source", example="OSM")],
-    functional_zone_types: Annotated[List[str], Query(
-        ..., description="Target functional zone types"
-    , example=['residential', 'business', 'industrial'])],
-    token: str = Depends(auth.verify_token),
-    body: ScenarioBody = Body(
-        default_factory=ScenarioBody,
-        description="Targets and hyperparameters as JSON (optional)"
-    )
-    ):
+        scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+        year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+        source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+        functional_zone_types: Annotated[List[str], Query(
+            ..., description="Target functional zone types"
+            , examples=['residential', 'business', 'industrial'])],
+        token: str = Depends(auth.verify_token),
+        body: ScenarioBody = Body(
+            default_factory=ScenarioBody,
+            description="Targets and hyperparameters as JSON (optional)"
+        )
+):
     return await builder.run(
         scenario_id=scenario_id,
         year=year,
@@ -40,38 +41,40 @@ async def pipeline_route(
 
 
 @generation_router.post(
-    "/generate/by_territory", summary="Generate buildings for target territories", response_model=BuildingFeatureCollection)
+    "/generate/by_territory", summary="Generate buildings for target territories",
+    response_model=BuildingFeatureCollection)
 async def pipeline_route(
-    payload: TerritoryRequest = Body(
-        ...,
-        description="Body for request"
-    )
-    ):
+        payload: TerritoryRequest = Body(
+            ...,
+            description="Body for request"
+        )
+):
     return await builder.run(
         blocks=payload.blocks,
         targets_by_zone=payload.targets_by_zone,
         generation_parameters_override=payload.generation_parameters
     )
 
+
 @generation_router.post(
     "/generate/by_blocks", summary="Generate buildings for target blocks", response_model=BuildingFeatureCollection
 )
 async def generate_by_functional_zones(
-    scenario_id: Annotated[int, Query(..., description="Scenario ID", example=198)],
-    year: Annotated[int, Query(..., description="Data year", example=2024)],
-    source: Annotated[str, Query(..., description="Data source", example="OSM")],
-    functional_zone_types: Annotated[
-        List[str],
-        Query(
-            ...,
-            description="Target functional zone types",
-            example=["residential", "business", "industrial"],
+        scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+        year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+        source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+        functional_zone_types: Annotated[
+            List[str],
+            Query(
+                ...,
+                description="Target functional zone types",
+                examples=["residential", "business", "industrial"],
+            ),
+        ],
+        token: str = Depends(auth.verify_token),
+        body: FunctionalZonesRequest = Body(
+            ..., description="Per-zone targets and generation parameters"
         ),
-    ],
-    token: str = Depends(auth.verify_token),
-    body: FunctionalZonesRequest = Body(
-        ..., description="Per-zone targets and generation parameters"
-    ),
 ):
     response_json = await urban_db_api.get_scenario_functional_zones(
         scenario_id=scenario_id,
@@ -129,7 +132,81 @@ async def generate_by_functional_zones(
             blocks=blocks,
             targets_by_zone=zone.targets_by_zone,
             generation_parameters_override=zone.generation_parameters,
+            scenario_id=scenario_id,
+            token=token,
+            year=year,
+            source=source,
+            functional_zone_types=functional_zone_types,
         )
         combined_features.extend(result.get("features", []))
 
     return {"type": "FeatureCollection", "features": combined_features}
+
+
+@generation_router.post(
+    "/generate/max_residents_by_blocks",
+    summary="Estimate max residents for target blocks",
+)
+async def residents_by_functional_zones(
+        scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+        year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+        source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+        functional_zone_types: Annotated[
+            list[str],
+            Query(
+                ...,
+                description="Target functional zone types",
+                examples=["residential", "business", "industrial"],
+            ),
+        ],
+        token: str = Depends(auth.verify_token),
+        body: FunctionalZonesRequest = Body(
+            ..., description="Per-zone targets and generation parameters"
+        ),
+):
+    """
+    Aggregate residents capacity per functional block using
+    precomputed residents_number from Genbuilder output.
+    """
+
+    blocks_by_zone = await zones_service.prepare_blocks_by_zones(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        token=token,
+        functional_zone_types=functional_zone_types,
+        zones=body.zones,
+    )
+
+    residents_by_block: dict[int, int] = {}
+
+    for zone in body.zones:
+        block_id = int(zone.functional_zone_id)
+        blocks = blocks_by_zone[block_id]
+
+        result = await builder.run(
+            blocks=blocks,
+            targets_by_zone=zone.targets_by_zone,
+            generation_parameters_override=zone.generation_parameters,
+            scenario_id=scenario_id,
+            token=token,
+            year=year,
+            source=source,
+            functional_zone_types=functional_zone_types,
+        )
+
+        features_out = result.get("features", [])
+        if not features_out:
+            residents_by_block[block_id] = 0
+            continue
+
+        residents_sum = 0
+        for feature_out in features_out:
+            props_out = feature_out.get("properties", {})
+            value = props_out.get("residents_number")
+            if value is not None:
+                residents_sum += int(value)
+
+        residents_by_block[block_id] = residents_sum
+
+    return residents_by_block

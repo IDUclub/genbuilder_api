@@ -1,5 +1,6 @@
 from iduconfig import Config
 
+from app.logic.functional_zones_service import FunctionalZonesService
 from app.logic.logger_setup import setup_logger
 
 from app.api.urbandb_api_gateway import UrbanDBAPI
@@ -63,3 +64,4 @@ builder = Genbuilder(
     config, urban_db_api, 
     params_provider, block_generator, service_generator, buildings_params_provider
 )
+zones_service = FunctionalZonesService(urban_db_api)

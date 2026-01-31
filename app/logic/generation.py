@@ -9,6 +9,7 @@ import pandas as pd
 from loguru import logger
 from iduconfig import Config
 
+from app.exceptions.http_exception_wrapper import http_exception
 from app.schema.dto import BlockFeatureCollection
 from app.dependencies import UrbanDBAPI
 from app.logic.generation_params import ParamsProvider
@@ -460,7 +461,9 @@ class Genbuilder:
             f"residential={res_mask.sum()}, mixed={mixed_mask.sum()}, "
             f"non_residential={nonres_mask.sum()}"
         )
+        la_per_person = float(new_parameters.la_per_person)
         buildings_all = await asyncio.to_thread(buildings_all.to_crs, 4326)
+        buildings_all["residents_number"] = round(buildings_all["living_area"] / la_per_person)
 
         logger.info(
             f"Genbuilder.run: final buildings count={len(buildings_all)}, "
@@ -468,3 +471,5 @@ class Genbuilder:
         )
 
         return json.loads(buildings_all.to_json())
+
+
