@@ -24,6 +24,8 @@ class GenParams(BaseModel):
     """limit for attempts for service placement"""
     max_sites_per_service_per_block: int = 10
     """limit for number of service of one type in block"""
+    physical_objects_exclusion_buffer_m: float = 5.0
+    """Buffer (in meters) around physical objects that will be excluded from generation."""
     service_projects_file: str = str( Path(__file__).resolve().parent / "service_projects.geojson")
     """path to service projects file with geometry and plot/building parameters"""
 

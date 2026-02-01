@@ -8,6 +8,7 @@ from app.api.urbandb_api_gateway import UrbanDBAPI
 from app.logic.generation_params import GenParams, ParamsProvider
 from app.logic.building_capacity_optimizer import CapacityOptimizer
 from app.logic.maximum_inscribed_rectangle import MIR
+from app.logic.physical_objects_service import PhysicalObjectsService
 from app.logic.segments.capacity_calculator import SegmentCapacityCalculator
 from app.logic.segments.scenario_search import BlockScenarioSearch
 from app.logic.segments.plots_allocator import BlockPlotsAllocator
@@ -59,9 +60,9 @@ buildings_generator = BuildingsGenerator()
 block_generator = BlockGenerator(building_capacity_optimizer, max_rectangle_finder, 
                     segments_allocator, plots_generator, buildings_generator, params_provider)
 service_generator = ServiceGenerator(params_provider)
-
+physical_objects_service = PhysicalObjectsService()
 builder = Genbuilder(
     config, urban_db_api, 
-    params_provider, block_generator, service_generator, buildings_params_provider
+    params_provider, block_generator, service_generator, buildings_params_provider, physical_objects_service
 )
 zones_service = FunctionalZonesService(urban_db_api)

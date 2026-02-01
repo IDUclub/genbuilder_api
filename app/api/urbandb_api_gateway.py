@@ -116,3 +116,26 @@ class UrbanDBAPI:
             )
 
         return response_json
+
+    async def get_physical_objects(self, scenario_id: int, token: str, physical_object_type_id: int = None):
+        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/physical_objects_with_geometry"
+        logger.info(f"Fetching functional_zones from API: {api_url} for scenario {scenario_id}")
+        headers = {'Authorization': f'Bearer {token}'}
+        if physical_object_type_id:
+            params = {
+                "physical_object_type_id": physical_object_type_id,
+            }
+        else:
+            params = None
+
+        async with aiohttp.ClientSession() as session:
+            response_json = await self.handler.request(
+                method="GET",
+                url=api_url,
+                session=session,
+                headers=headers,
+                params=params,
+                expect_json=True,
+            )
+
+        return response_json

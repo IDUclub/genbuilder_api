@@ -14,20 +14,30 @@ from app.utils import auth
 generation_router = APIRouter()
 
 
-@generation_router.post("/generate/by_scenario", summary="Generate buildings for target scenario",
-                        response_model=BuildingFeatureCollection)
+@generation_router.post(
+    "/generate/by_scenario",
+    summary="Generate buildings for target scenario",
+    response_model=BuildingFeatureCollection,
+)
 async def pipeline_route(
-        scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
-        year: Annotated[int, Query(..., description="Data year", examples=[2024])],
-        source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
-        functional_zone_types: Annotated[List[str], Query(
-            ..., description="Target functional zone types"
-            , examples=['residential', 'business', 'industrial'])],
-        token: str = Depends(auth.verify_token),
-        body: ScenarioBody = Body(
-            default_factory=ScenarioBody,
-            description="Targets and hyperparameters as JSON (optional)"
-        )
+    scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+    year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+    source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+    functional_zone_types: Annotated[
+        List[str],
+        Query(..., description="Target functional zone types", examples=[['residential', 'business', 'industrial']]),
+    ],
+        physical_object_id: Annotated[
+            Optional[List[int]],
+            Query(
+                description=(
+                        "Physical object id(s) to exclude from generation territory."
+                ),
+                examples=[[2058130, 2058131]],
+            ),
+        ] = None,
+    token: str = Depends(auth.verify_token),
+    body: ScenarioBody = Body(default_factory=ScenarioBody),
 ):
     return await builder.run(
         scenario_id=scenario_id,
@@ -36,7 +46,8 @@ async def pipeline_route(
         token=token,
         functional_zone_types=functional_zone_types,
         targets_by_zone=body.targets_by_zone,
-        generation_parameters_override=body.generation_parameters
+        generation_parameters_override=body.generation_parameters,
+        physical_object_ids=physical_object_id,
     )
 
 
