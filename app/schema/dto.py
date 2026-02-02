@@ -47,8 +47,8 @@ class ScenarioBody(BaseModel):
         default={
             "residents": {
                 "residential": 1100,
-                "business": 0,
-                "unknown": 0,
+                "business": 500,
+                "unknown": 500,
             },
             "coverage_area": {
                 "business": 10000,
@@ -87,8 +87,8 @@ class ScenarioBody(BaseModel):
                 {
                     "residents": {
                         "residential": 1100,
-                        "business": 0,
-                        "unknown": 0,
+                        "business": 500,
+                        "unknown": 500,
                     },
                     "coverage_area": {
                         "business": 10000,
@@ -186,8 +186,8 @@ class TerritoryRequest(BaseModel):
                 {
                     "residents": {
                         "residential": 1100,
-                        "business": 0,
-                        "industrial": 0,
+                        "business": 500,
+                        "industrial": 500,
                     },
                     "coverage_area": {
                         "business": 6000,
@@ -346,9 +346,9 @@ class FunctionalZonesRequest(BaseModel):
                                     "unknown": 5,
                                 },
                                 "residents": {
-                                    "business": 0,
+                                    "business": 10000,
                                     "residential": 20000,
-                                    "unknown": 0,
+                                    "unknown": 10000,
                                 },
                             },
                         },
@@ -381,9 +381,9 @@ class FunctionalZonesRequest(BaseModel):
                                     "unknown": 4,
                                 },
                                 "residents": {
-                                    "business": 0,
+                                    "business": 6000,
                                     "residential": 12000,
-                                    "unknown": 0,
+                                    "unknown": 6000,
                                 },
                             },
                         },
