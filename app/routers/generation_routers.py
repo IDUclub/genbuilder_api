@@ -1,13 +1,15 @@
-from typing import Annotated, List, Dict, Any, Optional
+from typing import Annotated, List, Optional
 from fastapi import APIRouter, Body, Query, Depends
 from app.dependencies import builder, urban_db_api, zones_service
 from app.exceptions.http_exception_wrapper import http_exception
+from app.schema.default_params import deep_merge, DEFAULT_BLOCK_GENERATION_PARAMETERS, DEFAULT_BLOCK_TARGETS_BY_ZONE
 from app.schema.dto import (
     ScenarioBody,
     TerritoryRequest,
     BuildingFeatureCollection,
-    FunctionalZonesRequest,
+    MaximumResidentsRequest,
     BlockFeatureCollection,
+    FunctionalZonesRequest,
 )
 from app.utils import auth
 
@@ -171,7 +173,7 @@ async def residents_by_functional_zones(
             ),
         ],
         token: str = Depends(auth.verify_token),
-        body: FunctionalZonesRequest = Body(
+        body: MaximumResidentsRequest = Body(
             ..., description="Per-zone targets and generation parameters"
         ),
 ):
@@ -195,10 +197,19 @@ async def residents_by_functional_zones(
         block_id = int(zone.functional_zone_id)
         blocks = blocks_by_zone[block_id]
 
+        effective_generation_parameters = deep_merge(
+            DEFAULT_BLOCK_GENERATION_PARAMETERS,
+            zone.generation_parameters,
+        )
+        effective_targets_by_zone = deep_merge(
+            DEFAULT_BLOCK_TARGETS_BY_ZONE,
+            zone.targets_by_zone,
+        )
+
         result = await builder.run(
             blocks=blocks,
-            targets_by_zone=zone.targets_by_zone,
-            generation_parameters_override=zone.generation_parameters,
+            targets_by_zone=effective_targets_by_zone,
+            generation_parameters_override=effective_generation_parameters,
             scenario_id=scenario_id,
             token=token,
             year=year,

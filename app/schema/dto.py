@@ -399,34 +399,39 @@ class FunctionalZonesRequest(BaseModel):
     )
 
 
-# class MaxResidentsResult(BaseModel):
-#     functional_zone_id: int = Field(..., description="Functional zone ID")
-#     max_residents: int = Field(..., description="Maximum number of residents")
-#
-#
-# class MaxResidentsResponse(BaseModel):
-#     results: list[MaxResidentsResult] = Field(
-#         ...,
-#         description="List of maximum resident estimates for requested zones",
-#         json_schema_extra={
-#             "examples": [
-#                 {
-#                     "results": [
-#                         {"functional_zone_id": 6679027, "max_residents": 12500},
-#                         {"functional_zone_id": 6679074, "max_residents": 9800},
-#                     ]
-#                 }
-#             ]
-#         },
-#     )
-#
-#
-# class MaxResidentsRequest(BaseModel):
-#     zone_ids: list[int] = Field(
-#         ...,
-#         description="List of functional zone IDs",
-#         json_schema_extra={"examples": [{"zone_ids": [6679027, 6679074]}]},
-#     )
+class MaximumResidentsConfig(BaseModel):
+    functional_zone_id: int = Field(..., description="Functional zone id")
+
+    generation_parameters: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional generation parameters for this zone (merged with defaults)",
+    )
+
+    targets_by_zone: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional per-zone targets (merged with defaults)",
+    )
+
+
+class MaximumResidentsRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "zones": [
+                        {"functional_zone_id": 6679027},
+                        {"functional_zone_id": 6679074},
+                    ]
+                }
+            ]
+        }
+    )
+
+    zones: list[MaximumResidentsConfig] = Field(
+        ...,
+        description="List of functional zones (other fields are optional and merged with defaults)",
+    )
+
 
 
 __all__ = [
