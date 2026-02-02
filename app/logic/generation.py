@@ -166,8 +166,23 @@ class Genbuilder:
 
                     objects_gdf = await asyncio.to_thread(objects_gdf.to_crs, utm)
 
-                    buffer_m = float(new_parameters.physical_objects_exclusion_buffer_m)
-                    logger.info(f"Genbuilder.run: buffer m={buffer_m}")
+                    if bool(new_parameters.physical_objects_exclusion_dynamic):
+                        min_b = float(new_parameters.physical_objects_exclusion_min_buffer_m)
+                        max_b = float(new_parameters.physical_objects_exclusion_max_buffer_m)
+                        logger.info(
+                            "Genbuilder.run: using dynamic per-object buffer based on building_params "
+                            f"(min={min_b}, max={max_b})"
+                        )
+                        objects_gdf = self.physical_objects_service.apply_dynamic_buffer(
+                            physical_objects=objects_gdf,
+                            building_params_provider=self.buildings_generation_parameters,
+                            min_buffer_m=min_b,
+                            max_buffer_m=max_b,
+                        )
+                        buffer_m = 0.0
+                    else:
+                        buffer_m = float(new_parameters.physical_objects_exclusion_buffer_m)
+                        logger.info(f"Genbuilder.run: buffer m={buffer_m}")
 
                     before = len(gdf_blocks)
                     gdf_blocks = self.physical_objects_service.exclude(
