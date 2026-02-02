@@ -1,5 +1,4 @@
 import json
+from pathlib import Path
 
-
-with open('app/schema/zones.geojson') as example:
-    blocks = json.load(example)
+blocks = json.loads(Path(__file__).with_name("zones.geojson").read_text(encoding="utf-8"))

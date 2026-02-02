@@ -1,6 +1,8 @@
 import aiohttp
 from loguru import logger
+
 from app.exceptions.http_exception_wrapper import http_exception
+
 
 class APIHandler:
     async def request(
@@ -9,7 +11,7 @@ class APIHandler:
         url: str,
         session: aiohttp.ClientSession,
         expect_json: bool = True,
-        **kwargs
+        **kwargs,
     ):
         logger.info(f"Making {method} request to URL: {url}")
         async with session.request(method, url, **kwargs) as response:
@@ -20,12 +22,7 @@ class APIHandler:
                     return await response.json()
                 except Exception as e:
                     logger.error(f"JSON decode error from {url}: {e}")
-                    raise http_exception(
-                        500,
-                        "Invalid JSON response",
-                        url,
-                        str(e)
-                    )
+                    raise http_exception(500, "Error in the request:", url, str(e))
 
             logger.error(f"Request to {url} failed with status {response.status}")
             detail = await response.text()
@@ -33,7 +30,7 @@ class APIHandler:
                 response.status,
                 f"Request failed with status: {response.status}",
                 url,
-                detail
+                detail,
             )
 
     @staticmethod

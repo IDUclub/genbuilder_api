@@ -1,24 +1,23 @@
 from fastapi import FastAPI
-from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.dependencies import config, setup_logger
-from app.routers.logs_routers import logs_router
 from app.routers.generation_routers import generation_router
-from app.api.genbuilder_gateway import genbuilder_inference
+from app.routers.logs_routers import logs_router
 
 setup_logger(config)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await genbuilder_inference.init()
-    app.state.genbuilder_inference = genbuilder_inference
+app = FastAPI(title="GenBuilder API", version = "0.8")
 
-    yield
-
-    await app.state.genbuilder_inference.close()
-
-app = FastAPI(title="GenBuilder API", lifespan=lifespan)
+origins = ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(logs_router)
 
-app.include_router(generation_router, prefix="/generation")
-
+app.include_router(generation_router)
