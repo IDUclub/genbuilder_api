@@ -435,11 +435,9 @@ class MaximumResidentsRequest(BaseModel):
 
 
 __all__ = [
+    "ScenarioBody",
     "BlockFeatureCollection",
     "TerritoryRequest",
-    # "PIPELINE_EXAMPLE",
-    # "ScenarioRequest",
     "BuildingFeatureCollection",
-    # "MaxResidentsResponse",
-    # "MaxResidentsRequest",
+    "FunctionalZonesRequest"
 ]

@@ -10,6 +10,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from app.logic.building_params import BuildingParamsProvider, BuildingType
 
+
 def _keep_polygonal(geom: BaseGeometry | None) -> BaseGeometry | None:
     """Return only polygonal part of geometry."""
     if geom is None or geom.is_empty:
@@ -27,7 +28,7 @@ def _keep_polygonal(geom: BaseGeometry | None) -> BaseGeometry | None:
 
     return None
 
-@dataclass(frozen=True)
+
 class PhysicalObjectsService:
     """Select physical objects features by their ids from GeoJSON FeatureCollection."""
     def select_features_by_ids(
@@ -72,7 +73,6 @@ class PhysicalObjectsService:
 
         return selected
 
-
     def exclude(
         self,
         blocks: gpd.GeoDataFrame,
@@ -83,10 +83,12 @@ class PhysicalObjectsService:
         if blocks.empty or physical_objects.empty:
             return blocks
 
-        objs = physical_objects.copy()
+        objs = physical_objects
         objs = objs[objs.geometry.notna() & ~objs.geometry.is_empty]
         if objs.empty:
             return blocks
+
+        objs = objs.copy()
 
         if buffer_m and float(buffer_m) > 0:
             logger.info(

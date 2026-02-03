@@ -2,12 +2,11 @@ from typing import Annotated, List, Optional
 from fastapi import APIRouter, Body, Query, Depends
 from app.dependencies import builder, urban_db_api, zones_service
 from app.exceptions.http_exception_wrapper import http_exception
-from app.schema.default_params import deep_merge, DEFAULT_BLOCK_GENERATION_PARAMETERS, DEFAULT_BLOCK_TARGETS_BY_ZONE
+from app.schema.default_params import DEFAULT_BLOCK_GENERATION_PARAMETERS, DEFAULT_BLOCK_TARGETS_BY_ZONE
 from app.schema.dto import (
     ScenarioBody,
     TerritoryRequest,
     BuildingFeatureCollection,
-    MaximumResidentsRequest,
     BlockFeatureCollection,
     FunctionalZonesRequest,
 )
@@ -161,26 +160,24 @@ async def generate_by_functional_zones(
     summary="Estimate max residents for target blocks",
 )
 async def residents_by_functional_zones(
-        scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
-        year: Annotated[int, Query(..., description="Data year", examples=[2024])],
-        source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
-        functional_zone_types: Annotated[
-            list[str],
-            Query(
-                ...,
-                description="Target functional zone types",
-                examples=["residential", "business", "industrial"],
+    scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+    year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+    source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+    functional_zone_types: Annotated[
+        list[str],
+        Query(..., description="Target functional zone types", examples=["residential", "business"]),
+    ],
+    functional_zone_ids: Annotated[
+        Optional[List[int]],
+        Query(
+            description=(
+                    "Physical object id(s) to exclude from generation territory."
             ),
-        ],
-        token: str = Depends(auth.verify_token),
-        body: MaximumResidentsRequest = Body(
-            ..., description="Per-zone targets and generation parameters"
-        ),
+            examples=[[2058130, 2058131]],
+        )
+    ],
+    token: str = Depends(auth.verify_token),
 ):
-    """
-    Aggregate residents capacity per functional block using
-    precomputed residents_number from Genbuilder output.
-    """
 
     blocks_by_zone = await zones_service.prepare_blocks_by_zones(
         scenario_id=scenario_id,
@@ -188,28 +185,19 @@ async def residents_by_functional_zones(
         source=source,
         token=token,
         functional_zone_types=functional_zone_types,
-        zones=body.zones,
+        zone_ids=functional_zone_ids,
     )
 
     residents_by_block: dict[int, int] = {}
 
-    for zone in body.zones:
-        block_id = int(zone.functional_zone_id)
-        blocks = blocks_by_zone[block_id]
-
-        effective_generation_parameters = deep_merge(
-            DEFAULT_BLOCK_GENERATION_PARAMETERS,
-            zone.generation_parameters,
-        )
-        effective_targets_by_zone = deep_merge(
-            DEFAULT_BLOCK_TARGETS_BY_ZONE,
-            zone.targets_by_zone,
-        )
+    for zid in functional_zone_ids:
+        block_id = int(zid)
+        blocks = blocks_by_zone.get(block_id)
 
         result = await builder.run(
             blocks=blocks,
-            targets_by_zone=effective_targets_by_zone,
-            generation_parameters_override=effective_generation_parameters,
+            targets_by_zone=DEFAULT_BLOCK_TARGETS_BY_ZONE,
+            generation_parameters_override=DEFAULT_BLOCK_GENERATION_PARAMETERS,
             scenario_id=scenario_id,
             token=token,
             year=year,
@@ -217,15 +205,9 @@ async def residents_by_functional_zones(
             functional_zone_types=functional_zone_types,
         )
 
-        features_out = result.get("features", [])
-        if not features_out:
-            residents_by_block[block_id] = 0
-            continue
-
         residents_sum = 0
-        for feature_out in features_out:
-            props_out = feature_out.get("properties", {})
-            value = props_out.get("residents_number")
+        for feature_out in result.get("features", []):
+            value = (feature_out.get("properties") or {}).get("residents_number")
             if value is not None:
                 residents_sum += int(value)
 

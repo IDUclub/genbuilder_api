@@ -14,17 +14,17 @@ class FunctionalZonesService:
         self.urban_db_api = urban_db_api
 
     async def prepare_blocks_by_zones(
-        self,
-        scenario_id: int,
-        year: int,
-        source: str,
-        token: str,
-        functional_zone_types: List[str],
-        zones: list,
+            self,
+            scenario_id: int,
+            year: int,
+            source: str,
+            token: str,
+            functional_zone_types: List[str],
+            zone_ids: List[int],
     ) -> Dict[int, BlockFeatureCollection]:
         """
         Fetch functional zones, filter them by type, validate requested ids
-        and build BlockFeatureCollection per functional zone.
+        and build BlockFeatureCollection per functional zone id.
         """
 
         response_json = await self.urban_db_api.get_scenario_functional_zones(
@@ -50,10 +50,8 @@ class FunctionalZonesService:
             if zone_type in functional_zone_types and zone_id is not None:
                 filtered_features[int(zone_id)] = feature
 
-        requested_ids = [zone.functional_zone_id for zone in zones]
-        missing_ids = [
-            zone_id for zone_id in requested_ids if zone_id not in filtered_features
-        ]
+        requested_ids = [int(zid) for zid in zone_ids]
+        missing_ids = [zid for zid in requested_ids if zid not in filtered_features]
         if missing_ids:
             raise http_exception(
                 404,
@@ -63,8 +61,8 @@ class FunctionalZonesService:
 
         blocks_by_zone: Dict[int, BlockFeatureCollection] = {}
 
-        for zone in zones:
-            feature = filtered_features[zone.functional_zone_id]
+        for zid in requested_ids:
+            feature = filtered_features[zid]
             props = feature.get("properties", {})
             zone_type = (props.get("functional_zone_type") or {}).get("name")
 
@@ -81,7 +79,6 @@ class FunctionalZonesService:
             blocks = BlockFeatureCollection.model_validate(
                 {"type": "FeatureCollection", "features": [block_feature]}
             )
-
-            blocks_by_zone[int(zone.functional_zone_id)] = blocks
+            blocks_by_zone[zid] = blocks
 
         return blocks_by_zone

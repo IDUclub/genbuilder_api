@@ -54,7 +54,7 @@ class Genbuilder:
     async def run(
         self,
         targets_by_zone: Dict[str, Dict[str, float]],
-        token: str = None,
+        token: Optional[str] = None,
         blocks: Optional[BlockFeatureCollection] = None,
         scenario_id: Optional[int] = None,
         year: Optional[int] = None,
