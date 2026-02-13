@@ -62,6 +62,17 @@ class PlotsGenerator:
             f"segments_count={len(segments)}"
         )
 
+        if segments is None or segments.empty:
+            logger.debug("[generate_plots] segments is empty -> return empty plots")
+            return gpd.GeoDataFrame(columns=list(segments.columns) if segments is not None else [], geometry="geometry",
+                                    crs=getattr(segments, "crs", None))
+
+        if "plot_depth" not in segments.columns:
+            logger.warning(
+                f"[generate_plots] missing column 'plot_depth' in segments (cols={list(segments.columns)}) -> return empty plots"
+            )
+            return gpd.GeoDataFrame(columns=list(segments.columns), geometry="geometry", crs=segments.crs)
+
         segments = segments.dropna(subset=["plot_depth"]).copy()
         crs = segments.crs
         parts_list: list[gpd.GeoDataFrame] = []
