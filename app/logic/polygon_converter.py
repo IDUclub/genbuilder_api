@@ -152,7 +152,6 @@ def _filter_polygon_parts_by_min_area(
         try:
             a = _area_m2_geojson(g)
         except Exception:
-            # safer to keep than to silently drop on area calculation failure
             kept.append(g)
             continue
 
@@ -162,7 +161,7 @@ def _filter_polygon_parts_by_min_area(
             dropped += 1
 
     if dropped:
-        logger.info("Dropped %s small polygon parts for zone_type=%s (min_m2=%s)", dropped, zone_type, min_m2)
+        logger.info("Dropped {} small polygon parts for zone_type={} (min_m2={})", dropped, zone_type, min_m2)
 
     return kept
 
@@ -197,7 +196,6 @@ def _filter_parts_by_zone_min_area(
     zone_id: int,
     zone_type: str,
     parts: List["PolygonPart"],
-    min_area_m2_by_zone: Dict[str, float],
 ) -> Tuple[List["PolygonPart"], Optional[DroppedPartsReport]]:
     """
     Filter PolygonPart list by minimal area threshold (m²) for the given zone type.
@@ -207,7 +205,7 @@ def _filter_parts_by_zone_min_area(
         return parts, None
 
     zone_type_norm = (zone_type or "").lower()
-    threshold = min_area_m2_by_zone.get(zone_type_norm)
+    threshold = MIN_AREA_M2_BY_ZONE.get((zone_type or "").lower())
     if threshold is None:
         return parts, None
 
@@ -252,12 +250,11 @@ def _filter_parts_by_zone_min_area(
         dropped=dropped,
     )
 
-    # “Вывод” в лог: компактно, без спама
     if report.dropped_count > 0:
         min_area = min(d.area_m2 for d in report.dropped)
         max_area = max(d.area_m2 for d in report.dropped)
         logger.info(
-            "Zone %s (%s): dropped %s polygon parts below %s m² (dropped_area_m2 min=%.1f max=%.1f), kept=%s",
+            "Zone {} ({}): dropped {} polygon parts below {} m² (dropped_area_m2 min={} max={}), kept={}",
             zone_id,
             zone_type_norm,
             report.dropped_count,

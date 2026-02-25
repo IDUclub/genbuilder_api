@@ -136,20 +136,70 @@ async def generate_by_functional_zones(
             input_data={"missing_ids": missing_ids},
         )
 
+    excluded_features_out = []
+    if physical_object_id:
+        ids_set = {int(x) for x in physical_object_id}
+
+        try:
+            physical_objects_fc = await urban_db_api.get_physical_objects(
+                scenario_id=scenario_id,
+                token=token,
+            )
+            selected = builder.physical_objects_service.select_features_by_ids(
+                physical_objects_fc,
+                ids_set,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch excluded physical objects for response: {}", e)
+            selected = []
+
+        for feat in selected:
+            props = feat.get("properties") or {}
+
+            po_id = (
+                    props.get("physical_object_id")
+                    or props.get("excluded_physical_object_id")
+                    or props.get("id")
+            )
+
+            excluded_features_out.append(
+                {
+                    "type": "Feature",
+                    "geometry": feat.get("geometry"),
+                    "properties": {
+                        "is_excluded": True,
+                        "physical_object_id": po_id,
+                    },
+                }
+            )
+
     combined_features = []
 
     for zone in body.zones:
         feature = feature_by_id[zone.functional_zone_id]
         props = feature.get("properties", {})
-        zone_type = (props.get("functional_zone_type") or {}).get("name")  # например "residential"
+        zone_type = (props.get("functional_zone_type") or {}).get("name")
 
         geometry = feature.get("geometry")
         parts = _explode_to_polygons(geometry, min_area_weight=0.0)
 
-        parts = _filter_parts_by_zone_min_area(parts, zone_type)
+        parts, report = _filter_parts_by_zone_min_area(
+            zone_id=zone.functional_zone_id,
+            zone_type=zone_type,
+            parts=parts,
+        )
+
+        if report is not None and report.dropped_count > 0:
+            logger.info(
+                "Zone {} ({}): dropped={} kept={}",
+                report.zone_id,
+                report.zone_type,
+                report.dropped_count,
+                report.kept_count,
+            )
 
         if not parts:
-            logger.warning("No polygon parts after filtering for zone_id=%s", zone.functional_zone_id)
+            logger.warning("No polygon parts after filtering for zone_id={}", zone.functional_zone_id)
             continue
 
         for part in parts:
@@ -181,6 +231,7 @@ async def generate_by_functional_zones(
 
             combined_features.extend(result.get("features", []))
 
+    combined_features.extend(excluded_features_out)
     return {"type": "FeatureCollection", "features": combined_features}
 
 

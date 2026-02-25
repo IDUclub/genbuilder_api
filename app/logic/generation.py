@@ -199,9 +199,10 @@ class Genbuilder:
 
                     if gdf_blocks.empty:
                         logger.warning(
-                            "Genbuilder.run: all blocks removed after physical objects exclusion, returning empty FC"
-                        )
-                        return gdf_blocks
+                            "Genbuilder.run: all blocks removed after physical objects exclusion, returning empty FC")
+                        empty = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+                        empty_json = await asyncio.to_thread(empty.to_json)
+                        return json.loads(empty_json)
 
         res_blocks = gdf_blocks[gdf_blocks["zone"] == "residential"].copy()
 
