@@ -85,21 +85,26 @@ class Genbuilder:
                 gpd.GeoDataFrame.from_features, dumped["features"]
             )
             logger.info(
-                f"Genbuilder.run: using blocks from request, count={len(gdf_blocks)}"
+                "Genbuilder.run: using blocks from request, count={}",
+                len(gdf_blocks)
             )
         else:
             gdf_blocks = await self.urban_api.get_territories_for_buildings(
                 scenario_id, year, source, token
             )
             logger.info(
-                f"Genbuilder.run: loaded blocks from UrbanDB, count={len(gdf_blocks)}"
+                "Genbuilder.run: loaded blocks from UrbanDB, count={}",
+                len(gdf_blocks)
             )
             if functional_zone_types:
                 before = len(gdf_blocks)
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
                 logger.info(
-                    f"Genbuilder.run: filtered by functional_zone_types={functional_zone_types}, "
-                    f"before={before}, after={len(gdf_blocks)}"
+                    "Genbuilder.run: filtered by functional_zone_types={}, "
+                    "before={}, after={}",
+                    functional_zone_types,
+                    before,
+                    len(gdf_blocks)
                 )
 
         if gdf_blocks.crs is None:
@@ -128,7 +133,8 @@ class Genbuilder:
 
         if physical_object_ids:
             ids_set = {int(x) for x in physical_object_ids if x is not None}
-            logger.info(f"Genbuilder.run: requested physical object ids for exclusion: {sorted(ids_set)}")
+            logger.info("Genbuilder.run: requested physical object ids for exclusion: {}",
+                        sorted(ids_set))
 
             try:
                 fc = await self.urban_api.get_physical_objects(
@@ -156,7 +162,8 @@ class Genbuilder:
                 except Exception as e:
                     logger.warning(
                         "Genbuilder.run: failed to parse selected physical objects FeatureCollection; "
-                        f"skipping exclusion: {e}"
+                        "skipping exclusion: {}",
+                        e
                     )
                     objects_gdf = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
 
@@ -171,7 +178,9 @@ class Genbuilder:
                         max_b = float(new_parameters.physical_objects_exclusion_max_buffer_m)
                         logger.info(
                             "Genbuilder.run: using dynamic per-object buffer based on building_params "
-                            f"(min={min_b}, max={max_b})"
+                            "(min={}, max={})",
+                            min_b,
+                            max_b
                         )
                         objects_gdf = self.physical_objects_service.apply_dynamic_buffer(
                             physical_objects=objects_gdf,
@@ -182,7 +191,8 @@ class Genbuilder:
                         buffer_m = 0.0
                     else:
                         buffer_m = float(new_parameters.physical_objects_exclusion_buffer_m)
-                        logger.info(f"Genbuilder.run: buffer m={buffer_m}")
+                        logger.info("Genbuilder.run: buffer m={}",
+                                    buffer_m)
 
                     before = len(gdf_blocks)
                     gdf_blocks = self.physical_objects_service.exclude(
@@ -193,8 +203,12 @@ class Genbuilder:
 
                     logger.info(
                         "Genbuilder.run: applied physical objects exclusion "
-                        f"(ids={sorted(ids_set)}, buffer_m={buffer_m}); "
-                        f"blocks_before={before}, blocks_after={len(gdf_blocks)}"
+                        "(ids={}, buffer_m={}); "
+                        "blocks_before={}, blocks_after={}",
+                        sorted(ids_set),
+                        buffer_m,
+                        before,
+                        len(gdf_blocks)
                     )
 
                     if gdf_blocks.empty:
@@ -228,9 +242,13 @@ class Genbuilder:
         ].copy()
 
         logger.info(
-            f"Genbuilder.run: blocks split by zone: "
-            f"residential={len(res_blocks)}, mixed={len(mixed_blocks)}, "
-            f"non_residential={len(nonres_blocks)}, ignored={len(ignored_blocks)}"
+            "Genbuilder.run: blocks split by zone: "
+            "residential={}, mixed={}, "
+            "non_residential={}, ignored={}",
+            len(res_blocks),
+            len(mixed_blocks),
+            len(nonres_blocks),
+            len(ignored_blocks)
         )
         la_by_zone: Dict[str, float] = {}
         residents_by_zone: Dict[str, float] = (
@@ -244,7 +262,9 @@ class Genbuilder:
                     la_by_zone[zone] = residents_val * la_per_person
             logger.info(
                 "Genbuilder.run: converted residents to la_target using "
-                f"la_per_person={la_per_person}, residents_by_zone={residents_by_zone}"
+                "la_per_person={}, residents_by_zone={}",
+                la_per_person,
+                residents_by_zone
             )
         coverage_by_zone: Dict[str, float] = (
             targets_by_zone.get("coverage_area", {}) or {}
@@ -326,7 +346,8 @@ class Genbuilder:
                 territory_id, token
             )
             logger.info(
-                f"Genbuilder.run: loaded service normatives for territory_id={territory_id}"
+                "Genbuilder.run: loaded service normatives for territory_id={}",
+                territory_id
             )
         else:
             logger.warning(
@@ -356,9 +377,12 @@ class Genbuilder:
                         )
                     )
                     logger.info(
-                        f"Genbuilder.run: residential generation finished, "
-                        f"blocks={len(res_blocks_out)}, plots={len(res_plots)}, "
-                        f"buildings={len(res_buildings)}"
+                        "Genbuilder.run: residential generation finished, "
+                        "blocks={}, plots={}, "
+                        "buildings={}",
+                        len(res_blocks_out),
+                        len(res_plots),
+                        len(res_buildings)
                     )
 
                     if (
@@ -376,8 +400,9 @@ class Genbuilder:
                             utm,
                         )
                         logger.info(
-                            f"Genbuilder.run: residential services generated, "
-                            f"count={len(residential_services)}"
+                            "Genbuilder.run: residential services generated, "
+                            "count={}",
+                            len(residential_services)
                         )
                     else:
                         logger.info(
@@ -402,9 +427,12 @@ class Genbuilder:
                         )
                     )
                     logger.info(
-                        f"Genbuilder.run: non-residential generation finished, "
-                        f"blocks={len(nonres_blocks_out)}, plots={len(nonres_plots)}, "
-                        f"buildings={len(nonres_buildings)}"
+                        "Genbuilder.run: non-residential generation finished, "
+                        "blocks={}, plots={}, "
+                        "buildings={}",
+                        len(nonres_blocks_out),
+                        len(nonres_plots),
+                        len(nonres_buildings)
                     )
                 else:
                     logger.info(
@@ -431,9 +459,12 @@ class Genbuilder:
                         )
                     )
                     logger.info(
-                        f"Genbuilder.run: mixed generation finished, "
-                        f"blocks={len(mixed_blocks_out)}, plots={len(mixed_plots)}, "
-                        f"buildings={len(mixed_buildings)}"
+                        "Genbuilder.run: mixed generation finished, "
+                        "blocks={}, plots={}, "
+                        "buildings={}",
+                        len(mixed_blocks_out),
+                        len(mixed_plots),
+                        len(mixed_buildings)
                     )
                 else:
                     logger.info(
@@ -539,17 +570,22 @@ class Genbuilder:
         mixed_mask = buildings_all["zone"].isin(["business", "unknown"])
         buildings_all.loc[nonres_mask, "living_area"] = 0.0
         logger.info(
-            f"Genbuilder.run: final zones distribution in buildings: "
-            f"residential={res_mask.sum()}, mixed={mixed_mask.sum()}, "
-            f"non_residential={nonres_mask.sum()}"
+            "Genbuilder.run: final zones distribution in buildings: "
+            "residential={}, mixed={}, "
+            "non_residential={}",
+            res_mask.sum(),
+            mixed_mask.sum(),
+            nonres_mask.sum()
         )
         la_per_person = float(new_parameters.la_per_person)
         buildings_all = await asyncio.to_thread(buildings_all.to_crs, 4326)
         buildings_all["residents_number"] = round(buildings_all["living_area"] / la_per_person)
 
         logger.info(
-            f"Genbuilder.run: final buildings count={len(buildings_all)}, "
-            f"crs={buildings_all.crs}"
+            "Genbuilder.run: final buildings count={}, "
+            "crs={}",
+            len(buildings_all),
+            buildings_all.crs
         )
 
         return json.loads(buildings_all.to_json())
