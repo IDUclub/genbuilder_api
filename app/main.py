@@ -22,7 +22,10 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await shutdown_prometheus()
-app = FastAPI(title="GenBuilder API", version = "0.8")
+app = FastAPI(
+    title="GenBuilder API",
+    lifespan=lifespan,
+    version = "0.1.1")
 
 origins = ["*"]
 app.add_middleware(
