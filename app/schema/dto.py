@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Union, Annotated
 
-from geojson_pydantic import Feature, FeatureCollection, Polygon
+from geojson_pydantic import Feature, FeatureCollection, Polygon, MultiPolygon
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
@@ -30,7 +30,7 @@ class BlockProperties(BaseModel):
         return s
 
 
-class BlockFeature(Feature[Polygon, BlockProperties]):
+class BlockFeature(Feature[Polygon | MultiPolygon, BlockProperties]):
     """GeoJSON Feature representing an urban block (Polygon)."""
 
     pass
@@ -45,10 +45,10 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
 class ScenarioBody(BaseModel):
     targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
-            "la_target": {
-                "residential": 20000,
-                "business": 10000,
-                "unknown": 10000
+            "residents": {
+                "residential": 1100,
+                "business": 500,
+                "unknown": 500,
             },
             "coverage_area": {
                 "business": 10000,
@@ -77,7 +77,6 @@ class ScenarioBody(BaseModel):
         },
         description=(
             "Spatial and target parameters for functional zone types.\n"
-            "- la_target: residential living area targets (m²)\n"
             "- coverage_area: non-res functional area targets (m²)\n"
             "- floors_avg: mean floors for each zone\n"
             "- density_scenario: FAR scenario for residential component\n"
@@ -86,36 +85,36 @@ class ScenarioBody(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                "la_target": {
-                    "residential": 20000,
-                    "business": 10000,
-                    "unknown": 10000
-                },
-                "coverage_area": {
-                    "business": 10000,
-                    "unknown": 10000,
-                    "industrial": 20000,
-                    "transport": 10000,
-                    "special": 10000,
-                },
-                "floors_avg": {
-                    "business": 7,
-                    "unknown": 5,
-                    "industrial": 5,
-                    "transport": 1,
-                    "special": 3,
-                },
-                "density_scenario": {
-                    "residential": "min",
-                    "business": "min",
-                    "unknown": "min",
-                },
-                "default_floor_group": {
-                    "residential": "medium",
-                    "business": "high",
-                    "unknown": "high",
-                },
-            }
+                    "residents": {
+                        "residential": 1100,
+                        "business": 500,
+                        "unknown": 500,
+                    },
+                    "coverage_area": {
+                        "business": 10000,
+                        "unknown": 10000,
+                        "industrial": 20000,
+                        "transport": 10000,
+                        "special": 10000,
+                    },
+                    "floors_avg": {
+                        "business": 7,
+                        "unknown": 5,
+                        "industrial": 5,
+                        "transport": 1,
+                        "special": 3,
+                    },
+                    "density_scenario": {
+                        "residential": "min",
+                        "business": "min",
+                        "unknown": "min",
+                    },
+                    "default_floor_group": {
+                        "residential": "medium",
+                        "business": "high",
+                        "unknown": "high",
+                    },
+                }
             ]
         },
     )
@@ -136,15 +135,15 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
     )
 
-    targets_by_zone: Optional[Dict[str, Dict[str, float]]] = Field(
+    targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
-            "la_target": {
-                "residential": 20000,
-                "business": 10000,
+            "residents": {
+                "residential": 1100,
+                "business": 0,
                 "industrial": 0,
                 "transport": 0,
                 "special": 0,
-                "agriculture": 5000,
+                "agriculture": 0,
                 "recreation": 0,
             },
             "coverage_area": {
@@ -177,7 +176,6 @@ class TerritoryRequest(BaseModel):
         },
         description=(
             "Per-zone targets for generation:\n"
-            "- la_target: residential living area (m²)\n"
             "- coverage_area: non-res functional area (m²)\n"
             "- floors_avg: mean floors per zone\n"
             "- density_scenario: FAR scenario for residential component\n"
@@ -186,10 +184,10 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "la_target": {
-                        "residential": 20000,
-                        "business": 6000,
-                        "industrial": 0,
+                    "residents": {
+                        "residential": 1100,
+                        "business": 500,
+                        "industrial": 500,
                     },
                     "coverage_area": {
                         "business": 6000,
@@ -300,10 +298,146 @@ class BuildingFeatureCollection(BaseModel):
     }
 
 
+class FunctionalZoneGenerationConfig(BaseModel):
+    functional_zone_id: int = Field(..., description="Functional zone ID")
+    targets_by_zone: Dict[str, Dict[str, Any]] = Field(
+        ...,
+        description="Per-zone targets for generation (same structure as ScenarioBody.targets_by_zone)",
+    )
+    generation_parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Generation parameters, override base ones for this zone",
+        json_schema_extra={"examples": [{"rectangle_finder_step": 5}]},
+    )
+
+
+class FunctionalZonesRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "zones": [
+                        {
+                            "functional_zone_id": 6679027,
+                            "generation_parameters": {"rectangle_finder_step": 5},
+                            "targets_by_zone": {
+                                "coverage_area": {
+                                    "business": 10000,
+                                    "industrial": 20000,
+                                    "special": 10000,
+                                    "transport": 10000,
+                                    "unknown": 10000,
+                                },
+                                "default_floor_group": {
+                                    "business": "high",
+                                    "residential": "medium",
+                                    "unknown": "high",
+                                },
+                                "density_scenario": {
+                                    "business": "min",
+                                    "residential": "min",
+                                    "unknown": "min",
+                                },
+                                "floors_avg": {
+                                    "business": 7,
+                                    "industrial": 5,
+                                    "special": 3,
+                                    "transport": 1,
+                                    "unknown": 5,
+                                },
+                                "residents": {
+                                    "business": 10000,
+                                    "residential": 20000,
+                                    "unknown": 10000,
+                                },
+                            },
+                        },
+                        {
+                            "functional_zone_id": 6679074,
+                            "generation_parameters": {"rectangle_finder_step": 5},
+                            "targets_by_zone": {
+                                "coverage_area": {
+                                    "business": 8000,
+                                    "industrial": 15000,
+                                    "special": 5000,
+                                    "transport": 7000,
+                                    "unknown": 6000,
+                                },
+                                "default_floor_group": {
+                                    "business": "medium",
+                                    "residential": "low",
+                                    "unknown": "medium",
+                                },
+                                "density_scenario": {
+                                    "business": "min",
+                                    "residential": "min",
+                                    "unknown": "min",
+                                },
+                                "floors_avg": {
+                                    "business": 5,
+                                    "industrial": 4,
+                                    "special": 2,
+                                    "transport": 1,
+                                    "unknown": 4,
+                                },
+                                "residents": {
+                                    "business": 6000,
+                                    "residential": 12000,
+                                    "unknown": 6000,
+                                },
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+    )
+
+    zones: list[FunctionalZoneGenerationConfig] = Field(
+        ...,
+        description="List of functional zones with generation parameters",
+    )
+
+
+class MaximumResidentsConfig(BaseModel):
+    functional_zone_id: int = Field(..., description="Functional zone id")
+
+    generation_parameters: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional generation parameters for this zone (merged with defaults)",
+    )
+
+    targets_by_zone: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional per-zone targets (merged with defaults)",
+    )
+
+
+class MaximumResidentsRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "zones": [
+                        {"functional_zone_id": 6679027},
+                        {"functional_zone_id": 6679074},
+                    ]
+                }
+            ]
+        }
+    )
+
+    zones: list[MaximumResidentsConfig] = Field(
+        ...,
+        description="List of functional zones (other fields are optional and merged with defaults)",
+    )
+
+
+
 __all__ = [
+    "ScenarioBody",
     "BlockFeatureCollection",
     "TerritoryRequest",
-    "PIPELINE_EXAMPLE",
-    "ScenarioRequest",
     "BuildingFeatureCollection",
+    "FunctionalZonesRequest"
 ]

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import aiohttp
 import geopandas as gpd
 import pandas as pd
@@ -12,13 +14,30 @@ from app.exceptions.http_exception_wrapper import http_exception
 class UrbanDBAPI:
     def __init__(self, config: Config):
         self.config = config
-        self.url = config.get("UrbanDB_API")
+        raw_url = config.get("UrbanDB_API")
+        self.base_url = raw_url.rstrip("/") if raw_url else ""
         self.handler = APIHandler()
 
+    def _make_headers(
+            self,
+            token: str,
+            extra: Optional[dict[str, str]] = None,
+    ) -> dict[str, str]:
+        """Build request headers.
+
+        extra can be used for tracing headers like x-request-id, traceparent, etc.
+        """
+        headers = {
+            "Authorization": f"Bearer {token}",
+        }
+        if extra:
+            headers.update(extra)
+        return headers
+
     async def get_territories_for_buildings(self, scenario_id: int, year: int, source: str, token: str):
-        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}/functional_zones?year={year}&source={source}"
+        api_url = f"{self.base_url}/api/v1/scenarios/{scenario_id}/functional_zones?year={year}&source={source}"
         logger.info(f"Fetching functional zones from API: {api_url}")
-        headers = {'Authorization': f'Bearer {token}'}
+        headers = self._make_headers(token=token)
         async with aiohttp.ClientSession() as session:
             json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
 
@@ -66,8 +85,8 @@ class UrbanDBAPI:
         return zones
     
     async def get_territory_by_scenario(self, scenario_id: int, token: str):
-        api_url = f"{self.url.rstrip('/')}/api/v1/scenarios/{scenario_id}"
-        headers = {'Authorization': f'Bearer {token}'}
+        api_url = f"{self.base_url}/api/v1/scenarios/{scenario_id}"
+        headers = self._make_headers(token=token)
         logger.info(f"Fetching service normatives from API: {api_url}")
         async with aiohttp.ClientSession() as session:
             json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
@@ -78,7 +97,7 @@ class UrbanDBAPI:
         return territory_id
     
     async def get_normatives_for_territory(self, territory_id: int, token: str):
-        api_url = f"{self.url.rstrip('/')}/api/v1/territory/{territory_id}/normatives?last_only=true&include_child_territories=false&cities_only=false"
+        api_url = f"{self.base_url}/api/v1/territory/{territory_id}/normatives?last_only=true&include_child_territories=false&cities_only=false"
         logger.info(f"Fetching service normatives from API: {api_url}")
         headers = {'Authorization': f'Bearer {token}'}
         async with aiohttp.ClientSession() as session:
@@ -95,4 +114,53 @@ class UrbanDBAPI:
         service_normatives.dropna(subset=['service_capacity'], inplace=True)
         logger.info(f"Normatives for territory {territory_id} collected.")
         return service_normatives
-    
+
+    async def get_scenario_functional_zones(self, scenario_id: int, source:str, year: int, token: str):
+        api_url = f"{self.base_url}/api/v1/scenarios/{scenario_id}/functional_zones"
+        logger.info(f"Fetching functional_zones from API: {api_url} for scenario {scenario_id}")
+        headers = self._make_headers(token=token)
+        params = {
+            "source": source,
+            "year": year,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            response_json = await self.handler.request(
+                method="GET",
+                url=api_url,
+                session=session,
+                headers=headers,
+                params=params,
+                expect_json=True,
+            )
+
+        return response_json
+
+    async def get_physical_objects(
+        self,
+        scenario_id: int,
+        token: str,
+        physical_object_type_id: Optional[int] = None,
+    ) -> dict:
+        api_url = f"{self.base_url}/api/v1/scenarios/{scenario_id}/physical_objects_with_geometry"
+        logger.info(
+            f"Fetching physical_objects from API: {api_url} for scenario {scenario_id}"
+        )
+
+        headers = self._make_headers(token=token)
+
+        params = None
+        if physical_object_type_id is not None:
+            params = {"physical_object_type_id": int(physical_object_type_id)}
+
+        async with aiohttp.ClientSession() as session:
+            response_json = await self.handler.request(
+                method="GET",
+                url=api_url,
+                session=session,
+                headers=headers,
+                params=params,
+                expect_json=True,
+            )
+
+        return response_json

@@ -24,6 +24,14 @@ class GenParams(BaseModel):
     """limit for attempts for service placement"""
     max_sites_per_service_per_block: int = 10
     """limit for number of service of one type in block"""
+    physical_objects_exclusion_buffer_m: float = 5.0
+    """Buffer (in meters) around physical objects that will be excluded from generation."""
+    physical_objects_exclusion_dynamic: bool = True
+    """If True, buffer is chosen per physical object based on its geometry size and building_params."""
+    physical_objects_exclusion_min_buffer_m: float = 3.0
+    """Lower bound for dynamic buffer (in meters)."""
+    physical_objects_exclusion_max_buffer_m: float = 60.0
+    """Upper bound for dynamic buffer (in meters)."""
     service_projects_file: str = str( Path(__file__).resolve().parent / "service_projects.geojson")
     """path to service projects file with geometry and plot/building parameters"""
 
