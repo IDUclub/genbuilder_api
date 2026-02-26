@@ -1,7 +1,11 @@
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Body, Query, Depends
+from loguru import logger
+
 from app.dependencies import builder, urban_db_api, zones_service
 from app.exceptions.http_exception_wrapper import http_exception
+from app.logic.polygon_converter import _explode_to_polygons, _scale_numeric_targets, _make_block_feature, \
+    _filter_parts_by_zone_min_area
 from app.schema.default_params import DEFAULT_BLOCK_GENERATION_PARAMETERS, DEFAULT_BLOCK_TARGETS_BY_ZONE
 from app.schema.dto import (
     ScenarioBody,
@@ -28,15 +32,15 @@ async def pipeline_route(
         List[str],
         Query(..., description="Target functional zone types", examples=[['residential', 'business', 'industrial']]),
     ],
-        physical_object_id: Annotated[
-            Optional[List[int]],
-            Query(
-                description=(
-                        "Physical object id(s) to exclude from generation territory."
-                ),
-                examples=[[2058130, 2058131]],
+    physical_object_id: Annotated[
+        Optional[List[int]],
+        Query(
+            description=(
+                    "Physical object id(s) to exclude from generation territory."
             ),
-        ] = None,
+            examples=[[2058130, 2058131]],
+        ),
+    ] = None,
     token: str = Depends(auth.verify_token),
     body: ScenarioBody = Body(default_factory=ScenarioBody),
 ):
@@ -83,6 +87,15 @@ async def generate_by_functional_zones(
                 examples=["residential", "business", "industrial"],
             ),
         ],
+        physical_object_id: Annotated[
+                Optional[List[int]],
+                Query(
+                    description=(
+                            "Physical object id(s) to exclude from generation territory."
+                    ),
+                    examples=[[2058130, 2058131]],
+                ),
+            ] = None,
         token: str = Depends(auth.verify_token),
         body: FunctionalZonesRequest = Body(
             ..., description="Per-zone targets and generation parameters"
@@ -123,35 +136,124 @@ async def generate_by_functional_zones(
             input_data={"missing_ids": missing_ids},
         )
 
+    excluded_features_out = []
+    if physical_object_id:
+        ids_set = {int(x) for x in physical_object_id}
+
+        try:
+            physical_objects_fc = await urban_db_api.get_physical_objects(
+                scenario_id=scenario_id,
+                token=token,
+            )
+            selected = builder.physical_objects_service.select_features_by_ids(
+                physical_objects_fc,
+                ids_set,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch excluded physical objects for response: {}", e)
+            selected = []
+
+        for feat in selected:
+            props = feat.get("properties") or {}
+
+            po_id = (
+                    props.get("physical_object_id")
+                    or props.get("excluded_physical_object_id")
+                    or props.get("id")
+            )
+
+            excluded_features_out.append(
+                {
+                    "type": "Feature",
+                    "geometry": feat.get("geometry"),
+                    "properties": {
+                        "is_excluded": True,
+                        "physical_object_id": po_id,
+                    },
+                }
+            )
+
     combined_features = []
+
     for zone in body.zones:
         feature = feature_by_id[zone.functional_zone_id]
         props = feature.get("properties", {})
         zone_type = (props.get("functional_zone_type") or {}).get("name")
-        block_feature = {
-            "type": "Feature",
-            "properties": {
-                **props,
-                "block_id": props.get("functional_zone_id"),
-                "zone": zone_type,
-            },
-            "geometry": feature.get("geometry"),
-        }
-        blocks = BlockFeatureCollection.model_validate(
-            {"type": "FeatureCollection", "features": [block_feature]}
-        )
-        result = await builder.run(
-            blocks=blocks,
-            targets_by_zone=zone.targets_by_zone,
-            generation_parameters_override=zone.generation_parameters,
-            scenario_id=scenario_id,
-            token=token,
-            year=year,
-            source=source,
-            functional_zone_types=functional_zone_types,
-        )
-        combined_features.extend(result.get("features", []))
 
+        geometry = feature.get("geometry") or {}
+        geom_type = geometry.get("type")
+
+        if geom_type == "Polygon":
+            block_feature = {
+                "type": "Feature",
+                "properties": {**props, "block_id": props.get("functional_zone_id"), "zone": zone_type},
+                "geometry": geometry,
+            }
+            blocks = BlockFeatureCollection.model_validate({"type": "FeatureCollection", "features": [block_feature]})
+            result = await builder.run(
+                blocks=blocks,
+                targets_by_zone=zone.targets_by_zone,
+                generation_parameters_override=zone.generation_parameters,
+                scenario_id=scenario_id,
+                token=token,
+                year=year,
+                source=source,
+                functional_zone_types=functional_zone_types,
+                physical_object_ids=physical_object_id,
+            )
+            combined_features.extend(result.get("features", []))
+            continue
+
+        if geom_type == "MultiPolygon":
+            parts = _explode_to_polygons(geometry, min_area_weight=0.0)
+
+            parts, report = _filter_parts_by_zone_min_area(
+                zone_id=zone.functional_zone_id,
+                zone_type=zone_type,
+                parts=parts,
+            )
+
+            if report is not None and report.dropped_count > 0:
+                logger.info(
+                    "Zone {} ({}): dropped={} kept={}",
+                    report.zone_id,
+                    report.zone_type,
+                    report.dropped_count,
+                    report.kept_count,
+                )
+
+            if not parts:
+                logger.warning("No polygon parts after filtering for zone_id={}", zone.functional_zone_id)
+                continue
+
+            for part in parts:
+                part_targets = _scale_numeric_targets(zone.targets_by_zone, part.area_weight)
+                block_feature = _make_block_feature(
+                    base_props=props,
+                    zone_type=zone_type,
+                    zone_id=zone.functional_zone_id,
+                    part_index=part.index,
+                    geometry=part.geometry,
+                )
+                blocks = BlockFeatureCollection.model_validate(
+                    {"type": "FeatureCollection", "features": [block_feature]})
+                result = await builder.run(
+                    blocks=blocks,
+                    targets_by_zone=part_targets,
+                    generation_parameters_override=zone.generation_parameters,
+                    scenario_id=scenario_id,
+                    token=token,
+                    year=year,
+                    source=source,
+                    functional_zone_types=functional_zone_types,
+                    physical_object_ids=physical_object_id,
+                )
+                combined_features.extend(result.get("features", []))
+            continue
+
+        raise http_exception(422, f"Unsupported geometry type for zone {zone.functional_zone_id}: {geom_type}")
+
+    combined_features.extend(excluded_features_out)
     return {"type": "FeatureCollection", "features": combined_features}
 
 

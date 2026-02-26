@@ -128,7 +128,9 @@ class PhysicalObjectsService:
 
         logger.info(
             "PhysicalObjectsExcluder.exclude: blocks reduced "
-            f"from {len(blocks)} to {len(out)} after exclusion"
+            "from {} to {} after exclusion",
+            len(blocks),
+            len(out)
         )
         return out
 
@@ -209,7 +211,10 @@ class PhysicalObjectsService:
 
         logger.info(
             "PhysicalObjectsService.apply_dynamic_buffer: applied per-object buffers "
-            f"(min={min_buffer_m}, max={max_buffer_m}), objects_count={len(out)}"
+            "(min={}, max={}), objects_count={}",
+            min_buffer_m,
+            max_buffer_m,
+            len(out)
         )
 
         return out

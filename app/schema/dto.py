@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Union, Annotated
 
-from geojson_pydantic import Feature, FeatureCollection, Polygon
+from geojson_pydantic import Feature, FeatureCollection, Polygon, MultiPolygon
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
@@ -30,7 +30,7 @@ class BlockProperties(BaseModel):
         return s
 
 
-class BlockFeature(Feature[Polygon, BlockProperties]):
+class BlockFeature(Feature[Polygon | MultiPolygon, BlockProperties]):
     """GeoJSON Feature representing an urban block (Polygon)."""
 
     pass

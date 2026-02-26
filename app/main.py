@@ -8,7 +8,7 @@ from app.routers.logs_routers import logs_router
 
 setup_logger(config)
 
-app = FastAPI(title="GenBuilder API", version = "0.8")
+app = FastAPI(title="GenBuilder API", version = "0.1.1")
 
 origins = ["*"]
 app.add_middleware(
