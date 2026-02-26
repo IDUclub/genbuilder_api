@@ -28,6 +28,7 @@ from app.logic.building_params import (
     PARAMS_BY_TYPE
 )
 from app.logic.generation import Genbuilder
+from app.observability.otel_agent import OpenTelemetryAgent
 
 config = Config()
 setup_logger(config, log_level="INFO")
@@ -66,3 +67,5 @@ builder = Genbuilder(
     params_provider, block_generator, service_generator, buildings_params_provider, physical_objects_service
 )
 zones_service = FunctionalZonesService(urban_db_api)
+
+otel_agent: OpenTelemetryAgent | None = None
