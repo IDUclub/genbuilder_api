@@ -30,7 +30,7 @@ class Genbuilder:
     Async orchestrator for the full Genbuilder pipeline that loads or receives
     urban blocks, runs residential / non-residential / mixed generation flows
     with optional parameter overrides and service normatives, and returns a
-    unified GeoJSON FeatureCollection of buildings with key attributes.
+    payload with generated buildings and selected physical object features.
     """
 
     def __init__(
@@ -64,6 +64,45 @@ class Genbuilder:
         buildings_parameters_override: dict | None = None,
         physical_object_ids: Optional[list[int]] = None
     ):
+        def build_feature_collection_response(
+            buildings_fc: dict,
+            selected_fc: dict,
+        ) -> dict:
+            return {
+                "generated_buildings": buildings_fc,
+                "selected_features": selected_fc,
+            }
+
+        def normalize_selected_features_payload(selected: object) -> dict:
+            if isinstance(selected, dict):
+                if selected.get("type") == "FeatureCollection":
+                    features = selected.get("features") or []
+                    return {
+                        "type": "FeatureCollection",
+                        "features": list(features),
+                    }
+                if selected.get("type") == "Feature":
+                    return {
+                        "type": "FeatureCollection",
+                        "features": [selected],
+                    }
+
+            if isinstance(selected, list):
+                return {
+                    "type": "FeatureCollection",
+                    "features": list(selected),
+                }
+
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+            }
+
+        selected_features_payload = {
+            "type": "FeatureCollection",
+            "features": [],
+        }
+
         base_parameters = self.generation_parameters.current()
         new_parameters = (
             base_parameters.patched(generation_parameters_override)
@@ -126,7 +165,10 @@ class Genbuilder:
                 crs="EPSG:4326",
             )
             empty_json = await asyncio.to_thread(empty.to_json)
-            return json.loads(empty_json)
+            return build_feature_collection_response(
+                buildings_fc=json.loads(empty_json),
+                selected_fc=selected_features_payload,
+            )
 
         utm = await asyncio.to_thread(gdf_blocks.estimate_utm_crs)
         gdf_blocks = await asyncio.to_thread(gdf_blocks.to_crs, utm)
@@ -149,15 +191,19 @@ class Genbuilder:
                 fc = {}
 
             selected_features = self.physical_objects_service.select_features_by_ids(fc, ids_set)
+            selected_features_payload = normalize_selected_features_payload(
+                selected_features
+            )
 
-            if not selected_features:
+            if not selected_features_payload["features"]:
                 logger.info(
                     "Genbuilder.run: no matching physical objects found by requested ids; skipping exclusion"
                 )
             else:
                 try:
                     objects_gdf = await asyncio.to_thread(
-                        gpd.GeoDataFrame.from_features, selected_features
+                        gpd.GeoDataFrame.from_features,
+                        selected_features_payload["features"],
                     )
                 except Exception as e:
                     logger.warning(
@@ -165,7 +211,11 @@ class Genbuilder:
                         "skipping exclusion: {}",
                         e
                     )
-                    objects_gdf = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+                    objects_gdf = gpd.GeoDataFrame(
+                        columns=["geometry"],
+                        geometry="geometry",
+                        crs="EPSG:4326",
+                    )
 
                 if not objects_gdf.empty:
                     if objects_gdf.crs is None:
@@ -214,9 +264,16 @@ class Genbuilder:
                     if gdf_blocks.empty:
                         logger.warning(
                             "Genbuilder.run: all blocks removed after physical objects exclusion, returning empty FC")
-                        empty = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+                        empty = gpd.GeoDataFrame(
+                            columns=["geometry"],
+                            geometry="geometry",
+                            crs="EPSG:4326",
+                        )
                         empty_json = await asyncio.to_thread(empty.to_json)
-                        return json.loads(empty_json)
+                        return build_feature_collection_response(
+                            buildings_fc=json.loads(empty_json),
+                            selected_fc=selected_features_payload,
+                        )
 
         res_blocks = gdf_blocks[gdf_blocks["zone"] == "residential"].copy()
 
@@ -502,7 +559,10 @@ class Genbuilder:
                 crs="EPSG:4326",
             )
             empty_json = await asyncio.to_thread(empty.to_json)
-            return json.loads(empty_json)
+            return build_feature_collection_response(
+                buildings_fc=json.loads(empty_json),
+                selected_fc=selected_features_payload,
+            )
 
         concat_df = await asyncio.to_thread(pd.concat, frames, ignore_index=True)
         buildings_all = gpd.GeoDataFrame(
@@ -588,6 +648,9 @@ class Genbuilder:
             buildings_all.crs
         )
 
-        return json.loads(buildings_all.to_json())
+        return build_feature_collection_response(
+            buildings_fc=json.loads(buildings_all.to_json()),
+            selected_fc=selected_features_payload,
+        )
 
 
