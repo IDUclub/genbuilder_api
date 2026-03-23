@@ -19,6 +19,89 @@ from app.utils import auth
 generation_router = APIRouter()
 
 
+
+def _empty_feature_collection() -> dict:
+    """Return an empty GeoJSON FeatureCollection."""
+    return {"type": "FeatureCollection", "features": []}
+
+
+def _get_generated_buildings(result: dict | None) -> dict:
+    """Extract generated buildings FeatureCollection from builder result."""
+    if not isinstance(result, dict):
+        return _empty_feature_collection()
+
+    generated = result.get("generated_buildings")
+    if isinstance(generated, dict) and generated.get("type") == "FeatureCollection":
+        return {
+            "type": "FeatureCollection",
+            "features": list(generated.get("features") or []),
+        }
+
+    if result.get("type") == "FeatureCollection":
+        return {
+            "type": "FeatureCollection",
+            "features": list(result.get("features") or []),
+        }
+
+    return _empty_feature_collection()
+
+
+def _get_selected_features(result: dict | None) -> dict:
+    """Extract selected physical objects FeatureCollection from builder result."""
+    if not isinstance(result, dict):
+        return _empty_feature_collection()
+
+    selected = result.get("selected_features")
+    if isinstance(selected, dict) and selected.get("type") == "FeatureCollection":
+        return {
+            "type": "FeatureCollection",
+            "features": list(selected.get("features") or []),
+        }
+
+    return _empty_feature_collection()
+
+
+def _build_excluded_features(selected_fc: dict | None) -> list[dict]:
+    """Convert selected physical objects into excluded GeoJSON features."""
+    features = (selected_fc or {}).get("features") or []
+    excluded_features: list[dict] = []
+
+    for feat in features:
+        props = feat.get("properties") or {}
+        physical_object_id = (
+            props.get("physical_object_id")
+            or props.get("excluded_physical_object_id")
+            or props.get("id")
+        )
+
+        excluded_features.append(
+            {
+                "type": "Feature",
+                "geometry": feat.get("geometry"),
+                "properties": {
+                    "is_excluded": True,
+                    "physical_object_id": physical_object_id,
+                },
+            }
+        )
+
+    return excluded_features
+
+
+def _merge_generation_result(result: dict | None) -> dict:
+    """Merge generated buildings with excluded physical objects."""
+    generated_fc = _get_generated_buildings(result)
+    selected_fc = _get_selected_features(result)
+
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            *(generated_fc.get("features") or []),
+            *_build_excluded_features(selected_fc),
+        ],
+    }
+
+
 @generation_router.post(
     "/generate/by_scenario",
     summary="Generate buildings for target scenario",
@@ -44,7 +127,7 @@ async def pipeline_route(
     token: str = Depends(auth.verify_token),
     body: ScenarioBody = Body(default_factory=ScenarioBody),
 ):
-    return await builder.run(
+    result = await builder.run(
         scenario_id=scenario_id,
         year=year,
         source=source,
@@ -54,6 +137,7 @@ async def pipeline_route(
         generation_parameters_override=body.generation_parameters,
         physical_object_ids=physical_object_id,
     )
+    return _merge_generation_result(result)
 
 
 @generation_router.post(
@@ -65,11 +149,12 @@ async def pipeline_route(
             description="Body for request"
         )
 ):
-    return await builder.run(
+    result = await builder.run(
         blocks=payload.blocks,
         targets_by_zone=payload.targets_by_zone,
         generation_parameters_override=payload.generation_parameters
     )
+    return _merge_generation_result(result)
 
 
 @generation_router.post(
@@ -136,44 +221,9 @@ async def generate_by_functional_zones(
             input_data={"missing_ids": missing_ids},
         )
 
-    excluded_features_out = []
-    if physical_object_id:
-        ids_set = {int(x) for x in physical_object_id}
-
-        try:
-            physical_objects_fc = await urban_db_api.get_physical_objects(
-                scenario_id=scenario_id,
-                token=token,
-            )
-            selected = builder.physical_objects_service.select_features_by_ids(
-                physical_objects_fc,
-                ids_set,
-            )
-        except Exception as e:
-            logger.warning("Failed to fetch excluded physical objects for response: {}", e)
-            selected = []
-
-        for feat in selected:
-            props = feat.get("properties") or {}
-
-            po_id = (
-                    props.get("physical_object_id")
-                    or props.get("excluded_physical_object_id")
-                    or props.get("id")
-            )
-
-            excluded_features_out.append(
-                {
-                    "type": "Feature",
-                    "geometry": feat.get("geometry"),
-                    "properties": {
-                        "is_excluded": True,
-                        "physical_object_id": po_id,
-                    },
-                }
-            )
-
     combined_features = []
+    selected_features_fc = _empty_feature_collection()
+
 
     for zone in body.zones:
         feature = feature_by_id[zone.functional_zone_id]
@@ -201,7 +251,9 @@ async def generate_by_functional_zones(
                 functional_zone_types=functional_zone_types,
                 physical_object_ids=physical_object_id,
             )
-            combined_features.extend(result.get("features", []))
+            combined_features.extend(_get_generated_buildings(result).get("features", []))
+            if not selected_features_fc.get("features"):
+                selected_features_fc = _get_selected_features(result)
             continue
 
         if geom_type == "MultiPolygon":
@@ -248,12 +300,14 @@ async def generate_by_functional_zones(
                     functional_zone_types=functional_zone_types,
                     physical_object_ids=physical_object_id,
                 )
-                combined_features.extend(result.get("features", []))
+                combined_features.extend(_get_generated_buildings(result).get("features", []))
+            if not selected_features_fc.get("features"):
+                selected_features_fc = _get_selected_features(result)
             continue
 
         raise http_exception(422, f"Unsupported geometry type for zone {zone.functional_zone_id}: {geom_type}")
 
-    combined_features.extend(excluded_features_out)
+    combined_features.extend(_build_excluded_features(selected_features_fc))
     return {"type": "FeatureCollection", "features": combined_features}
 
 
@@ -308,7 +362,7 @@ async def residents_by_functional_zones(
         )
 
         residents_sum = 0
-        for feature_out in result.get("features", []):
+        for feature_out in _get_generated_buildings(result).get("features", []):
             value = (feature_out.get("properties") or {}).get("residents_number")
             if value is not None:
                 residents_sum += int(value)
