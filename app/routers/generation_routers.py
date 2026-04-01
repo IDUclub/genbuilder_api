@@ -62,30 +62,9 @@ def _get_selected_features(result: dict | None) -> dict:
 
 
 def _build_excluded_features(selected_fc: dict | None) -> list[dict]:
-    """Convert selected physical objects into excluded GeoJSON features."""
+    """Return excluded features as-is, preserving all prepared properties."""
     features = (selected_fc or {}).get("features") or []
-    excluded_features: list[dict] = []
-
-    for feat in features:
-        props = feat.get("properties") or {}
-        physical_object_id = (
-            props.get("physical_object_id")
-            or props.get("excluded_physical_object_id")
-            or props.get("id")
-        )
-
-        excluded_features.append(
-            {
-                "type": "Feature",
-                "geometry": feat.get("geometry"),
-                "properties": {
-                    "is_excluded": True,
-                    "physical_object_id": physical_object_id,
-                },
-            }
-        )
-
-    return excluded_features
+    return list(features)
 
 
 def _merge_generation_result(result: dict | None) -> dict:
