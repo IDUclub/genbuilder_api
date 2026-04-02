@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any, Iterable, Optional, TYPE_CHECKING
 
 import geopandas as gpd
@@ -31,12 +31,21 @@ def _keep_polygonal(geom: BaseGeometry | None) -> BaseGeometry | None:
 
 class PhysicalObjectsService:
     """Select physical objects features by their ids from GeoJSON FeatureCollection."""
+
     def select_features_by_ids(
-        self,
-        fc: dict[str, Any] | None,
-        requested_ids: Iterable[int],
+            self,
+            fc: dict[str, Any] | None,
+            requested_ids: Iterable[int],
     ) -> list[dict[str, Any]]:
-        """Return list of GeoJSON features matching requested physical_object_id."""
+        """
+        Return excluded physical objects normalized to generated_buildings schema.
+
+        Contract:
+        - same flat properties shape as generated_buildings
+        - custom flags: is_excluded, physical_object_id
+        - living_area > 0 only for residential physical objects
+          (physical_object_type_id == 4 and name == "Жилой дом")
+        """
         if not fc:
             return []
 
@@ -49,27 +58,101 @@ class PhysicalObjectsService:
             return []
 
         selected: list[dict[str, Any]] = []
-        missing_id_count = 0
 
-        for f in features:
-            props = f.get("properties") or {}
-            obj_id = props.get("physical_object_id")
-
-            if obj_id is None:
-                missing_id_count += 1
+        for feature in features:
+            feature_properties = feature.get("properties") or {}
+            raw_physical_object_id = feature_properties.get("physical_object_id")
+            if raw_physical_object_id is None:
                 continue
 
             try:
-                if int(obj_id) in ids_set:
-                    selected.append(f)
-            except Exception:
+                physical_object_id = int(raw_physical_object_id)
+            except (TypeError, ValueError):
                 continue
 
-        if missing_id_count:
-            logger.debug(
-                "PhysicalObjectsSelector: some features had no physical_object_id in properties "
-                f"(count={missing_id_count})"
+            if physical_object_id not in ids_set:
+                continue
+
+            source_props = feature_properties.get("properties") or {}
+            building = feature_properties.get("building") or {}
+            physical_object_type = feature_properties.get("physical_object_type") or {}
+
+            physical_object_type_id = physical_object_type.get("physical_object_type_id")
+            physical_object_type_name = physical_object_type.get("name")
+
+            is_residential_physical_object = (
+                    physical_object_type_id == 4
+                    and physical_object_type_name == "Жилой дом"
             )
+
+            if is_residential_physical_object:
+                try:
+                    living_area = float(source_props.get("living_area"))
+                except (TypeError, ValueError):
+                    living_area = 1.0
+
+                if living_area <= 0:
+                    living_area = 1.0
+            else:
+                living_area = 0.0
+
+            try:
+                building_area = float(source_props.get("building_area"))
+            except (TypeError, ValueError):
+                official_area = building.get("building_area_official")
+                try:
+                    building_area = float(official_area)
+                except (TypeError, ValueError):
+                    building_area = 0.0
+
+            try:
+                floors_count = float(
+                    source_props.get("floors_count", building.get("floors", 0.0))
+                )
+            except (TypeError, ValueError):
+                floors_count = 0.0
+
+            try:
+                residents_number = float(source_props.get("residents_number"))
+            except (TypeError, ValueError):
+                residents_number = 0.0
+
+            if not is_residential_physical_object:
+                residents_number = 0.0
+
+            service_value = source_props.get("service")
+            if not isinstance(service_value, list):
+                service_value = []
+
+            result_properties = {
+                "floors_count": floors_count,
+                "living_area": living_area,
+                "building_area": building_area,
+                "service": service_value,
+                "broke_restriction_zone": bool(
+                    source_props.get("broke_restriction_zone", False)
+                ),
+                "building_type": source_props.get("building_type"),
+                "zone": source_props.get("zone"),
+                "residents_number": residents_number,
+                "is_excluded": True,
+                "physical_object_id": physical_object_id,
+            }
+
+            selected.append(
+                {
+                    "type": "Feature",
+                    "id": feature.get("id"),
+                    "geometry": deepcopy(feature.get("geometry")),
+                    "properties": result_properties,
+                }
+            )
+
+        logger.info(
+            "PhysicalObjectsService.select_features_by_ids: selected {} features by ids={}",
+            len(selected),
+            sorted(ids_set),
+        )
 
         return selected
 

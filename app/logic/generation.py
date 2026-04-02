@@ -223,57 +223,88 @@ class Genbuilder:
 
                     objects_gdf = await asyncio.to_thread(objects_gdf.to_crs, utm)
 
-                    if bool(new_parameters.physical_objects_exclusion_dynamic):
-                        min_b = float(new_parameters.physical_objects_exclusion_min_buffer_m)
-                        max_b = float(new_parameters.physical_objects_exclusion_max_buffer_m)
-                        logger.info(
-                            "Genbuilder.run: using dynamic per-object buffer based on building_params "
-                            "(min={}, max={})",
-                            min_b,
-                            max_b
-                        )
-                        objects_gdf = self.physical_objects_service.apply_dynamic_buffer(
-                            physical_objects=objects_gdf,
-                            building_params_provider=self.buildings_generation_parameters,
-                            min_buffer_m=min_b,
-                            max_buffer_m=max_b,
-                        )
-                        buffer_m = 0.0
-                    else:
-                        buffer_m = float(new_parameters.physical_objects_exclusion_buffer_m)
-                        logger.info("Genbuilder.run: buffer m={}",
-                                    buffer_m)
-
-                    before = len(gdf_blocks)
-                    gdf_blocks = self.physical_objects_service.exclude(
-                        blocks=gdf_blocks,
-                        physical_objects=objects_gdf,
-                        buffer_m=buffer_m,
+                    intersecting_objects_gdf = await asyncio.to_thread(
+                        gpd.sjoin,
+                        objects_gdf,
+                        gdf_blocks[["geometry"]],
+                        how="inner",
+                        predicate="intersects",
                     )
 
+                    if not intersecting_objects_gdf.empty:
+                        intersecting_objects_gdf = (
+                            intersecting_objects_gdf
+                            .drop(columns=["index_right"], errors="ignore")
+                            .drop_duplicates(subset=["geometry"])
+                            .copy()
+                        )
+
+                    ignored_for_generation = max(len(objects_gdf) - len(intersecting_objects_gdf), 0)
                     logger.info(
-                        "Genbuilder.run: applied physical objects exclusion "
-                        "(ids={}, buffer_m={}); "
-                        "blocks_before={}, blocks_after={}",
-                        sorted(ids_set),
-                        buffer_m,
-                        before,
-                        len(gdf_blocks)
+                        "Genbuilder.run: selected physical objects total={}, intersecting_blocks={}, "
+                        "ignored_outside_generation_zone={}",
+                        len(objects_gdf),
+                        len(intersecting_objects_gdf),
+                        ignored_for_generation,
                     )
 
-                    if gdf_blocks.empty:
-                        logger.warning(
-                            "Genbuilder.run: all blocks removed after physical objects exclusion, returning empty FC")
-                        empty = gpd.GeoDataFrame(
-                            columns=["geometry"],
-                            geometry="geometry",
-                            crs="EPSG:4326",
+                    if intersecting_objects_gdf.empty:
+                        logger.info(
+                            "Genbuilder.run: no selected physical objects intersect generation blocks; "
+                            "skip exclusion but keep selected features in response"
                         )
-                        empty_json = await asyncio.to_thread(empty.to_json)
-                        return build_feature_collection_response(
-                            buildings_fc=json.loads(empty_json),
-                            selected_fc=selected_features_payload,
+                    else:
+                        if bool(new_parameters.physical_objects_exclusion_dynamic):
+                            min_b = float(new_parameters.physical_objects_exclusion_min_buffer_m)
+                            max_b = float(new_parameters.physical_objects_exclusion_max_buffer_m)
+                            logger.info(
+                                "Genbuilder.run: using dynamic per-object buffer based on building_params "
+                                "(min={}, max={})",
+                                min_b,
+                                max_b
+                            )
+                            intersecting_objects_gdf = self.physical_objects_service.apply_dynamic_buffer(
+                                physical_objects=intersecting_objects_gdf,
+                                building_params_provider=self.buildings_generation_parameters,
+                                min_buffer_m=min_b,
+                                max_buffer_m=max_b,
+                            )
+                            buffer_m = 0.0
+                        else:
+                            buffer_m = float(new_parameters.physical_objects_exclusion_buffer_m)
+                            logger.info("Genbuilder.run: buffer m={}", buffer_m)
+
+                        before = len(gdf_blocks)
+                        gdf_blocks = self.physical_objects_service.exclude(
+                            blocks=gdf_blocks,
+                            physical_objects=intersecting_objects_gdf,
+                            buffer_m=buffer_m,
                         )
+
+                        logger.info(
+                            "Genbuilder.run: applied physical objects exclusion "
+                            "(ids={}, buffer_m={}); blocks_before={}, blocks_after={}",
+                            sorted(ids_set),
+                            buffer_m,
+                            before,
+                            len(gdf_blocks)
+                        )
+
+                        if gdf_blocks.empty:
+                            logger.warning(
+                                "Genbuilder.run: all blocks removed after physical objects exclusion, returning empty "
+                                "FC"
+                            )
+                            empty = gpd.GeoDataFrame(
+                                columns=["geometry"],
+                                geometry="geometry",
+                                crs="EPSG:4326",
+                            )
+                            empty_json = await asyncio.to_thread(empty.to_json)
+                            return build_feature_collection_response(
+                                buildings_fc=json.loads(empty_json),
+                                selected_fc=selected_features_payload,
+                            )
 
         res_blocks = gdf_blocks[gdf_blocks["zone"] == "residential"].copy()
 
