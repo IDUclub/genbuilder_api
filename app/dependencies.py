@@ -1,3 +1,5 @@
+import os
+
 from iduconfig import Config
 
 from app.logic.functional_zones_service import FunctionalZonesService
@@ -28,6 +30,8 @@ from app.logic.building_params import (
     PARAMS_BY_TYPE
 )
 from app.logic.generation import Genbuilder
+from app.infrastructure.ollama_chat_client import OllamaChatClient
+from app.infrastructure.chat_storage_client import ChatStorageClient
 
 config = Config()
 setup_logger(config, log_level="INFO")
@@ -62,7 +66,37 @@ block_generator = BlockGenerator(building_capacity_optimizer, max_rectangle_find
 service_generator = ServiceGenerator(params_provider)
 physical_objects_service = PhysicalObjectsService()
 builder = Genbuilder(
-    config, urban_db_api, 
+    config, urban_db_api,
     params_provider, block_generator, service_generator, buildings_params_provider, physical_objects_service
 )
 zones_service = FunctionalZonesService(urban_db_api)
+
+CHAT_LA_PER_PERSON: float = float(base_params.la_per_person)
+
+
+def _optional_env(key: str) -> str | None:
+    """Read an optional env var. Config.get raises on absence; these keys are
+    optional (conversational generation is a bolt-on), so read via os.getenv —
+    Config() has already loaded the .env into the environment."""
+    value = os.getenv(key)
+    return value or None
+
+
+def chat_llm_configured() -> bool:
+    """True when an Ollama backend + chat model are configured."""
+    return bool(_optional_env("Ollama_API")) and bool(_optional_env("Chat_Model"))
+
+
+def build_ollama_chat_client(temperature: float | None = None) -> OllamaChatClient:
+    """Construct a per-request Ollama chat client (caller owns its lifetime)."""
+    return OllamaChatClient(
+        _optional_env("Ollama_API") or "",
+        default_model=_optional_env("Chat_Model") or "",
+        temperature=0.3 if temperature is None else temperature,
+    )
+
+
+def build_chat_storage_client() -> ChatStorageClient | None:
+    """Construct a per-request ChatStorage client, or None when not configured."""
+    base_url = _optional_env("ChatStorage_API")
+    return ChatStorageClient(base_url) if base_url else None
