@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 from contextlib import AsyncExitStack
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from app.dependencies import (
@@ -39,15 +39,37 @@ def _parse_zone_types(raw: Optional[str]) -> Optional[list[str]]:
     return zones or None
 
 
+async def _read_blocks_file(blocks_file: Optional[UploadFile]) -> Optional[dict[str, Any]]:
+    """Parse an uploaded GeoJSON blocks file into a FeatureCollection dict.
+
+    The zone filtering (keep only residential/business) happens downstream in the
+    orchestrator so dropped-feature warnings are surfaced as SSE events.
+    """
+    if blocks_file is None:
+        return None
+    raw = await blocks_file.read()
+    try:
+        geojson = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise http_exception(422, f"Uploaded blocks file is not valid JSON: {exc}")
+    if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":
+        raise http_exception(422, "Uploaded blocks file must be a GeoJSON FeatureCollection.")
+    return geojson
+
+
 @generation_chat_router.post(
     "/generate/chat/stream",
     summary="Conversational building generation over SSE",
 )
 async def generate_chat_stream(
     user_query: Annotated[str, Form(min_length=1, description="Free-text request")],
-    scenario_id: Annotated[int, Form(ge=1, description="Scenario ID")],
-    year: Annotated[int, Form(description="Data year")],
-    source: Annotated[str, Form(min_length=1, description="Data source, e.g. OSM")],
+    scenario_id: Annotated[Optional[int], Form(ge=1, description="Scenario ID (omit if uploading a blocks file)")] = None,
+    year: Annotated[Optional[int], Form(description="Data year (with scenario_id)")] = None,
+    source: Annotated[Optional[str], Form(description="Data source, e.g. OSM (with scenario_id)")] = None,
+    blocks_file: Annotated[
+        Optional[UploadFile],
+        File(description="Optional GeoJSON FeatureCollection of blocks; each feature needs properties.zone"),
+    ] = None,
     functional_zone_types: Annotated[
         Optional[str],
         Form(description="Optional comma-separated zone filter, e.g. 'residential,business'"),
@@ -65,7 +87,18 @@ async def generate_chat_stream(
             "configured (set Ollama_API and Chat_Model).",
         )
 
+    # Territory comes either from a scenario or from an uploaded blocks file.
+    has_file = blocks_file is not None and bool(getattr(blocks_file, "filename", None))
+    if not has_file and scenario_id is None:
+        raise http_exception(
+            422,
+            "Provide a territory source: either scenario_id (+year, +source) or a blocks_file.",
+        )
+    if not has_file and (year is None or not source):
+        raise http_exception(422, "scenario_id requires both year and source.")
+
     zone_types = _parse_zone_types(functional_zone_types)
+    blocks_geojson = await _read_blocks_file(blocks_file if has_file else None)
 
     async def event_source():
         async with AsyncExitStack() as stack:
@@ -88,6 +121,7 @@ async def generate_chat_stream(
                 project_id=project_id,
                 chat_title=user_query[:256],
                 functional_zone_types=zone_types,
+                blocks_geojson=blocks_geojson,
                 model=model,
                 temperature=temperature,
             ):

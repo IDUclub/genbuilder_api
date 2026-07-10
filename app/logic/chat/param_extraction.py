@@ -1,19 +1,19 @@
 """Extract and validate building-generation parameters from free text.
 
-The conversational endpoint receives the user's request as free text (plus a
-few structured form fields — scenario_id, year, source). This module turns that
-text into the ``targets_by_zone`` structure that ``Genbuilder.run`` consumes,
-and reports which mandatory parameters are still missing so the SSE flow can ask
-the user for them (the ``clarification`` event).
+The agentic chat mode is deliberately narrow: it generates only the two
+housing-demand zones — ``residential`` and ``business`` (multifunctional) — and
+the target zones are implied by the selected scenario, so the user never picks
+zones. The only thing we need from the user is the housing demand per zone.
 
-Mandatory minimum (see the pipeline diagram):
+This module turns the free-text request into the ``targets_by_zone`` structure
+that ``Genbuilder.run`` consumes, and reports which mandatory parameters are
+still missing so the SSE flow can ask for them (the ``clarification`` event).
+
+Mandatory minimum:
 - territory: taken from the endpoint's form fields (scenario_id + year + source);
-- at least one target functional zone;
-- per zone, a demand driver:
-    * residential-family zones (residential, business, unknown) need a housing
-      demand — ``residents`` OR ``living_area`` (they are interchangeable:
-      ``living_area = residents * la_per_person``);
-    * coverage-family zones (industrial, transport, special) need ``coverage_area``.
+- per generated zone (residential, business): a housing demand —
+  ``residents`` OR ``living_area`` (interchangeable:
+  ``living_area = residents * la_per_person``).
 
 Everything else (floors_avg, density_scenario, default_floor_group) is optional
 and falls back to service defaults.
@@ -21,26 +21,40 @@ and falls back to service defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from loguru import logger
 
 from app.infrastructure.ollama_chat_client import OllamaChatClient, OllamaChatError
 
-# Zone families, mirroring the grouping in Genbuilder.run.
-RESIDENTIAL_FAMILY: tuple[str, ...] = ("residential", "business", "unknown")
-COVERAGE_FAMILY: tuple[str, ...] = ("industrial", "transport", "special")
-KNOWN_ZONES: tuple[str, ...] = RESIDENTIAL_FAMILY + COVERAGE_FAMILY
+# The agentic chat mode generates only these two zones. Zones are implied by the
+# scenario, not chosen by the user; both are housing-demand zones.
+GENERATED_ZONES: tuple[str, ...] = ("residential", "business")
+KNOWN_ZONES: tuple[str, ...] = GENERATED_ZONES
 DENSITY_SCENARIOS: tuple[str, ...] = ("min", "mean", "max")
 
+# Policy default floor group per generated zone (not extracted from user text):
+# residential -> medium (5–8 этажей), business -> high (9–16 этажей). Guarantees a
+# sensible default independent of the pipeline's internal fallbacks.
+DEFAULT_FLOOR_GROUP_BY_ZONE: dict[str, str] = {
+    "residential": "medium",
+    "business": "high",
+}
+
+# Human-readable zone labels for clarification prompts.
+_ZONE_LABELS: dict[str, str] = {
+    "residential": "жилая",
+    "business": "многофункциональная",
+}
+
 _EXTRACTION_SYSTEM_PROMPT = (
-    "Ты — парсер параметров для генерации застройки. Из запроса пользователя "
-    "извлеки цели по функциональным зонам. Отвечай строго по схеме. "
+    "Ты — парсер параметров для генерации застройки. Генерируются только две "
+    "зоны: residential (жилая) и business (многофункциональная). Из запроса "
+    "пользователя извлеки спрос на жильё по этим зонам. Отвечай строго по схеме. "
     "Заполняй только те значения, которые пользователь назвал явно; всё "
     "остальное оставляй null. Ничего не выдумывай. Числа — без единиц измерения. "
     "residents — число жителей, living_area — жилая площадь в м², "
-    "coverage_area — площадь застройки нежилых зон в м², floors_avg — средняя "
-    "этажность, density_scenario — один из: min, mean, max."
+    "floors_avg — средняя этажность, density_scenario — один из: min, mean, max."
 )
 
 
@@ -57,7 +71,6 @@ def build_extraction_schema() -> dict[str, Any]:
                         "zone": {"type": "string", "enum": list(KNOWN_ZONES)},
                         "residents": {"type": ["integer", "null"]},
                         "living_area": {"type": ["number", "null"]},
-                        "coverage_area": {"type": ["number", "null"]},
                         "floors_avg": {"type": ["number", "null"]},
                         "density_scenario": {
                             "type": ["string", "null"],
@@ -74,11 +87,18 @@ def build_extraction_schema() -> dict[str, Any]:
 
 @dataclass
 class Missing:
-    """One unmet mandatory requirement, rendered into a clarification prompt."""
+    """One unmet mandatory requirement, rendered into a clarification prompt.
+
+    ``control``/``unit``/``alt_fields`` let the frontend render the right input
+    (all current requirements are a single numeric housing-demand field).
+    """
 
     zone: str
     field: str
     prompt: str
+    control: str = "number"
+    unit: str = "чел. или м²"
+    alt_fields: tuple[str, ...] = ("residents", "living_area")
 
 
 @dataclass
@@ -107,7 +127,6 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
     only housing key ``Genbuilder.run`` consumes) via ``la_per_person``.
     """
     residents: dict[str, int] = {}
-    coverage_area: dict[str, float] = {}
     floors_avg: dict[str, float] = {}
     density_scenario: dict[str, str] = {}
     requested: list[str] = []
@@ -126,10 +145,6 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         if res is not None:
             residents[zone] = int(res)
 
-        cov = _num(item.get("coverage_area"))
-        if cov is not None:
-            coverage_area[zone] = cov
-
         floors = _num(item.get("floors_avg"))
         if floors is not None:
             floors_avg[zone] = floors
@@ -141,8 +156,6 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
     targets_by_zone: dict[str, dict[str, Any]] = {}
     if residents:
         targets_by_zone["residents"] = residents
-    if coverage_area:
-        targets_by_zone["coverage_area"] = coverage_area
     if floors_avg:
         targets_by_zone["floors_avg"] = floors_avg
     if density_scenario:
@@ -181,52 +194,35 @@ async def extract_generation_targets(
     return normalize_targets(raw, la_per_person)
 
 
-def validate_targets(extracted: ExtractedTargets) -> list[Missing]:
-    """Return the unmet mandatory requirements (empty list == ready to generate)."""
+def validate_targets(
+    extracted: ExtractedTargets, zones: Iterable[str] | None = None
+) -> list[Missing]:
+    """Return the unmet mandatory requirements (empty list == ready to generate).
+
+    The only requirement is a housing demand per in-scope zone — at most one
+    clarification per zone. ``zones`` defaults to ``GENERATED_ZONES`` (the
+    scenario branch generates both); when the user uploads their own blocks, it
+    is the zones actually present in the file, so we don't over-ask.
+    """
+    zones = tuple(zones) if zones is not None else GENERATED_ZONES
     missing: list[Missing] = []
 
-    if not extracted.functional_zone_types:
-        missing.append(
-            Missing(
-                zone="*",
-                field="functional_zone_types",
-                prompt=(
-                    "Какие зоны застраивать? Укажите одну или несколько: "
-                    + ", ".join(KNOWN_ZONES)
-                    + "."
-                ),
-            )
-        )
-        return missing
-
     residents = extracted.targets_by_zone.get("residents") or {}
-    coverage = extracted.targets_by_zone.get("coverage_area") or {}
-
-    for zone in extracted.functional_zone_types:
-        if zone in RESIDENTIAL_FAMILY:
-            if not residents.get(zone):
-                missing.append(
-                    Missing(
-                        zone=zone,
-                        field="residents|living_area",
-                        prompt=(
-                            f"Для зоны «{zone}» укажите спрос на жильё — "
-                            "число жителей (residents) ИЛИ жилую площадь "
-                            "в м² (living_area)."
-                        ),
-                    )
+    for zone in zones:
+        if zone not in GENERATED_ZONES:
+            continue
+        if not residents.get(zone):
+            label = _ZONE_LABELS.get(zone, zone)
+            missing.append(
+                Missing(
+                    zone=zone,
+                    field="residents|living_area",
+                    prompt=(
+                        f"Для зоны «{label}» ({zone}) укажите спрос на жильё — "
+                        "число жителей (residents) ИЛИ жилую площадь в м² "
+                        "(living_area)."
+                    ),
                 )
-        elif zone in COVERAGE_FAMILY:
-            if not coverage.get(zone):
-                missing.append(
-                    Missing(
-                        zone=zone,
-                        field="coverage_area",
-                        prompt=(
-                            f"Для зоны «{zone}» укажите площадь застройки "
-                            "coverage_area в м²."
-                        ),
-                    )
-                )
+            )
 
     return missing

@@ -36,9 +36,33 @@ from loguru import logger
 from app.infrastructure.chat_storage_client import ChatStorageClient, ChatStorageError
 from app.infrastructure.ollama_chat_client import OllamaChatClient, OllamaChatError
 from app.logic.chat.param_extraction import (
+    DEFAULT_FLOOR_GROUP_BY_ZONE,
+    GENERATED_ZONES,
     extract_generation_targets,
     validate_targets,
 )
+from app.schema.dto import BlockFeatureCollection
+
+
+def _blocks_from_geojson(
+    geojson: dict[str, Any],
+) -> tuple[list[dict[str, Any]], tuple[str, ...], int]:
+    """Keep only features whose ``properties.zone`` is a generated zone.
+
+    Returns (kept features, distinct in-scope zones, dropped count). Features
+    without a residential/business zone are dropped (variant: require ``zone``).
+    """
+    features = geojson.get("features") or []
+    kept: list[dict[str, Any]] = []
+    zones: list[str] = []
+    for feature in features:
+        zone = (feature.get("properties") or {}).get("zone")
+        zone = zone.strip() if isinstance(zone, str) else ""
+        if zone in GENERATED_ZONES:
+            kept.append(feature)
+            if zone not in zones:
+                zones.append(zone)
+    return kept, tuple(zones), len(features) - len(kept)
 
 _SUMMARY_SYSTEM_PROMPT = (
     "Ты — ассистент по генерации застройки. Кратко и по делу опиши на русском "
@@ -113,14 +137,15 @@ async def stream_generation_chat(
     chat_storage_client: ChatStorageClient | None,
     token: str | None,
     user_query: str,
-    scenario_id: int,
-    year: int,
-    source: str,
+    scenario_id: int | None,
+    year: int | None,
+    source: str | None,
     la_per_person: float,
     chat_id: str | None = None,
     project_id: int | str | None = None,
     chat_title: str | None = None,
     functional_zone_types: list[str] | None = None,
+    blocks_geojson: dict[str, Any] | None = None,
     generation_parameters: dict[str, Any] | None = None,
     model: str | None = None,
     temperature: float | None = None,
@@ -181,6 +206,38 @@ async def stream_generation_chat(
                 "message": "Сообщение не сохранено в историю (проверьте токен).",
             }
 
+    # 2.5 Resolve the territory source. A user-uploaded blocks file overrides the
+    # scenario; we keep only residential/business features and derive the zones in
+    # scope from the file (so a file with just one zone doesn't over-ask).
+    blocks: BlockFeatureCollection | None = None
+    zones_in_scope: tuple[str, ...] = GENERATED_ZONES
+    if blocks_geojson is not None:
+        kept, zones_in_scope, dropped = _blocks_from_geojson(blocks_geojson)
+        if dropped:
+            yield {
+                "type": "warning",
+                "stage": "load_blocks",
+                "detail": f"{dropped} feature(s) dropped",
+                "message": f"Отброшено объектов без зоны residential/business: {dropped}.",
+            }
+        if not kept:
+            yield {
+                "type": "error",
+                "stage": "load_blocks",
+                "detail": "no residential/business features in uploaded file",
+            }
+            yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
+            return
+        try:
+            blocks = BlockFeatureCollection.model_validate(
+                {"type": "FeatureCollection", "features": kept}
+            )
+        except Exception as exc:  # noqa: BLE001 - invalid geometry -> surface to client
+            logger.warning("invalid blocks file: {}", exc)
+            yield {"type": "error", "stage": "load_blocks", "detail": str(exc)}
+            yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
+            return
+
     # 3. Extract targets from the (accumulated) request text.
     combined_query = f"{prior_text}\n{user_query}".strip() if prior_text else user_query
     extracted = await extract_generation_targets(
@@ -189,14 +246,18 @@ async def stream_generation_chat(
         la_per_person=la_per_person,
         model=model,
     )
-    if functional_zone_types:
-        # An explicit form-level zone list narrows what the user asked for.
-        extracted.functional_zone_types = [
-            z for z in extracted.functional_zone_types if z in functional_zone_types
-        ] or list(functional_zone_types)
+    # Zones come from the territory source: both generated zones for a scenario,
+    # or the zones actually present in an uploaded blocks file.
+    extracted.functional_zone_types = list(zones_in_scope)
+
+    # Pin the policy default floor group per zone unless the user set one
+    # explicitly, so the result doesn't depend on the pipeline's fallbacks.
+    default_fg = extracted.targets_by_zone.setdefault("default_floor_group", {})
+    for zone, floor_group in DEFAULT_FLOOR_GROUP_BY_ZONE.items():
+        default_fg.setdefault(zone, floor_group)
 
     # 4. Missing mandatory params -> ask, persist the question, stop.
-    missing = validate_targets(extracted)
+    missing = validate_targets(extracted, zones_in_scope)
     if missing:
         content = "Чтобы сгенерировать застройку, уточните:\n" + "\n".join(
             f"— {m.prompt}" for m in missing
@@ -204,7 +265,16 @@ async def stream_generation_chat(
         yield {
             "type": "clarification",
             "content": content,
-            "missing": [{"zone": m.zone, "field": m.field} for m in missing],
+            "missing": [
+                {
+                    "zone": m.zone,
+                    "field": m.field,
+                    "control": m.control,
+                    "unit": m.unit,
+                    "alt_fields": list(m.alt_fields),
+                }
+                for m in missing
+            ],
         }
         assistant_message_id = await _persist_assistant(
             chat_storage_client, persist, token, chat_id, content, message_metadata
@@ -223,6 +293,7 @@ async def stream_generation_chat(
     try:
         result = await builder.run(
             targets_by_zone=extracted.targets_by_zone,
+            blocks=blocks,
             token=token,
             scenario_id=scenario_id,
             year=year,
