@@ -42,26 +42,29 @@ from app.logic.chat.param_extraction import (
     validate_targets,
 )
 from app.schema.dto import BlockFeatureCollection
+from app.logic.zone_taxonomy import normalize_zone
 
 
 def _blocks_from_geojson(
     geojson: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], tuple[str, ...], int]:
-    """Keep only features whose ``properties.zone`` is a generated zone.
+    """Keep only features whose ``properties.zone`` maps to a generated zone.
 
-    Returns (kept features, distinct in-scope zones, dropped count). Features
-    without a residential/business zone are dropped (variant: require ``zone``).
+    The raw ``zone`` name is normalized (granular residential subtypes -> residential,
+    mixed_use -> business); features that don't map to residential/business are
+    dropped. Kept features keep their raw name — the core normalizes them again
+    (and derives the per-block floor group from the subtype). Returns (kept
+    features, distinct in-scope canonical zones, dropped count).
     """
     features = geojson.get("features") or []
     kept: list[dict[str, Any]] = []
     zones: list[str] = []
     for feature in features:
-        zone = (feature.get("properties") or {}).get("zone")
-        zone = zone.strip() if isinstance(zone, str) else ""
-        if zone in GENERATED_ZONES:
+        canonical = normalize_zone((feature.get("properties") or {}).get("zone"))
+        if canonical in GENERATED_ZONES:
             kept.append(feature)
-            if zone not in zones:
-                zones.append(zone)
+            if canonical not in zones:
+                zones.append(canonical)
     return kept, tuple(zones), len(features) - len(kept)
 
 _SUMMARY_SYSTEM_PROMPT = (
