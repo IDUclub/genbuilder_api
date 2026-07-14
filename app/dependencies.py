@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from iduconfig import Config
+from loguru import logger
 
 from app.logic.functional_zones_service import FunctionalZonesService
 from app.logic.logger_setup import setup_logger
@@ -32,6 +36,9 @@ from app.logic.building_params import (
 from app.logic.generation import Genbuilder
 from app.infrastructure.ollama_chat_client import OllamaChatClient
 from app.infrastructure.chat_storage_client import ChatStorageClient
+
+if TYPE_CHECKING:
+    from idu_service_auth import KeycloakTokenClient, KeycloakTokenConfig
 
 config = Config()
 setup_logger(config, log_level="INFO")
@@ -96,7 +103,65 @@ def build_ollama_chat_client(temperature: float | None = None) -> OllamaChatClie
     )
 
 
+# --- Keycloak service token (outbound M2M auth) --------------------------------
+#
+# ChatStorage now accepts a service-account (client-credentials) token instead of
+# the user's token; the end-user is identified via an ``X-User-Id`` header. The
+# service token is obtained with the ``idu-service-auth`` library and shared for
+# the whole process (created in the FastAPI lifespan, see ``app/main.py``).
+
+_service_token_client: "KeycloakTokenClient | None" = None
+
+
+def keycloak_service_configured() -> bool:
+    """True when the Keycloak service-account credentials are configured."""
+    return all(
+        _optional_env(key)
+        for key in ("KEYCLOAK_URL", "KEYCLOAK_REALM", "KEYCLOAK_CLIENT_ID", "KEYCLOAK_CLIENT_SECRET")
+    )
+
+
+def build_keycloak_token_config() -> "KeycloakTokenConfig":
+    """Build the ``idu-service-auth`` config from environment variables."""
+    from idu_service_auth import KeycloakTokenConfig
+
+    return KeycloakTokenConfig(
+        auth_server_url=config.get("KEYCLOAK_URL"),
+        realm=config.get("KEYCLOAK_REALM"),
+        client_id=config.get("KEYCLOAK_CLIENT_ID"),
+        client_secret=config.get("KEYCLOAK_CLIENT_SECRET"),
+        scope=_optional_env("KEYCLOAK_SCOPE"),
+        background_refresh=True,
+    )
+
+
+def set_service_token_client(client: "KeycloakTokenClient | None") -> None:
+    """Register the process-wide service token client (called from lifespan)."""
+    global _service_token_client
+    _service_token_client = client
+
+
+def get_service_token_client() -> "KeycloakTokenClient | None":
+    """Return the process-wide service token client, or None if not initialized."""
+    return _service_token_client
+
+
 def build_chat_storage_client() -> ChatStorageClient | None:
-    """Construct a per-request ChatStorage client, or None when not configured."""
+    """Construct a per-request ChatStorage client, or None when unavailable.
+
+    Persistence requires both a ChatStorage URL and an initialized Keycloak
+    service token client (ChatStorage is called with the service token). If the
+    service token client isn't available, persistence is disabled rather than
+    falling back to a user token.
+    """
     base_url = _optional_env("ChatStorage_API")
-    return ChatStorageClient(base_url) if base_url else None
+    if not base_url:
+        return None
+    token_client = get_service_token_client()
+    if token_client is None:
+        logger.warning(
+            "ChatStorage_API is set but the Keycloak service token client is not "
+            "initialized; chat history persistence is disabled."
+        )
+        return None
+    return ChatStorageClient(base_url, token_client)
