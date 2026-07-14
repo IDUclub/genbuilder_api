@@ -1,0 +1,136 @@
+"""Async streaming client for Ollama's ``/api/chat`` endpoint.
+
+Used by the conversational generation flow (see ``app.logic.chat``) to:
+- extract structured generation parameters from the user's free text
+  (``complete_json`` with a JSON schema, so the model can't hallucinate a field);
+- stream a natural-language summary of the generation result token-by-token
+  to the frontend via SSE (``stream_chat``).
+
+Ported from IDUclub/PzzCompareAPI. Built on ``httpx`` (async streaming).
+
+Request shape (Ollama)::
+
+    POST /api/chat
+    {"model": ..., "stream": true, "messages": [{"role", "content"}, ...],
+     "options": {"temperature": ...}}
+
+Each streamed line is a JSON object ``{"message": {"content": "..."},
+"done": false}``; the final line sets ``"done": true``.
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, AsyncIterator
+
+import httpx
+
+
+class OllamaChatError(RuntimeError):
+    """Non-2xx response (or malformed stream) from Ollama ``/api/chat``."""
+
+    def __init__(self, status: int, body: Any) -> None:
+        self.status = status
+        self.body = body
+        super().__init__(f"ollama /api/chat returned {status}: {body!r}")
+
+
+class OllamaChatClient:
+    """Thin async wrapper that streams assistant tokens from ``/api/chat``."""
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        default_model: str,
+        timeout_seconds: float = 900.0,
+        temperature: float = 0.3,
+    ) -> None:
+        if not base_url:
+            raise RuntimeError("Ollama_API is not configured.")
+        if not default_model:
+            raise RuntimeError("a chat model must be configured (Chat_Model).")
+        self._base_url = base_url.rstrip("/")
+        self._default_model = default_model
+        self._temperature = temperature
+        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout_seconds)
+
+    async def __aenter__(self) -> "OllamaChatClient":
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        await self._client.aclose()
+
+    async def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str | None = None,
+        temperature: float | None = None,
+        think: Any = None,
+    ) -> AsyncIterator[str]:
+        """Stream assistant content deltas for ``messages``.
+
+        Yields the incremental ``message.content`` chunks as they arrive.
+        Raises ``OllamaChatError`` on a non-2xx status or unparseable stream.
+        """
+        payload: dict[str, Any] = {
+            "model": model or self._default_model,
+            "stream": True,
+            "messages": messages,
+            "options": {
+                "temperature": self._temperature if temperature is None else temperature
+            },
+        }
+        if think is not None:
+            payload["think"] = think
+
+        async with self._client.stream("POST", "/api/chat", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                raise OllamaChatError(resp.status_code, body.decode("utf-8", "replace"))
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise OllamaChatError(resp.status_code, line) from exc
+                delta = (chunk.get("message") or {}).get("content") or ""
+                if delta:
+                    yield delta
+                if chunk.get("done"):
+                    break
+
+    async def complete_json(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        schema: dict[str, Any],
+        model: str | None = None,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        """Non-streaming ``/api/chat`` with structured output (Ollama ``format``).
+
+        Sends ``stream: false`` and ``format=schema`` so the model must return
+        JSON conforming to ``schema``. Parses ``message.content`` and returns it
+        as a dict. Raises ``OllamaChatError`` on a non-2xx status or when the
+        content is not valid JSON.
+        """
+        payload: dict[str, Any] = {
+            "model": model or self._default_model,
+            "stream": False,
+            "messages": messages,
+            "format": schema,
+            "options": {"temperature": temperature},
+        }
+        resp = await self._client.post("/api/chat", json=payload)
+        if resp.status_code >= 400:
+            raise OllamaChatError(resp.status_code, resp.text)
+        content = (resp.json().get("message") or {}).get("content") or ""
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise OllamaChatError(resp.status_code, content) from exc
+        if not isinstance(parsed, dict):
+            raise OllamaChatError(resp.status_code, content)
+        return parsed

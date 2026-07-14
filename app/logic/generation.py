@@ -23,6 +23,28 @@ from app.logic.service_generation import (
     ServiceGenerator,
 )
 from app.logic.restrictions import check_buildings_setbacks
+from app.logic.zone_taxonomy import normalize_zone, subtype_floor_group
+
+
+def _normalize_zone_column(gdf_blocks: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Normalize granular functional zone names to the canonical generation set.
+
+    Granular residential subtypes collapse to ``residential`` and carry their
+    implied per-block ``floors_group`` (ИЖС -> private, etc.); ``mixed_use`` maps
+    to ``business``. All other names pass through unchanged, so this is a no-op
+    for already-canonical data. An explicit ``floors_group`` on the block wins.
+    """
+    if gdf_blocks is None or "zone" not in gdf_blocks.columns or len(gdf_blocks) == 0:
+        return gdf_blocks
+    raw = gdf_blocks["zone"]
+    subtype_fg = raw.map(subtype_floor_group)
+    if "floors_group" in gdf_blocks.columns:
+        existing = gdf_blocks["floors_group"]
+        gdf_blocks["floors_group"] = existing.where(existing.notna(), subtype_fg)
+    else:
+        gdf_blocks["floors_group"] = subtype_fg
+    gdf_blocks["zone"] = raw.map(normalize_zone)
+    return gdf_blocks
 
 
 class Genbuilder:
@@ -127,6 +149,7 @@ class Genbuilder:
                 "Genbuilder.run: using blocks from request, count={}",
                 len(gdf_blocks)
             )
+            gdf_blocks = _normalize_zone_column(gdf_blocks)
         else:
             gdf_blocks = await self.urban_api.get_territories_for_buildings(
                 scenario_id, year, source, token
@@ -135,6 +158,7 @@ class Genbuilder:
                 "Genbuilder.run: loaded blocks from UrbanDB, count={}",
                 len(gdf_blocks)
             )
+            gdf_blocks = _normalize_zone_column(gdf_blocks)
             if functional_zone_types:
                 before = len(gdf_blocks)
                 gdf_blocks = gdf_blocks[gdf_blocks["zone"].isin(functional_zone_types)]
