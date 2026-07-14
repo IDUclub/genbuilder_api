@@ -139,6 +139,7 @@ async def stream_generation_chat(
     ollama_client: OllamaChatClient,
     chat_storage_client: ChatStorageClient | None,
     token: str | None,
+    user_id: str | None = None,
     user_query: str,
     scenario_id: int | None,
     year: int | None,
@@ -154,13 +155,13 @@ async def stream_generation_chat(
     temperature: float | None = None,
     message_metadata: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    persist = chat_storage_client is not None and bool(token)
+    persist = chat_storage_client is not None and bool(user_id)
 
     # 0. Load prior turns (existing chat) so short follow-ups keep context.
     prior_text = ""
     if persist and chat_id:
         try:
-            existing = await chat_storage_client.get_chat(token, chat_id)
+            existing = await chat_storage_client.get_chat(user_id, chat_id)
             prior_text = _history_user_text(existing.get("messages") or [])
         except ChatStorageError as exc:
             logger.warning("chat_storage get_chat (history) failed: {}", exc)
@@ -176,7 +177,7 @@ async def stream_generation_chat(
     if persist and not chat_id:
         try:
             created = await chat_storage_client.create_chat(
-                token,
+                user_id,
                 title=chat_title or user_query[:256],
                 scenario_id=scenario_id,
                 project_id=project_id,
@@ -198,7 +199,7 @@ async def stream_generation_chat(
     if persist and chat_id:
         try:
             await chat_storage_client.add_message(
-                token, chat_id, role="user", content=user_query, metadata=message_metadata
+                user_id, chat_id, role="user", content=user_query, metadata=message_metadata
             )
         except ChatStorageError as exc:
             logger.warning("chat_storage add user message failed: {}", exc)
@@ -280,7 +281,7 @@ async def stream_generation_chat(
             ],
         }
         assistant_message_id = await _persist_assistant(
-            chat_storage_client, persist, token, chat_id, content, message_metadata
+            chat_storage_client, persist, user_id, chat_id, content, message_metadata
         )
         yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
         return
@@ -344,7 +345,7 @@ async def stream_generation_chat(
     assistant_message_id = await _persist_assistant(
         chat_storage_client,
         persist,
-        token,
+        user_id,
         chat_id,
         answer_text or "Генерация застройки завершена.",
         message_metadata,
@@ -355,7 +356,7 @@ async def stream_generation_chat(
 async def _persist_assistant(
     chat_storage_client: ChatStorageClient | None,
     persist: bool,
-    token: str | None,
+    user_id: str | None,
     chat_id: str | None,
     content: str,
     metadata: dict[str, Any] | None,
@@ -364,7 +365,7 @@ async def _persist_assistant(
         return None
     try:
         stored = await chat_storage_client.add_message(
-            token, chat_id, role="assistant", content=content, metadata=metadata
+            user_id, chat_id, role="assistant", content=content, metadata=metadata
         )
         return stored.get("message_id")
     except ChatStorageError as exc:
