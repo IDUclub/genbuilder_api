@@ -8,6 +8,8 @@ httpx~=0.28
 sse-starlette~=2.1
 python-multipart~=0.0.12
 IDU-config~=1.0
+PyJWT[crypto]~=2.10
+idu-service-auth @ git+https://github.com/IDUclub/idu-service-auth.git@main
 loguru~=0.7
 numpy~=2.2
 geopandas~=1.1

@@ -4,8 +4,11 @@ Persists the conversational generation dialogue so the frontend can keep a
 multi-turn history and the LLM can be grounded on previous turns. Mirrors the
 ChatStorage contract used by IDUclub/PzzCompareAPI.
 
-All requests carry ``Authorization: Bearer {token}``; the service derives the
-user identity from the token's ``sub`` claim server-side.
+Authentication is **machine-to-machine**: every request carries the service's
+own Keycloak token (client-credentials, obtained via ``idu-service-auth``) plus
+an ``X-User-Id`` header naming the end user. ChatStorage recognizes the service
+account (its ``preferred_username`` is ``service-account-*``) and stores/reads
+history under the supplied ``X-User-Id`` (the user's Keycloak ``sub``).
 
 Endpoints::
 
@@ -18,9 +21,12 @@ a non-fatal ``warning`` SSE event and never aborts the token stream.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from idu_service_auth import KeycloakTokenClient
 
 
 class ChatStorageError(RuntimeError):
@@ -35,10 +41,19 @@ class ChatStorageError(RuntimeError):
 class ChatStorageClient:
     """Thin async wrapper over the chat-history REST service."""
 
-    def __init__(self, base_url: str, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token_client: "KeycloakTokenClient",
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> None:
         if not base_url:
             raise RuntimeError("ChatStorage_API is not configured.")
+        if token_client is None:
+            raise RuntimeError("A Keycloak service token client is required.")
         self._base_url = base_url.rstrip("/")
+        self._token_client = token_client
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout_seconds)
 
     async def __aenter__(self) -> "ChatStorageClient":
@@ -47,21 +62,30 @@ class ChatStorageClient:
     async def __aexit__(self, *exc_info) -> None:
         await self._client.aclose()
 
-    @staticmethod
-    def _auth(token: str) -> dict[str, str]:
-        return {"Authorization": f"Bearer {token}"}
+    async def _auth_headers(self, user_id: str) -> dict[str, str]:
+        """Service bearer token + the end-user id for ChatStorage."""
+        # Import lazily so the module stays importable without the auth library.
+        from idu_service_auth import KeycloakAuthError
+
+        try:
+            headers = dict(await self._token_client.get_authorization_headers())
+        except KeycloakAuthError as exc:  # Keycloak unavailable / bad credentials
+            raise ChatStorageError(0, f"service token unavailable: {exc}") from exc
+        headers["X-User-Id"] = str(user_id)
+        return headers
 
     async def _request(
         self,
         method: str,
         path: str,
-        token: str,
+        user_id: str,
         *,
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        headers = await self._auth_headers(user_id)
         try:
             resp = await self._client.request(
-                method, path, headers=self._auth(token), json=json_body
+                method, path, headers=headers, json=json_body
             )
         except httpx.HTTPError as exc:  # network / timeout
             raise ChatStorageError(0, str(exc)) from exc
@@ -73,7 +97,7 @@ class ChatStorageClient:
 
     async def create_chat(
         self,
-        token: str,
+        user_id: str,
         *,
         title: str | None = None,
         scenario_id: str | int | None = None,
@@ -87,12 +111,12 @@ class ChatStorageClient:
             "metadata": metadata,
         }
         return await self._request(
-            "POST", "/api/v1/chat_history/create_chat", token, json_body=body
+            "POST", "/api/v1/chat_history/create_chat", user_id, json_body=body
         )
 
     async def add_message(
         self,
-        token: str,
+        user_id: str,
         chat_id: str,
         *,
         role: str,
@@ -108,11 +132,11 @@ class ChatStorageClient:
         return await self._request(
             "POST",
             f"/api/v1/chat_history/{chat_id}/message",
-            token,
+            user_id,
             json_body=body,
         )
 
-    async def get_chat(self, token: str, chat_id: str) -> dict[str, Any]:
+    async def get_chat(self, user_id: str, chat_id: str) -> dict[str, Any]:
         return await self._request(
-            "GET", f"/api/v1/chat_history/{chat_id}", token
+            "GET", f"/api/v1/chat_history/{chat_id}", user_id
         )

@@ -78,7 +78,7 @@ async def generate_chat_stream(
     project_id: Annotated[Optional[int], Form(description="Project id (for chat history)")] = None,
     model: Annotated[Optional[str], Form(description="Override chat model")] = None,
     temperature: Annotated[Optional[float], Form(description="Override sampling temperature")] = None,
-    token: str = Depends(auth.verify_token),
+    user: auth.AuthUser = Depends(auth.get_current_user),
 ) -> EventSourceResponse:
     if not chat_llm_configured():
         raise http_exception(
@@ -111,7 +111,8 @@ async def generate_chat_stream(
                 builder=builder,
                 ollama_client=ollama,
                 chat_storage_client=storage,
-                token=token,
+                token=user.token,
+                user_id=user.user_id,
                 user_query=user_query,
                 scenario_id=scenario_id,
                 year=year,
