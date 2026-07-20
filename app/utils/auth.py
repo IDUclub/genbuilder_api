@@ -130,8 +130,15 @@ def _get_token_from_header(credentials: HTTPAuthorizationCredentials) -> str:
     return token
 
 
-async def _authenticate(credentials: HTTPAuthorizationCredentials) -> AuthUser:
-    token = _get_token_from_header(credentials)
+async def authenticate_token(token: str) -> AuthUser:
+    """Verify a raw bearer token string and return the caller identity.
+
+    Shared by the HTTP dependencies below and by non-FastAPI entry points
+    (MCP tools, A2A requests) that receive the token outside of Starlette's
+    ``HTTPAuthorizationCredentials`` flow.
+    """
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is missing in the authorization header")
 
     if not verification_enabled():
         claims = _decode_unverified(token)
@@ -147,6 +154,11 @@ async def _authenticate(credentials: HTTPAuthorizationCredentials) -> AuthUser:
         raise HTTPException(status_code=503, detail="Authentication provider unavailable") from exc
 
     return AuthUser(token=token, user_id=str(claims.get("sub") or ""), claims=claims)
+
+
+async def _authenticate(credentials: HTTPAuthorizationCredentials) -> AuthUser:
+    token = _get_token_from_header(credentials)
+    return await authenticate_token(token)
 
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(http_bearer)) -> str:
