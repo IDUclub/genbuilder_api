@@ -36,12 +36,6 @@ retry — do not reuse the rejected one."""
 main_mcp = FastMCP("GenBuilder MCP", instructions=_INSTRUCTIONS)
 main_mcp.mount(generation_mcp)
 
-# Mounted at /mcp on the main app (``app.mount("/mcp", mcp_app)``), so the
-# sub-app's own path must be "/". Host/origin checks are left to the parent
-# app's existing CORS + Keycloak auth layers rather than duplicated here
-# (``host_origin_protection`` is only passed when the installed fastmcp
-# supports it — older releases resolved from a lagging internal mirror
-# don't have this kwarg and would fail to start with a TypeError).
 _http_app_kwargs: dict = {"path": "/"}
 if "host_origin_protection" in inspect.signature(main_mcp.http_app).parameters:
     _http_app_kwargs["host_origin_protection"] = False
