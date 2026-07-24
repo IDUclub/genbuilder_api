@@ -3,9 +3,11 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp.utilities.lifespan import combine_lifespans
 from loguru import logger
 from starlette.responses import RedirectResponse
 
+from app.a2a_server import register_a2a_routes
 from app.dependencies import (
     build_keycloak_token_config,
     config,
@@ -13,6 +15,7 @@ from app.dependencies import (
     set_service_token_client,
     setup_logger,
 )
+from app.mcp_server import mcp_app
 from app.routers.generation_routers import generation_router
 from app.routers.generation_chat_routers import generation_chat_router
 from app.routers.logs_routers import logs_router
@@ -56,7 +59,11 @@ async def lifespan(app: FastAPI):
             otel_agent.shutdown()
 
 
-app = FastAPI(title="GenBuilder API", version="0.1.1", lifespan=lifespan)
+app = FastAPI(
+    title="GenBuilder API",
+    version="0.1.1",
+    lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
+)
 
 origins = ["*"]
 app.add_middleware(
@@ -78,3 +85,9 @@ async def read_root():
 app.include_router(logs_router)
 app.include_router(generation_router)
 app.include_router(generation_chat_router)
+
+# MCP tools (see app/mcp_server) — streamable-HTTP transport at /mcp.
+app.mount("/mcp", mcp_app)
+
+# A2A discovery (/.well-known/agent-card.json) + JSON-RPC (/a2a).
+register_a2a_routes(app)
