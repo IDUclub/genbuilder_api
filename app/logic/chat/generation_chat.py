@@ -98,6 +98,38 @@ def _history_user_text(messages: list[dict[str, Any]], max_messages: int = 10) -
     return "\n".join(texts)
 
 
+def _storage_hint(exc: ChatStorageError) -> str:
+    """Only an auth failure is actionable by the user; other errors are ours."""
+    if exc.status in (401, 403):
+        return " (проверьте токен)"
+    return ""
+
+
+def _request_metadata(
+    *,
+    scenario_id: int | None,
+    year: int | None,
+    source: str | None,
+    project_id: int | str | None,
+    functional_zone_types: list[str] | None,
+    has_blocks_file: bool,
+    extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Territory context stored alongside the chat and every persisted turn."""
+    metadata: dict[str, Any] = {"blocks_file": has_blocks_file}
+    optional = {
+        "scenario_id": scenario_id,
+        "year": year,
+        "source": source,
+        "project_id": project_id,
+        "functional_zone_types": functional_zone_types,
+    }
+    metadata.update({key: value for key, value in optional.items() if value is not None})
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
 def _summarize_buildings(features: list[dict[str, Any]]) -> dict[str, Any]:
     """Compact totals over generated building features, for grounding + the UI."""
     total = len(features)
@@ -156,6 +188,15 @@ async def stream_generation_chat(
     message_metadata: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     persist = chat_storage_client is not None and bool(user_id)
+    metadata = _request_metadata(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        project_id=project_id,
+        functional_zone_types=functional_zone_types,
+        has_blocks_file=blocks_geojson is not None,
+        extra=message_metadata,
+    )
 
     # 0. Load prior turns (existing chat) so short follow-ups keep context.
     prior_text = ""
@@ -169,8 +210,8 @@ async def stream_generation_chat(
                 "type": "warning",
                 "stage": "load_history",
                 "detail": str(exc),
-                "message": "Не удалось загрузить историю чата — обрабатываю только "
-                "текущее сообщение.",
+                "message": f"Не удалось загрузить историю чата{_storage_hint(exc)} — "
+                "обрабатываю только текущее сообщение.",
             }
 
     # 1. Ensure a chat exists.
@@ -181,7 +222,7 @@ async def stream_generation_chat(
                 title=chat_title or user_query[:256],
                 scenario_id=scenario_id,
                 project_id=project_id,
-                metadata=message_metadata,
+                metadata=metadata,
             )
             chat_id = created.get("chat_id")
             yield {"type": "chat_created", "chat_id": chat_id, "title": created.get("title")}
@@ -191,7 +232,7 @@ async def stream_generation_chat(
                 "type": "warning",
                 "stage": "create_chat",
                 "detail": str(exc),
-                "message": "Диалог не будет сохранён в историю (проверьте токен).",
+                "message": f"Диалог не будет сохранён в историю{_storage_hint(exc)}.",
             }
             persist = False
 
@@ -199,7 +240,7 @@ async def stream_generation_chat(
     if persist and chat_id:
         try:
             await chat_storage_client.add_message(
-                user_id, chat_id, role="user", content=user_query, metadata=message_metadata
+                user_id, chat_id, role="user", content=user_query, metadata=metadata
             )
         except ChatStorageError as exc:
             logger.warning("chat_storage add user message failed: {}", exc)
@@ -207,7 +248,7 @@ async def stream_generation_chat(
                 "type": "warning",
                 "stage": "add_user_message",
                 "detail": str(exc),
-                "message": "Сообщение не сохранено в историю (проверьте токен).",
+                "message": f"Сообщение не сохранено в историю{_storage_hint(exc)}.",
             }
 
     # 2.5 Resolve the territory source. A user-uploaded blocks file overrides the
@@ -281,7 +322,7 @@ async def stream_generation_chat(
             ],
         }
         assistant_message_id = await _persist_assistant(
-            chat_storage_client, persist, user_id, chat_id, content, message_metadata
+            chat_storage_client, persist, user_id, chat_id, content, metadata
         )
         yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
         return
@@ -348,7 +389,7 @@ async def stream_generation_chat(
         user_id,
         chat_id,
         answer_text or "Генерация застройки завершена.",
-        message_metadata,
+        metadata,
     )
     yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
 
