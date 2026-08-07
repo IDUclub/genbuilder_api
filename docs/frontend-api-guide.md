@@ -330,7 +330,67 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 
 ---
 
-## 6. Ошибки и статусы
+## 6. Свойства зданий в ответе
+
+### 6.1. Состав `properties`
+
+У каждой сгенерированной постройки в `properties` приходит восемь полей:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `floors_count` | number | Этажность |
+| `living_area` | number | Жилая площадь, м² (0 для нежилых зон) |
+| `building_area` | number | Общая площадь здания, м² |
+| `residents_number` | number | Расчётное число жителей |
+| `building_type` | enum | Тип застройки (`private`, `low`, `medium`, `high`, …) |
+| `zone` | enum | Функциональная зона блока (нормализованная) |
+| `service` | array | Сервисы в здании (может быть пустым) |
+| `broke_restriction_zone` | boolean | Нарушены нормативные отступы |
+
+### 6.2. Как отличить исключённые объекты
+
+Если в `/generate/by_scenario` или `/generate/by_blocks` передан
+`physical_object_id[]`, в ту же коллекцию попадают **существующие** объекты,
+исключённые из генерации. У них те же восемь полей плюс два дополнительных:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `is_excluded` | boolean | Всегда `true` — признак существующего объекта |
+| `physical_object_id` | integer | ID физического объекта в UrbanDB |
+
+> ⚠️ У сгенерированных зданий ключа `is_excluded` **нет вообще** — он не
+> приходит со значением `false`. Проверять нужно наличие или истинность:
+> `feature.properties.is_excluded === true`.
+
+В `/generate/by_territory` параметра `physical_object_id` нет, поэтому там
+исключённых объектов не бывает.
+
+### 6.3. `GET /generate/properties_schema`
+
+Отдаёт русские подписи для имён свойств и для значений enum-полей. Авторизация
+не требуется, ответ константный — запрашивайте один раз и кэшируйте.
+
+```json
+{
+  "properties": {
+    "floors_count": { "label": "Количество этажей", "kind": "number", "unit": "эт.", "excluded_only": false },
+    "is_excluded":  { "label": "Существующий объект", "kind": "boolean", "unit": null, "excluded_only": true }
+  },
+  "values": {
+    "building_type": { "private": "ИЖС", "medium": "Среднеэтажная" },
+    "zone": { "residential": "Жилая", "business": "Общественно-деловая" }
+  }
+}
+```
+
+- `kind` — как рендерить значение: `number`, `integer`, `boolean`, `enum`, `array`.
+- `unit` — единица измерения либо `null`.
+- `excluded_only` — поле есть только у исключённых объектов.
+- `values` — словари подписей для полей с `kind: "enum"`.
+
+---
+
+## 7. Ошибки и статусы
 
 | Код | Когда |
 |---|---|
