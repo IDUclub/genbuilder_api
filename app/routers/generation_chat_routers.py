@@ -21,7 +21,7 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 from app.dependencies import (
     CHAT_LA_PER_PERSON,
     build_chat_storage_client,
-    build_ollama_chat_client,
+    build_vllm_chat_client,
     builder,
     chat_llm_configured,
 )
@@ -84,7 +84,7 @@ async def generate_chat_stream(
         raise http_exception(
             503,
             "Conversational generation is unavailable: LLM backend is not "
-            "configured (set Ollama_API and Chat_Model).",
+            "configured (set LLM_API and Chat_Model).",
         )
 
     # Territory comes either from a scenario or from an uploaded blocks file.
@@ -102,14 +102,14 @@ async def generate_chat_stream(
 
     async def event_source():
         async with AsyncExitStack() as stack:
-            ollama = await stack.enter_async_context(build_ollama_chat_client(temperature))
+            llm = await stack.enter_async_context(build_vllm_chat_client(temperature))
             storage = build_chat_storage_client()
             if storage is not None:
                 await stack.enter_async_context(storage)
 
             async for event in stream_generation_chat(
                 builder=builder,
-                ollama_client=ollama,
+                llm_client=llm,
                 chat_storage_client=storage,
                 token=user.token,
                 user_id=user.user_id,

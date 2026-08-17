@@ -34,7 +34,7 @@ from typing import Any, AsyncIterator
 from loguru import logger
 
 from app.infrastructure.chat_storage_client import ChatStorageClient, ChatStorageError
-from app.infrastructure.ollama_chat_client import OllamaChatClient, OllamaChatError
+from app.infrastructure.vllm_chat_client import VLLMChatClient, VLLMChatError
 from app.logic.chat.param_extraction import (
     DEFAULT_FLOOR_GROUP_BY_ZONE,
     GENERATED_ZONES,
@@ -168,7 +168,7 @@ def _merge_result(result: dict | None) -> tuple[dict, dict]:
 async def stream_generation_chat(
     *,
     builder: Any,
-    ollama_client: OllamaChatClient,
+    llm_client: VLLMChatClient,
     chat_storage_client: ChatStorageClient | None,
     token: str | None,
     user_id: str | None = None,
@@ -286,7 +286,7 @@ async def stream_generation_chat(
     # 3. Extract targets from the (accumulated) request text.
     combined_query = f"{prior_text}\n{user_query}".strip() if prior_text else user_query
     extracted = await extract_generation_targets(
-        ollama_client,
+        llm_client,
         user_query=combined_query,
         la_per_person=la_per_person,
         model=model,
@@ -367,12 +367,12 @@ async def stream_generation_chat(
     ]
     collected: list[str] = []
     try:
-        async for delta in ollama_client.stream_chat(
+        async for delta in llm_client.stream_chat(
             summary_messages, model=model, temperature=temperature
         ):
             collected.append(delta)
             yield {"type": "token", "content": delta}
-    except OllamaChatError as exc:
+    except VLLMChatError as exc:
         logger.warning("summary stream failed: {}", exc)
         yield {
             "type": "warning",

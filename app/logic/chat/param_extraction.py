@@ -25,7 +25,7 @@ from typing import Any, Iterable
 
 from loguru import logger
 
-from app.infrastructure.ollama_chat_client import OllamaChatClient, OllamaChatError
+from app.infrastructure.vllm_chat_client import VLLMChatClient, VLLMChatError
 
 # The agentic chat mode generates only these two zones. Zones are implied by the
 # scenario, not chosen by the user; both are housing-demand zones.
@@ -59,7 +59,7 @@ _EXTRACTION_SYSTEM_PROMPT = (
 
 
 def build_extraction_schema() -> dict[str, Any]:
-    """JSON schema for Ollama structured output — constrains zones to KNOWN_ZONES."""
+    """JSON schema for guided decoding — constrains zones to KNOWN_ZONES."""
     return {
         "type": "object",
         "properties": {
@@ -169,7 +169,7 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
 
 
 async def extract_generation_targets(
-    ollama_client: OllamaChatClient,
+    llm_client: VLLMChatClient,
     *,
     user_query: str,
     la_per_person: float,
@@ -185,10 +185,10 @@ async def extract_generation_targets(
         {"role": "user", "content": user_query},
     ]
     try:
-        raw = await ollama_client.complete_json(
+        raw = await llm_client.complete_json(
             messages, schema=build_extraction_schema(), model=model
         )
-    except OllamaChatError as exc:
+    except VLLMChatError as exc:
         logger.warning("param extraction failed: {}", exc)
         return ExtractedTargets(raw={"error": str(exc)})
     return normalize_targets(raw, la_per_person)
