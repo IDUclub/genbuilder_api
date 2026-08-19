@@ -18,6 +18,7 @@ from app.dependencies import (
 from app.mcp_server import mcp_app
 from app.routers.generation_routers import generation_router
 from app.routers.generation_chat_routers import generation_chat_router
+from app.routers.layers_routers import layers_router
 from app.routers.logs_routers import logs_router
 from app.observability import OpenTelemetryAgent, PrometheusConfig
 from app.observability.metrics import setup_metrics
@@ -85,6 +86,7 @@ async def read_root():
 app.include_router(logs_router)
 app.include_router(generation_router)
 app.include_router(generation_chat_router)
+app.include_router(layers_router)
 
 # MCP tools (see app/mcp_server) — streamable-HTTP transport at /mcp.
 app.mount("/mcp", mcp_app)

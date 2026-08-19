@@ -21,25 +21,41 @@ Event envelope (``{"type": ..., ...}``), matching the reference style:
 - ``status``        {content}                — human-readable progress note.
 - ``progress``      {stage, content}         — a pipeline stage marker.
 - ``token``         {content}                — a summary-answer content delta.
+- ``zones``         {content, source}        — the functional zones backdrop,
+                                               inline, before generation.
 - ``result``        {content, summary}       — the generated FeatureCollection.
+- ``file``          {name, title, url, ...}  — a geo-layer link descriptor; the
+                                               same payload is persisted to
+                                               history as a ``file`` part.
 - ``warning``       {stage, detail, message} — non-fatal (e.g. not persisted).
 - ``error``         {stage, detail}          — fatal; generation/answer failed.
 - ``done``          {chat_id, assistant_message_id} — terminal marker.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncIterator
+from uuid import uuid4
 
 from loguru import logger
 
 from app.infrastructure.chat_storage_client import ChatStorageClient, ChatStorageError
+from app.infrastructure.object_storage import ObjectStorage, ObjectStorageError
 from app.infrastructure.vllm_chat_client import VLLMChatClient, VLLMChatError
 from app.logic.chat.param_extraction import (
     DEFAULT_FLOOR_GROUP_BY_ZONE,
     GENERATED_ZONES,
     extract_generation_targets,
     validate_targets,
+)
+from app.logic.geo_layers import (
+    SLOT_BLOCKS_INPUT,
+    SLOT_BUILDINGS,
+    build_stored_layer,
+    build_zones_layer,
+    geo_layer_to_file_part,
+    object_key,
 )
 from app.schema.dto import BlockFeatureCollection
 from app.logic.zone_taxonomy import normalize_zone
@@ -186,6 +202,9 @@ async def stream_generation_chat(
     model: str | None = None,
     temperature: float | None = None,
     message_metadata: dict[str, Any] | None = None,
+    zones_service: Any | None = None,
+    object_storage: ObjectStorage | None = None,
+    public_base_url: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     persist = chat_storage_client is not None and bool(user_id)
     metadata = _request_metadata(
@@ -256,6 +275,7 @@ async def stream_generation_chat(
     # scope from the file (so a file with just one zone doesn't over-ask).
     blocks: BlockFeatureCollection | None = None
     zones_in_scope: tuple[str, ...] = GENERATED_ZONES
+    kept: list[dict[str, Any]] = []
     if blocks_geojson is not None:
         kept, zones_in_scope, dropped = _blocks_from_geojson(blocks_geojson)
         if dropped:
@@ -334,6 +354,45 @@ async def stream_generation_chat(
         "targets_by_zone": extracted.targets_by_zone,
         "functional_zone_types": extracted.functional_zone_types,
     }
+    # 5.1 Zones backdrop, inline and before generation, so the map can draw the
+    # territory while buildings are still being computed. An uploaded file wins
+    # over the scenario: the backdrop must match what actually went in.
+    file_layers: list[dict[str, Any]] = []
+    if blocks_geojson is not None:
+        yield {
+            "type": "zones",
+            "source": "blocks_file",
+            "content": {"type": "FeatureCollection", "features": kept},
+        }
+    elif zones_service is not None and scenario_id is not None:
+        try:
+            zones_layer = await zones_service.prepare_zones_layer(
+                scenario_id=scenario_id,
+                year=year,
+                source=source,
+                token=token,
+                functional_zone_types=list(extracted.functional_zone_types),
+            )
+        except Exception as exc:  # noqa: BLE001 - the backdrop is optional, generation is not
+            logger.warning("functional zones backdrop failed: {}", exc)
+            yield {
+                "type": "warning",
+                "stage": "zones",
+                "detail": str(exc),
+                "message": "Не удалось загрузить слой функциональных зон.",
+            }
+        else:
+            yield {"type": "zones", "source": "scenario", "content": zones_layer}
+            descriptor = build_zones_layer(
+                scenario_id=scenario_id,
+                year=year,
+                source=source,
+                functional_zone_types=list(extracted.functional_zone_types),
+                public_base_url=public_base_url,
+            )
+            file_layers.append(descriptor)
+            yield {"type": "file", **descriptor}
+
     yield {"type": "progress", "stage": "generation", "content": "Генерация зданий…"}
     try:
         result = await builder.run(
@@ -354,6 +413,35 @@ async def stream_generation_chat(
 
     merged, summary = _merge_result(result)
     yield {"type": "result", "content": merged, "summary": summary}
+
+    # 5.2 Store the artefacts and hand out durable links. Done after ``result``
+    # so the client sees the buildings without waiting on the write, and
+    # best-effort: a storage failure is a warning, never the end of the stream.
+    if object_storage is not None:
+        result_id = uuid4().hex
+        payloads = [(SLOT_BUILDINGS, merged)]
+        if blocks_geojson is not None:
+            payloads.append((SLOT_BLOCKS_INPUT, blocks_geojson))
+        for slot, payload in payloads:
+            try:
+                await asyncio.to_thread(
+                    object_storage.put_json, payload, object_key(result_id, slot)
+                )
+            except (ObjectStorageError, OSError) as exc:
+                logger.warning("storing layer {} failed: {}", slot, exc)
+                yield {
+                    "type": "warning",
+                    "stage": "store_layer",
+                    "detail": str(exc),
+                    "message": f"Слой «{slot}» не сохранён — ссылка на него не "
+                    "появится в истории чата.",
+                }
+                continue
+            descriptor = build_stored_layer(
+                slot=slot, result_id=result_id, public_base_url=public_base_url
+            )
+            file_layers.append(descriptor)
+            yield {"type": "file", **descriptor}
 
     # 6. Stream a natural-language summary grounded on the result (best-effort).
     summary_messages = [
@@ -390,6 +478,7 @@ async def stream_generation_chat(
         chat_id,
         answer_text or "Генерация застройки завершена.",
         metadata,
+        file_parts=[geo_layer_to_file_part(layer) for layer in file_layers],
     )
     yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
 
@@ -401,13 +490,26 @@ async def _persist_assistant(
     chat_id: str | None,
     content: str,
     metadata: dict[str, Any] | None,
+    file_parts: list[dict[str, Any]] | None = None,
 ) -> str | None:
+    """Persist the assistant turn, carrying layer links when there are any.
+
+    ChatStorage takes either ``content`` or ``parts``, and links only survive as
+    ``file`` parts — so the answer text becomes a ``text`` part alongside them.
+    """
     if not (persist and chat_id and content):
         return None
     try:
-        stored = await chat_storage_client.add_message(
-            user_id, chat_id, role="assistant", content=content, metadata=metadata
-        )
+        if file_parts:
+            parts = [{"kind": "text", "payload": {"text": content}}]
+            parts += [{"kind": "file", "payload": part} for part in file_parts]
+            stored = await chat_storage_client.add_message(
+                user_id, chat_id, role="assistant", parts=parts, metadata=metadata
+            )
+        else:
+            stored = await chat_storage_client.add_message(
+                user_id, chat_id, role="assistant", content=content, metadata=metadata
+            )
         return stored.get("message_id")
     except ChatStorageError as exc:
         logger.warning("chat_storage add assistant message failed: {}", exc)

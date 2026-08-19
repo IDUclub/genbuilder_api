@@ -24,6 +24,9 @@ from app.dependencies import (
     build_vllm_chat_client,
     builder,
     chat_llm_configured,
+    optional_object_storage,
+    public_base_url,
+    zones_service,
 )
 from app.exceptions.http_exception_wrapper import http_exception
 from app.logic.chat.generation_chat import stream_generation_chat
@@ -125,6 +128,9 @@ async def generate_chat_stream(
                 blocks_geojson=blocks_geojson,
                 model=model,
                 temperature=temperature,
+                zones_service=zones_service,
+                object_storage=optional_object_storage(),
+                public_base_url=public_base_url(),
             ):
                 event_type = event.pop("type", "message")
                 yield ServerSentEvent(
