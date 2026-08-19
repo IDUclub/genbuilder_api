@@ -12,9 +12,10 @@
 
 ## 1. Авторизация
 
-Все эндпоинты требуют **HTTP Bearer**-токен. Теперь это **Keycloak**-токен
-пользователя (realm `IDU`); бэкенд проверяет подпись, срок действия и издателя
-по JWKS realm-а.
+Все эндпоинты, кроме legacy `/generate/by_territory` и его точного 3D-зеркала
+`/generate/3d/by_territory`, требуют **HTTP Bearer**-токен. Теперь это
+**Keycloak**-токен пользователя (realm `IDU`); бэкенд проверяет подпись, срок
+действия и издателя по JWKS realm-а.
 
 ```
 Authorization: Bearer <keycloak_access_token>
@@ -469,6 +470,46 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 `source`, `functional_zone_types[]`, `functional_zone_ids[]`.
 → `{ <functional_zone_id>: <residents> }`.
 
+<a id="3d-фасады"></a>
+
+### 3D-фасады
+
+Три асинхронных эндпоинта полностью повторяют параметры соответствующей обычной
+генерации, но вместо `FeatureCollection` возвращают `202 Accepted`:
+
+| 3D-эндпоинт | Повторяет |
+|---|---|
+| `POST /generate/3d/by_scenario` | `/generate/by_scenario` |
+| `POST /generate/3d/by_blocks` | `/generate/by_blocks` |
+| `POST /generate/3d/by_territory` | `/generate/by_territory` |
+
+```json
+{
+  "job_id": "01K2...",
+  "status_url": "https://facades.example.com/jobs/01K2..."
+}
+```
+
+GenBuilder сначала генерирует здания, затем ставит всю коллекцию квартала в
+очередь `facade-jobs`. По `status_url` нужно опрашивать состояние до
+`succeeded`, `failed` или `cancelled`; при успехе ответ job-сервиса содержит
+`result_url` на итоговый GLB. Сам запрос GenBuilder готовности GLB не ждёт.
+
+Для чата используется `POST /generate/chat/stream/3d` с теми же multipart-
+полями, что у `/generate/chat/stream`. Поток остаётся совместимым с обычным и
+после `result`/текстового описания получает дополнительное событие перед
+`done`:
+
+```text
+event: facade_job
+data: {"job_id":"01K2...","status_url":"https://facades.example.com/jobs/01K2..."}
+```
+
+Если очередь недоступна уже после открытия SSE, приходит
+`event: error` с `stage: "facade_job"`, затем обычный `done`; полученный ранее
+2D-результат остаётся валидным. Если `facade-jobs` не настроен, 3D-эндпоинты
+сразу возвращают HTTP `503`.
+
 **Структура `targets_by_zone`** (общая для body классических эндпоинтов):
 
 ```json
@@ -554,6 +595,8 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 | `404` | Не найдены функциональные зоны/сценарий (классические эндпоинты); слой недоступен или истёк (`/files/{slot}/{result_id}`) |
 | `401` | Битый/просроченный токен на `/layers/functional_zones` и `/files/{slot}/{result_id}` |
 | `503` | LLM-бэкенд не сконфигурирован (`LLM_API` / `Chat_Model`) — только чат-режим |
+| `502` | `facade-jobs` ответил внутренней ошибкой — только 3D-режим |
+| `503` | `facade-jobs` не настроен или недоступен — только 3D-режим |
 
 В чат-режиме нефатальные проблемы приходят **внутри потока** событием `warning`
 (генерация продолжается), фатальные — событием `error` с последующим `done`. HTTP-код

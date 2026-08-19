@@ -36,6 +36,7 @@ from app.logic.building_params import (
 from app.logic.generation import Genbuilder
 from app.infrastructure.vllm_chat_client import VLLMChatClient
 from app.infrastructure.chat_storage_client import ChatStorageClient
+from app.infrastructure.facade_jobs_client import FacadeJobsClient
 from app.infrastructure.object_storage import (
     ObjectStorage,
     ObjectStorageError,
@@ -195,3 +196,25 @@ def build_chat_storage_client() -> ChatStorageClient | None:
         )
         return None
     return ChatStorageClient(base_url, token_client)
+
+
+def facade_jobs_configured() -> bool:
+    """True when the asynchronous facade job service is configured."""
+    return bool(_optional_env("FACADE_JOBS_API"))
+
+
+def build_facade_jobs_client() -> FacadeJobsClient:
+    """Construct a per-request facade-jobs client."""
+    timeout_raw = _optional_env("FACADE_JOBS_TIMEOUT_SECONDS") or "30"
+    try:
+        timeout_seconds = float(timeout_raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "FACADE_JOBS_TIMEOUT_SECONDS must be a number."
+        ) from exc
+
+    return FacadeJobsClient(
+        _optional_env("FACADE_JOBS_API") or "",
+        public_base_url=_optional_env("FACADE_JOBS_PUBLIC_API"),
+        timeout_seconds=timeout_seconds,
+    )

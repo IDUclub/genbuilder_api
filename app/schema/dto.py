@@ -298,6 +298,13 @@ class BuildingFeatureCollection(BaseModel):
     }
 
 
+class FacadeJobAccepted(BaseModel):
+    """Handle returned after asynchronous 3D facade generation is queued."""
+
+    job_id: str = Field(..., description="Facade generation job identifier")
+    status_url: str = Field(..., description="URL to poll for job status and result")
+
+
 class FunctionalZoneGenerationConfig(BaseModel):
     functional_zone_id: int = Field(..., description="Functional zone ID")
     targets_by_zone: Dict[str, Dict[str, Any]] = Field(
@@ -439,5 +446,6 @@ __all__ = [
     "BlockFeatureCollection",
     "TerritoryRequest",
     "BuildingFeatureCollection",
+    "FacadeJobAccepted",
     "FunctionalZonesRequest"
 ]
