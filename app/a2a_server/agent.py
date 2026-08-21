@@ -27,7 +27,7 @@ from a2a.types import TaskState
 from app.dependencies import (
     CHAT_LA_PER_PERSON,
     build_chat_storage_client,
-    build_ollama_chat_client,
+    build_vllm_chat_client,
     builder,
     chat_llm_configured,
 )
@@ -112,14 +112,14 @@ class GenBuilderAgentExecutor(AgentExecutor):
         answer_parts: list[str] = []
         try:
             async with AsyncExitStack() as stack:
-                ollama = await stack.enter_async_context(build_ollama_chat_client(payload.get("temperature")))
+                llm = await stack.enter_async_context(build_vllm_chat_client(payload.get("temperature")))
                 storage = build_chat_storage_client()
                 if storage is not None:
                     await stack.enter_async_context(storage)
 
                 async for event in stream_generation_chat(
                     builder=builder,
-                    ollama_client=ollama,
+                    llm_client=llm,
                     chat_storage_client=storage,
                     token=token,
                     user_id=user_id,

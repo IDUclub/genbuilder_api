@@ -14,6 +14,8 @@ existing behaviour is preserved.
 """
 from __future__ import annotations
 
+import geopandas as gpd
+
 # Granular functional_zone_type.name -> canonical generation zone.
 _ZONE_ALIASES: dict[str, str] = {
     "residential_individual": "residential",
@@ -45,3 +47,24 @@ def normalize_zone(name: object) -> str:
 def subtype_floor_group(name: object) -> str | None:
     """Floor group implied by a residential subtype, or None if not a subtype."""
     return RESIDENTIAL_SUBTYPE_FLOOR_GROUP.get(str(name or "").strip().lower())
+
+
+def normalize_zone_column(gdf_blocks: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Normalize granular functional zone names to the canonical generation set.
+
+    Granular residential subtypes collapse to ``residential`` and carry their
+    implied per-block ``floors_group`` (ИЖС -> private, etc.); ``mixed_use`` maps
+    to ``business``. All other names pass through unchanged, so this is a no-op
+    for already-canonical data. An explicit ``floors_group`` on the block wins.
+    """
+    if gdf_blocks is None or "zone" not in gdf_blocks.columns or len(gdf_blocks) == 0:
+        return gdf_blocks
+    raw = gdf_blocks["zone"]
+    subtype_fg = raw.map(subtype_floor_group)
+    if "floors_group" in gdf_blocks.columns:
+        existing = gdf_blocks["floors_group"]
+        gdf_blocks["floors_group"] = existing.where(existing.notna(), subtype_fg)
+    else:
+        gdf_blocks["floors_group"] = subtype_fg
+    gdf_blocks["zone"] = raw.map(normalize_zone)
+    return gdf_blocks

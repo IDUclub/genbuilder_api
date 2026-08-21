@@ -1,6 +1,9 @@
-from typing import Dict, List
+import asyncio
+import json
+from typing import Dict, List, Optional
 
 from app.exceptions.http_exception_wrapper import http_exception
+from app.logic.zone_taxonomy import normalize_zone_column
 from app.schema.dto import BlockFeatureCollection
 
 
@@ -12,6 +15,40 @@ class FunctionalZonesService:
 
     def __init__(self, urban_db_api):
         self.urban_db_api = urban_db_api
+
+    async def prepare_zones_layer(
+            self,
+            scenario_id: int,
+            year: int,
+            source: str,
+            token: str,
+            functional_zone_types: Optional[List[str]] = None,
+    ) -> dict:
+        """Return the functional zones layer the way generation sees it.
+
+        Applies the same steps as the pipeline — duplicate polygon removal (done
+        by the gateway), zone name normalization and the zone type filter — so
+        the layer joins with ``properties.zone`` of the generated buildings.
+
+        Physical object exclusion is deliberately not applied: it depends on
+        per-request parameters and belongs to the result, not to the backdrop.
+        """
+        zones = await self.urban_db_api.get_territories_for_buildings(
+            scenario_id, year, source, token
+        )
+        zones = normalize_zone_column(zones)
+
+        if functional_zone_types:
+            zones = zones[zones["zone"].isin(functional_zone_types)]
+
+        if zones.empty:
+            return {"type": "FeatureCollection", "features": []}
+
+        if zones.crs is None:
+            zones = zones.set_crs("EPSG:4326")
+        zones = await asyncio.to_thread(zones.to_crs, "EPSG:4326")
+
+        return json.loads(await asyncio.to_thread(zones.to_json))
 
     async def prepare_blocks_by_zones(
             self,

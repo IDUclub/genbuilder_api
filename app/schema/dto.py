@@ -240,11 +240,11 @@ class TerritoryRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _ensure_polygons(self):
+    def _ensure_geometry(self):
         for feature in self.blocks.features:
-            if getattr(feature, "geometry", None) is None or feature.geometry.type != "Polygon":
+            if getattr(feature, "geometry", None) is None:
                 raise ValueError(
-                    "Each Feature in `blocks` must have geometry of type Polygon"
+                    "Each Feature in `blocks` must have a Polygon or MultiPolygon geometry"
                 )
         return self
 

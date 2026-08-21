@@ -102,7 +102,9 @@ Accept: text/event-stream
 | `clarification` | `{ content, missing[] }` | Не хватает обязательных параметров — это вопрос, не результат |
 | `status` | `{ content, targets_by_zone, functional_zone_types }` | Параметры приняты, генерация стартует |
 | `progress` | `{ stage, content }` | Маркер стадии пайплайна |
+| `zones` | `{ source, content }` | Подложка функциональных зон, инлайн, **до** генерации (см. [5.1](#51-событие-zones--подложка)) |
 | `result` | `{ content, summary }` | Готовый `FeatureCollection` + сводка |
+| `file` | дескриптор слоя | Ссылка на слой; она же ложится в историю чата (см. [5.2](#52-событие-file--дескриптор-слоя)) |
 | `token` | `{ content }` | Дельта текстового описания результата (стримится по кускам) |
 | `warning` | `{ stage, detail, message }` | Некритично (напр. не сохранилось в историю, отброшены объекты файла) |
 | `error` | `{ stage, detail }` | Фатально — генерация/ответ не удались |
@@ -150,6 +152,8 @@ Accept: text/event-stream
   }
 }
 ```
+
+**`zones`** и **`file`** описаны в [разделе 5](#5-геослои-подложка-и-ссылки-в-истории).
 
 ### 2.6. Многоходовой диалог
 
@@ -229,20 +233,100 @@ await generateChat(form, token, (type, data) => {
 
 ## 3. Порядок событий (типичные сценарии)
 
-**Одним запросом (спрос указан сразу):**
+**Одним запросом, по сценарию (спрос указан сразу):**
 
 ```
-chat_created → status → progress → result → token* → done
+chat_created → status → zones → file(functional_zones) → progress
+             → result → file(buildings) → token* → done
+```
+
+**Одним запросом, со своим файлом кварталов:**
+
+```
+chat_created → status → zones → progress
+             → result → file(buildings) → file(blocks_input) → token* → done
 ```
 
 **С уточнением:**
 
 ```
 chat_created → clarification → done          (первый запрос)
-status → progress → result → token* → done   (после ответа пользователя, тот же chat_id)
+status → zones → … → result → token* → done  (после ответа пользователя, тот же chat_id)
 ```
 
 `token*` — ноль или более дельт текстового описания.
+
+> События `file` могут и не прийти: если объектное хранилище недоступно, вместо
+> них будет `warning` со `stage: "store_layer"`, а поток всё равно дойдёт до
+> `done` — результат в событии `result` от этого не страдает, теряется только
+> возможность забрать слой позже.
+
+### 3.1. Сырой поток (пример)
+
+Успешная генерация по сценарию. Большие `FeatureCollection` подрезаны, остальное
+приведено как есть.
+
+```
+event: chat_created
+data: {"chat_id": "9f3a…", "title": "Построй жильё на 5000 человек"}
+
+event: status
+data: {"content": "Параметры приняты, запускаю генерацию застройки.", "targets_by_zone": {"residents": {"residential": 5000, "business": 2000}, "default_floor_group": {"residential": "medium", "business": "high"}}, "functional_zone_types": ["residential", "business"]}
+
+event: zones
+data: {"source": "scenario", "content": {"type": "FeatureCollection", "features": [ /* полигоны зон */ ]}}
+
+event: file
+data: {"name": "functional_zones", "title": "Функциональные зоны", "role": "input", "url": "http://10.32.1.46:8200/layers/functional_zones?scenario_id=198&year=2024&source=OSM&functional_zone_types=residential&functional_zone_types=business", "download_url": null, "filename": "functional_zones.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
+
+event: progress
+data: {"stage": "generation", "content": "Генерация зданий…"}
+
+event: result
+data: {"content": {"type": "FeatureCollection", "features": [ /* здания */ ]}, "summary": {"buildings": 128, "living_area_total": 350000.0, "residents_total": 5000, "buildings_by_zone": {"residential": 96, "business": 32}}}
+
+event: file
+data: {"name": "buildings", "title": "Сгенерированная застройка", "role": "result", "url": "http://10.32.1.46:8200/files/buildings/9fb46d53957b4e459a77dbe018dc96d2", "download_url": null, "filename": "buildings.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
+
+event: token
+data: {"content": "Сгенерирована застройка "}
+
+event: token
+data: {"content": "на 5000 жителей."}
+
+event: done
+data: {"chat_id": "9f3a…", "assistant_message_id": "b71c…"}
+```
+
+Что из этого следует для реализации:
+
+- **Тип события лежит в поле `event`, а не внутри `data`.** Сервер вынимает
+  `type` из конверта и делает его именем SSE-события; в `data` остаётся всё
+  остальное. Диспатчить нужно по `event`.
+- **Два события `file` с разной природой.** Различай по `name` (или `role`):
+  `functional_zones` — живой запрос, работает всегда; `buildings` — файл из
+  хранилища, живёт 30 дней. Форма одинаковая, взаимозаменяемыми они не являются.
+- **Между `zones` и `result` проходит всё время генерации** — в этом и смысл
+  раннего `zones`.
+- **`token` дробится произвольно**, как отдал LLM; склеивать на стороне клиента.
+- **`done` — терминатор, а не носитель результата.** Полезная нагрузка пришла
+  раньше; из него берут только `chat_id` и `assistant_message_id`.
+
+В режиме `blocks_file` первого `file` (`functional_zones`) не будет, зато после
+`file(buildings)` придёт второй — `blocks_input`.
+
+Ошибка в потоке выглядит так и приходит **вместо** `result`:
+
+```
+event: error
+data: {"stage": "generation", "detail": "…"}
+
+event: done
+data: {"chat_id": "9f3a…", "assistant_message_id": null}
+```
+
+Обрабатывать её нужно именно как событие: HTTP `200` к этому моменту уже отдан,
+поток открыт, и по статусу ответа о сбое узнать нельзя.
 
 ---
 
@@ -284,9 +368,147 @@ status → progress → result → token* → done   (после ответа п
 }
 ```
 
+> **Расхождение, о котором нужно знать.** В историю чата (слой `blocks_input`)
+> кладётся файл **ровно как ты его загрузил**, вместе с отброшенными фичами.
+> Инлайн-событие `zones` при этом уже отфильтровано. Это сделано намеренно: файл
+> пользователя мы не переписываем, а подложка обязана совпадать с тем, из чего
+> реально сгенерированы здания.
+
 ---
 
-## 5. Классические эндпоинты генерации (справочно)
+## 5. Геослои: подложка и ссылки в истории
+
+Кроме инлайн-результата чат отдаёт **слои**: подложку функциональных зон и
+ссылки, по которым слой можно забрать позже — в том числе при открытии старого
+чата, когда потока уже нет.
+
+Принцип разделения: **что сгенерировали сами — храним у себя, что принадлежит
+другому сервису — отдаём ссылкой на него**.
+
+| Слой (`name`) | Откуда | Ссылка | Живёт |
+|---|---|---|---|
+| `buildings` | наш результат генерации | `/files/buildings/{result_id}` | 30 дней |
+| `blocks_input` | файл пользователя, как загружен | `/files/blocks_input/{result_id}` | 30 дней |
+| `functional_zones` | живой запрос в UrbanDB | `/layers/functional_zones?…` | бессрочно |
+
+### 5.1. Событие `zones` — подложка
+
+Приходит **до** `progress`, то есть до того как посчитаны здания: карту можно
+отрисовать сразу, не дожидаясь результата.
+
+```json
+{
+  "source": "scenario",
+  "content": { "type": "FeatureCollection", "features": [ /* полигоны зон */ ] }
+}
+```
+
+- `source: "scenario"` — зоны сценария из UrbanDB, нормализованные и
+  отфильтрованные ровно так, как их видит генерация;
+- `source: "blocks_file"` — отфильтрованные кварталы из загруженного файла
+  (только residential/business), то есть то, что реально ушло в генерацию.
+
+Если зоны подтянуть не удалось, придёт `warning` со `stage: "zones"`. Генерация
+при этом идёт своим ходом — не будет только подложки.
+
+### 5.2. Событие `file` — дескриптор слоя
+
+```json
+{
+  "name": "buildings",
+  "title": "Сгенерированная застройка",
+  "role": "result",
+  "url": "http://10.32.1.46:8200/files/buildings/6f1c…e2",
+  "download_url": null,
+  "filename": "buildings.geojson",
+  "mime_type": "application/geo+json",
+  "source_service": "genbuilder"
+}
+```
+
+- `role` — `result` для сгенерированного, `input` для исходных данных;
+- `download_url` **всегда `null`**: объектное хранилище живёт в приватной сети,
+  браузер туда не ходит, весь трафик идёт через GenBuilder по `url`;
+- `url` абсолютный, если на сервере задан `PUBLIC_BASE_URL`, иначе относительный.
+
+Та же нагрузка (без `download_url` и `role`) сохраняется в историю чата как
+часть сообщения ассистента:
+
+```json
+{
+  "role": "assistant",
+  "parts": [
+    { "kind": "text", "payload": { "text": "Сгенерировано 128 зданий…" } },
+    { "kind": "file", "payload": { "url": "…/layers/functional_zones?scenario_id=198&…", "name": "functional_zones", … } },
+    { "kind": "file", "payload": { "url": "…/files/buildings/6f1c…e2", "name": "buildings", … } }
+  ]
+}
+```
+
+При отрисовке истории: текст берётся из `text`-части, слои — из `file`-частей по
+их `url`. Отдельного «текстового» поля `content` у таких сообщений нет.
+
+### 5.3. `GET /layers/functional_zones`
+
+Функциональные зоны сценария — **живой** запрос, ничего не копируется.
+
+Query: `scenario_id`, `year`, `source`, `functional_zone_types[]` (повторяемый,
+опционален — без него вернутся все зоны).
+
+→ `FeatureCollection` в EPSG:4326. Зоны нормализованы так же, как их видит
+генерация (гранулярные жилые подтипы схлопнуты в `residential`, `mixed_use` — в
+`business`), у фич сохраняется `functional_zone_id` для связывания.
+
+Требует токен пользователя: доступ к приватному сценарию проверяет UrbanDB на
+**каждый** запрос. Поэтому ссылка не устаревает и не является «капабилити» —
+отозвали доступ к сценарию, и по ней ничего не отдастся.
+
+### 5.4. `GET /files/{slot}/{result_id}`
+
+Наши собственные артефакты из объектного хранилища. `slot` — `buildings` или
+`blocks_input`.
+
+→ `application/geo+json`, тело стримится чанками, `Content-Disposition:
+attachment`.
+
+Требует токен. Ответы: `404` — неизвестный слот, битый `result_id` **или**
+истёкший объект.
+
+> **30 дней.** Слои `buildings` и `blocks_input` удаляются из хранилища по
+> lifecycle-правилу через 30 дней. Открытие старого чата — штатная ситуация, в
+> которой ссылка отдаст `404`: показывай слой как недоступный и **не роняй**
+> просмотр истории. Ссылка на `functional_zones` при этом продолжает работать —
+> она не про хранилище.
+
+### 5.5. Как скачать слой файлом
+
+`<a href>` и `window.open` не годятся: заголовок `Authorization` туда не
+поставить. Нужен `fetch` → `Blob` → `createObjectURL`:
+
+```ts
+async function downloadLayer(layer: { url: string; filename: string }, token: string) {
+  const res = await fetch(layer.url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 404) {
+    throw new Error("Слой больше недоступен: результаты генерации хранятся 30 дней");
+  }
+  if (!res.ok) throw new Error(`Не удалось скачать слой: ${res.status}`);
+
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = layer.filename;
+  a.click();
+  URL.revokeObjectURL(href);
+}
+```
+
+Для отрисовки на карте вместо `blob()` бери `await res.json()` — это готовый
+`FeatureCollection`.
+
+---
+
+## 6. Классические эндпоинты генерации (справочно)
 
 Синхронные, возвращают JSON `FeatureCollection` целиком (без стрима). Полезны, если
 фронту нужен прямой вызов без диалога.
@@ -330,14 +552,75 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 
 ---
 
-## 6. Ошибки и статусы
+## 7. Свойства зданий в ответе
+
+### 7.1. Состав `properties`
+
+У каждой сгенерированной постройки в `properties` приходит восемь полей:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `floors_count` | number | Этажность |
+| `living_area` | number | Жилая площадь, м² (0 для нежилых зон) |
+| `building_area` | number | Общая площадь здания, м² |
+| `residents_number` | number | Расчётное число жителей |
+| `building_type` | enum | Тип застройки (`private`, `low`, `medium`, `high`, …) |
+| `zone` | enum | Функциональная зона блока (нормализованная) |
+| `service` | array | Сервисы в здании (может быть пустым) |
+| `broke_restriction_zone` | boolean | Нарушены нормативные отступы |
+
+### 7.2. Как отличить исключённые объекты
+
+Если в `/generate/by_scenario` или `/generate/by_blocks` передан
+`physical_object_id[]`, в ту же коллекцию попадают **существующие** объекты,
+исключённые из генерации. У них те же восемь полей плюс два дополнительных:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `is_excluded` | boolean | Всегда `true` — признак существующего объекта |
+| `physical_object_id` | integer | ID физического объекта в UrbanDB |
+
+> ⚠️ У сгенерированных зданий ключа `is_excluded` **нет вообще** — он не
+> приходит со значением `false`. Проверять нужно наличие или истинность:
+> `feature.properties.is_excluded === true`.
+
+В `/generate/by_territory` параметра `physical_object_id` нет, поэтому там
+исключённых объектов не бывает.
+
+### 7.3. `GET /generate/properties_schema`
+
+Отдаёт русские подписи для имён свойств и для значений enum-полей. Авторизация
+не требуется, ответ константный — запрашивайте один раз и кэшируйте.
+
+```json
+{
+  "properties": {
+    "floors_count": { "label": "Количество этажей", "kind": "number", "unit": "эт.", "excluded_only": false },
+    "is_excluded":  { "label": "Существующий объект", "kind": "boolean", "unit": null, "excluded_only": true }
+  },
+  "values": {
+    "building_type": { "private": "ИЖС", "medium": "Среднеэтажная" },
+    "zone": { "residential": "Жилая", "business": "Общественно-деловая" }
+  }
+}
+```
+
+- `kind` — как рендерить значение: `number`, `integer`, `boolean`, `enum`, `array`.
+- `unit` — единица измерения либо `null`.
+- `excluded_only` — поле есть только у исключённых объектов.
+- `values` — словари подписей для полей с `kind: "enum"`.
+
+---
+
+## 8. Ошибки и статусы
 
 | Код | Когда |
 |---|---|
 | `403` | Нет/битый `Authorization` заголовок |
 | `422` | Нет источника территории (ни `scenario_id`, ни `blocks_file`); `scenario_id` без `year`/`source`; невалидный GeoJSON в `blocks_file` |
-| `404` | Не найдены функциональные зоны/сценарий (классические эндпоинты) |
-| `503` | LLM-бэкенд не сконфигурирован (`Ollama_API` / `Chat_Model`) — только чат-режим |
+| `404` | Не найдены функциональные зоны/сценарий (классические эндпоинты); слой недоступен или истёк (`/files/{slot}/{result_id}`) |
+| `401` | Битый/просроченный токен на `/layers/functional_zones` и `/files/{slot}/{result_id}` |
+| `503` | LLM-бэкенд не сконфигурирован (`LLM_API` / `Chat_Model`) — только чат-режим |
 
 В чат-режиме нефатальные проблемы приходят **внутри потока** событием `warning`
 (генерация продолжается), фатальные — событием `error` с последующим `done`. HTTP-код
