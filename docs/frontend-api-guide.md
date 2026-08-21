@@ -261,6 +261,73 @@ status → zones → … → result → token* → done  (после ответ�
 > `done` — результат в событии `result` от этого не страдает, теряется только
 > возможность забрать слой позже.
 
+### 3.1. Сырой поток (пример)
+
+Успешная генерация по сценарию. Большие `FeatureCollection` подрезаны, остальное
+приведено как есть.
+
+```
+event: chat_created
+data: {"chat_id": "9f3a…", "title": "Построй жильё на 5000 человек"}
+
+event: status
+data: {"content": "Параметры приняты, запускаю генерацию застройки.", "targets_by_zone": {"residents": {"residential": 5000, "business": 2000}, "default_floor_group": {"residential": "medium", "business": "high"}}, "functional_zone_types": ["residential", "business"]}
+
+event: zones
+data: {"source": "scenario", "content": {"type": "FeatureCollection", "features": [ /* полигоны зон */ ]}}
+
+event: file
+data: {"name": "functional_zones", "title": "Функциональные зоны", "role": "input", "url": "http://10.32.1.46:8200/layers/functional_zones?scenario_id=198&year=2024&source=OSM&functional_zone_types=residential&functional_zone_types=business", "download_url": null, "filename": "functional_zones.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
+
+event: progress
+data: {"stage": "generation", "content": "Генерация зданий…"}
+
+event: result
+data: {"content": {"type": "FeatureCollection", "features": [ /* здания */ ]}, "summary": {"buildings": 128, "living_area_total": 350000.0, "residents_total": 5000, "buildings_by_zone": {"residential": 96, "business": 32}}}
+
+event: file
+data: {"name": "buildings", "title": "Сгенерированная застройка", "role": "result", "url": "http://10.32.1.46:8200/files/buildings/9fb46d53957b4e459a77dbe018dc96d2", "download_url": null, "filename": "buildings.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
+
+event: token
+data: {"content": "Сгенерирована застройка "}
+
+event: token
+data: {"content": "на 5000 жителей."}
+
+event: done
+data: {"chat_id": "9f3a…", "assistant_message_id": "b71c…"}
+```
+
+Что из этого следует для реализации:
+
+- **Тип события лежит в поле `event`, а не внутри `data`.** Сервер вынимает
+  `type` из конверта и делает его именем SSE-события; в `data` остаётся всё
+  остальное. Диспатчить нужно по `event`.
+- **Два события `file` с разной природой.** Различай по `name` (или `role`):
+  `functional_zones` — живой запрос, работает всегда; `buildings` — файл из
+  хранилища, живёт 30 дней. Форма одинаковая, взаимозаменяемыми они не являются.
+- **Между `zones` и `result` проходит всё время генерации** — в этом и смысл
+  раннего `zones`.
+- **`token` дробится произвольно**, как отдал LLM; склеивать на стороне клиента.
+- **`done` — терминатор, а не носитель результата.** Полезная нагрузка пришла
+  раньше; из него берут только `chat_id` и `assistant_message_id`.
+
+В режиме `blocks_file` первого `file` (`functional_zones`) не будет, зато после
+`file(buildings)` придёт второй — `blocks_input`.
+
+Ошибка в потоке выглядит так и приходит **вместо** `result`:
+
+```
+event: error
+data: {"stage": "generation", "detail": "…"}
+
+event: done
+data: {"chat_id": "9f3a…", "assistant_message_id": null}
+```
+
+Обрабатывать её нужно именно как событие: HTTP `200` к этому моменту уже отдан,
+поток открыт, и по статусу ответа о сбое узнать нельзя.
+
 ---
 
 ## 4. Загрузка своих блоков (`blocks_file`)
