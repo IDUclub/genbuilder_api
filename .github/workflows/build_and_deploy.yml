@@ -74,3 +74,11 @@ jobs:
       - name: run
 #        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
         run: docker compose -f docker-compose.actions.yml up -d
+      - name: verify container
+        run: |
+          if ! curl --fail --silent --show-error \
+            --retry 30 --retry-delay 2 --retry-connrefused --retry-all-errors \
+            http://localhost:8200/docs > /dev/null; then
+            docker logs --tail 100 "$CONTAINER_NAME"
+            exit 1
+          fi
