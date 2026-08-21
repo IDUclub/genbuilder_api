@@ -8,3 +8,8 @@ services:
       - "8200:8000"
     env_file:
       - .env.development
+    volumes:
+      - runtime_config:/runtime-config
+
+volumes:
+  runtime_config:

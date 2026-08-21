@@ -10,4 +10,9 @@ services:
       - "9464:9464"
     env_file:
       - .env.development
+    volumes:
+      - runtime_config:/runtime-config
     restart: always
+
+volumes:
+  runtime_config:

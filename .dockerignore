@@ -2,3 +2,4 @@ __pycache__
 wandb
 genbuilder_logs
 *.ipynb
+.env.*

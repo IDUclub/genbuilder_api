@@ -1,6 +1,46 @@
 # GenBuilder API
 API for GenBuilder. Can generate images with buildings and other objects for city blocks, vectorize and normalize them.
 
+## Configuration
+
+The deployment workflow can build `.env.development` directly from GitHub
+repository settings (`Settings` → `Secrets and variables` → `Actions`):
+
+- variable `ENV_APP` — non-sensitive application parameters;
+- variable `ENV_URLS` — service URLs, hosts and ports;
+- secret `ENV_SECRET` — credentials and `ADMIN_API_TOKEN`.
+
+Each value is a multiline dotenv fragment. They are concatenated in that order,
+so `ENV_SECRET` wins if a key is duplicated. `ENV_FILE` and `ENV_PATH` remain as
+legacy fallbacks. See [`.env.example`](.env.example) for the supported keys and
+their recommended grouping.
+
+### Runtime configuration API
+
+With `ADMIN_API_TOKEN` set, effective non-sensitive settings can be changed
+without rebuilding or restarting the container. Send the token in the
+`X-Admin-Token` header:
+
+- `GET /admin/config/settings` — typed effective settings (secrets masked);
+- `GET /admin/config/overrides` — active persistent overrides;
+- `GET /admin/config/{key}` — effective value and override status;
+- `PUT /admin/config/{key}` with `{"value":"...","updated_by":"..."}` — validate and set;
+- `DELETE /admin/config/{key}` — remove and restore the deployed value;
+- `POST /admin/config/reload` — force this process to sync immediately.
+
+Example:
+
+```bash
+curl -X PUT http://localhost:8200/admin/config/LLM_API \
+  -H 'X-Admin-Token: <ADMIN_API_TOKEN>' \
+  -H 'Content-Type: application/json' \
+  -d '{"value":"http://new-llm:8001","updated_by":"operator"}'
+```
+
+Overrides are stored in SQLite at `RUNTIME_CONFIG_PATH` on the persistent
+`runtime_config` Docker volume and synced by every process (5-second TTL by
+default). Unknown keys, credentials and boot-only settings are rejected.
+
 ## Generated geo layers
 
 Chat generation stores its own artefacts (the generated buildings and, when the
