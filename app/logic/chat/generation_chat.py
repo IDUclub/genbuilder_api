@@ -46,6 +46,7 @@ from loguru import logger
 from app.infrastructure.chat_storage_client import ChatStorageClient, ChatStorageError
 from app.infrastructure.object_storage import ObjectStorage, ObjectStorageError
 from app.infrastructure.vllm_chat_client import VLLMChatClient, VLLMChatError
+from app.logic.chat.chat_title import make_chat_title
 from app.logic.chat.param_extraction import (
     DEFAULT_FLOOR_GROUP_BY_ZONE,
     GENERATED_ZONES,
@@ -265,12 +266,16 @@ async def stream_generation_chat(
                 "обрабатываю только текущее сообщение.",
             }
 
-    # 1. Ensure a chat exists.
+    # 1. Ensure a chat exists. Its title is written by the LLM: the raw first
+    # message makes rows that can't be told apart in the history list.
     if persist and not chat_id:
+        title = await make_chat_title(
+            llm_client, user_query=user_query, model=model, fallback=chat_title
+        )
         try:
             created = await chat_storage_client.create_chat(
                 user_id,
-                title=chat_title or user_query[:256],
+                title=title,
                 scenario_id=scenario_id,
                 project_id=project_id,
                 metadata=metadata,
