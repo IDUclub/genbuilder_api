@@ -76,16 +76,23 @@ class _FakeBuilder:
 
 
 class _FakeLLM:
+    TITLE = "Жильё на 5000 жителей"
+
     async def stream_chat(self, messages, model=None, temperature=None):
         for delta in ("Сгенерировано ", "1 здание."):
             yield delta
+
+    async def complete_json(self, messages, *, schema, model=None, temperature=0.0):
+        return {"title": self.TITLE}
 
 
 class _FakeChatStorage:
     def __init__(self):
         self.messages: list[dict] = []
+        self.created: list[dict] = []
 
     async def create_chat(self, user_id, **kwargs):
+        self.created.append(kwargs)
         return {"chat_id": "chat-1", "title": kwargs.get("title")}
 
     async def get_chat(self, user_id, chat_id):
@@ -481,3 +488,21 @@ def test_existing_buildings_are_stored_as_their_own_layer(tmp_path):
     ][0]
     key = object_key(_result_id(descriptor), SLOT_EXISTING_BUILDINGS)
     assert json.loads(b"".join(storage.open_stream(key)).decode("utf-8")) == uploaded
+
+
+def test_a_new_chat_gets_an_llm_written_title():
+    """The raw query makes history rows nobody can tell apart."""
+    storage_client = _FakeChatStorage()
+
+    events = _collect(chat_storage_client=storage_client, user_id="user-1")
+
+    assert storage_client.created[0]["title"] == _FakeLLM.TITLE
+    assert _of_type(events, "chat_created")[0]["title"] == _FakeLLM.TITLE
+
+
+def test_an_existing_chat_is_not_retitled():
+    storage_client = _FakeChatStorage()
+
+    _collect(chat_storage_client=storage_client, user_id="user-1", chat_id="chat-1")
+
+    assert storage_client.created == []
