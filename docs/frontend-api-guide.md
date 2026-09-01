@@ -53,6 +53,8 @@ Accept: text/event-stream
 | `year` | int | ⚠️ | Год данных. Обязателен вместе с `scenario_id` |
 | `source` | string | ⚠️ | Источник данных (напр. `OSM`). Обязателен вместе с `scenario_id` |
 | `blocks_file` | file (GeoJSON) | ⚠️ | Свой набор блоков. Альтернатива сценарию как источник территории |
+| `buildings_file` | file (GeoJSON) | ⛔ | Существующие здания — их пятна исключаются из генерации (режим без проекта) |
+| `skip_existing_buildings` | bool | ⛔ | `true`, если пользователь отказался загружать существующие здания |
 | `functional_zone_types` | string | ⛔ | CSV-фильтр зон (в агентном режиме игнорируется — всегда residential+business) |
 | `chat_id` | string | ⛔ | ID существующего чата для многоходового диалога |
 | `project_id` | int | ⛔ | ID проекта (для истории) |
@@ -82,6 +84,24 @@ Accept: text/event-stream
 
 Если спрос по нужной зоне отсутствует → приходит событие `clarification`, генерация
 не запускается.
+
+**Режим без проекта (`blocks_file` без `scenario_id`) спрашивает ещё об одном.**
+У сценария существующая застройка берётся из UrbanDB, а у своего файла кварталов
+её взять неоткуда — поэтому перед первой генерацией бэкенд один раз задаёт
+вопрос: **«Хотите загрузить существующие здания?»** Он приходит тем же событием
+`clarification`, отдельным элементом `missing[]` с `field: "existing_buildings"` и
+`optional: true`. Ответ — новый запрос с тем же `chat_id` и:
+
+- `buildings_file` — GeoJSON существующих зданий: их пятна вырезаются из
+  кварталов, генерация обходит существующую застройку, а сами здания приходят в
+  `result` с `is_excluded: true` (см. [7.2](#72-как-отличить-исключённые-объекты));
+- `skip_existing_buildings=true` — пользователь отказался, застройка генерируется
+  по всей площади кварталов.
+
+Пока не пришло ни файла, ни отказа, вопрос повторяется на каждом запросе. Если
+фронт знает ответ заранее (пользователь ответил до отправки), можно приложить
+`buildings_file` / `skip_existing_buildings` сразу к первому запросу — тогда
+лишнего круга не будет. Подробности — в [4.1](#41-существующие-здания-buildings_file).
 
 ### 2.4. Как читать ответ (SSE)
 
@@ -121,23 +141,35 @@ Accept: text/event-stream
       "field": "residents|living_area",
       "control": "number",
       "unit": "чел. или м²",
-      "alt_fields": ["residents", "living_area"]
+      "alt_fields": ["residents", "living_area"],
+      "optional": false
     },
     {
-      "zone": "business",
-      "field": "residents|living_area",
-      "control": "number",
-      "unit": "чел. или м²",
-      "alt_fields": ["residents", "living_area"]
+      "zone": null,
+      "field": "existing_buildings",
+      "control": "file_or_skip",
+      "unit": null,
+      "alt_fields": ["buildings_file", "skip_existing_buildings"],
+      "optional": true
     }
   ]
 }
 ```
 
-Как рендерить: на каждый элемент `missing` — числовой инпут (`control: "number"`),
-подпись из `unit`, а `alt_fields` показывает, что значение можно трактовать как
-`residents` **или** `living_area` (можно дать переключатель единиц). Ответ
-пользователя отправляется **новым** запросом на тот же эндпоинт с тем же `chat_id`.
+Как рендерить:
+
+- `control: "number"` — числовой инпут, подпись из `unit`; `alt_fields`
+  показывает, что значение можно трактовать как `residents` **или**
+  `living_area` (можно дать переключатель единиц);
+- `control: "file_or_skip"` — вопрос с двумя ответами: выбор файла (уйдёт полем
+  `buildings_file`) и кнопка «Нет» (уйдёт как `skip_existing_buildings=true`).
+  Приходит только в режиме без проекта, `zone` у него `null`;
+- `optional: true` — на этот вопрос можно ответить отказом, но ответить нужно:
+  пока ответа нет, генерация не запускается.
+
+Ответ пользователя отправляется **новым** запросом на тот же эндпоинт с тем же
+`chat_id`. Все элементы `missing` приходят одним событием — их можно показать
+одной формой и ответить одним запросом.
 
 **`result`**:
 
@@ -240,11 +272,20 @@ chat_created → status → zones → file(functional_zones) → progress
              → result → file(buildings) → token* → done
 ```
 
-**Одним запросом, со своим файлом кварталов:**
+**Одним запросом, со своим файлом кварталов** (вопрос про существующие здания уже
+отвечен — приложен `buildings_file` либо `skip_existing_buildings=true`):
 
 ```
 chat_created → status → zones → progress
-             → result → file(buildings) → file(blocks_input) → token* → done
+             → result → file(buildings) → file(blocks_input)
+             → file(existing_buildings)? → token* → done
+```
+
+**Режим без проекта, вопрос про существующие здания:**
+
+```
+chat_created → clarification → done                    (первый запрос)
+status → zones → … → result → token* → done            (после ответа, тот же chat_id)
 ```
 
 **С уточнением:**
@@ -374,6 +415,37 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 > пользователя мы не переписываем, а подложка обязана совпадать с тем, из чего
 > реально сгенерированы здания.
 
+### 4.1. Существующие здания (`buildings_file`)
+
+Своим файлом кварталов территория задаётся «с нуля», и генератор по умолчанию
+считает её пустой. Чтобы застройка не выросла поверх того, что уже стоит,
+приложи существующие здания:
+
+- `buildings_file` — GeoJSON `FeatureCollection`, фичи `Polygon`/`MultiPolygon`;
+- `properties` **необязательны**: для исключения достаточно геометрии. Если они
+  есть, из них берутся `floors_count`, `living_area`, `building_area`,
+  `residents_number`, `building_type`, `zone`, `service` — с ними здание
+  отрисуется как обычный объект;
+- неполигональные фичи отбрасываются: придёт `warning` со
+  `stage: "load_existing_buildings"` и числом отброшенных. Если полигонов нет
+  вовсе — тоже `warning`, но генерация продолжится (без исключений), а не упадёт.
+
+> **Отбора на бэкенде нет: отбор — это сам файл.** Исключается **каждая**
+> полигональная фича из `buildings_file`; никакого флага в `properties` для
+> этого нет. Это осознанное отличие от режима по сценарию, где в UrbanDB лежат
+> все физобъекты территории и `physical_object_id[]` выбирает из них
+> подмножество. Здесь «всех зданий» у бэкенда нет, поэтому подмножество
+> формирует фронт: если пользователь отмечает часть зданий на карте — собери
+> `FeatureCollection` только из отмеченных и отправь его.
+
+Что делает бэкенд: пятна зданий (с отступом, подобранным по размеру здания)
+вырезаются из кварталов **до** генерации, а сами здания возвращаются в `result`
+вместе со сгенерированными — с `is_excluded: true`. То есть на карте это один
+слой: новая застройка плюс существующая, различимые по флагу.
+
+Тот же механизм в классическом режиме — поле `existing_buildings` в теле
+`POST /generate/by_territory` (см. [раздел 6](#6-классические-эндпоинты-генерации-справочно)).
+
 ---
 
 ## 5. Геослои: подложка и ссылки в истории
@@ -389,6 +461,7 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 |---|---|---|---|
 | `buildings` | наш результат генерации | `/files/buildings/{result_id}` | 30 дней |
 | `blocks_input` | файл пользователя, как загружен | `/files/blocks_input/{result_id}` | 30 дней |
+| `existing_buildings` | полигоны из файла существующих зданий | `/files/existing_buildings/{result_id}` | 30 дней |
 | `functional_zones` | живой запрос в UrbanDB | `/layers/functional_zones?…` | бессрочно |
 
 ### 5.1. Событие `zones` — подложка
@@ -465,8 +538,8 @@ Query: `scenario_id`, `year`, `source`, `functional_zone_types[]` (повтор�
 
 ### 5.4. `GET /files/{slot}/{result_id}`
 
-Наши собственные артефакты из объектного хранилища. `slot` — `buildings` или
-`blocks_input`.
+Наши собственные артефакты из объектного хранилища. `slot` — `buildings`,
+`blocks_input` или `existing_buildings`.
 
 → `application/geo+json`, тело стримится чанками, `Content-Disposition:
 attachment`.
@@ -474,7 +547,7 @@ attachment`.
 Требует токен. Ответы: `404` — неизвестный слот, битый `result_id` **или**
 истёкший объект.
 
-> **30 дней.** Слои `buildings` и `blocks_input` удаляются из хранилища по
+> **30 дней.** Слои `buildings`, `blocks_input` и `existing_buildings` удаляются из хранилища по
 > lifecycle-правилу через 30 дней. Открытие старого чата — штатная ситуация, в
 > которой ссылка отдаст `404`: показывай слой как недоступный и **не роняй**
 > просмотр истории. Ссылка на `functional_zones` при этом продолжает работать —
@@ -521,7 +594,8 @@ Body (`ScenarioBody`): `targets_by_zone`, `generation_parameters`.
 
 ### `POST /generate/by_territory`
 Генерация по присланным блокам (без сценария). Body (`TerritoryRequest`):
-`blocks` (GeoJSON блоков), `targets_by_zone`, `generation_parameters`.
+`blocks` (GeoJSON блоков), `existing_buildings` (опц., GeoJSON существующих
+зданий — исключаются из генерации), `targets_by_zone`, `generation_parameters`.
 → `FeatureCollection`.
 
 ### `POST /generate/by_blocks`
@@ -584,8 +658,10 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 > приходит со значением `false`. Проверять нужно наличие или истинность:
 > `feature.properties.is_excluded === true`.
 
-В `/generate/by_territory` параметра `physical_object_id` нет, поэтому там
-исключённых объектов не бывает.
+В `/generate/by_territory` параметра `physical_object_id` нет — там существующие
+здания приходят телом запроса (`existing_buildings`), а в чат-режиме без проекта
+файлом `buildings_file`. Помечаются они так же (`is_excluded: true`), но
+`physical_object_id` у них `null`, если его не было в присланных `properties`.
 
 ### 7.3. `GET /generate/properties_schema`
 
@@ -617,7 +693,7 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 | Код | Когда |
 |---|---|
 | `403` | Нет/битый `Authorization` заголовок |
-| `422` | Нет источника территории (ни `scenario_id`, ни `blocks_file`); `scenario_id` без `year`/`source`; невалидный GeoJSON в `blocks_file` |
+| `422` | Нет источника территории (ни `scenario_id`, ни `blocks_file`); `scenario_id` без `year`/`source`; невалидный GeoJSON в `blocks_file` или `buildings_file` |
 | `404` | Не найдены функциональные зоны/сценарий (классические эндпоинты); слой недоступен или истёк (`/files/{slot}/{result_id}`) |
 | `401` | Битый/просроченный токен на `/layers/functional_zones` и `/files/{slot}/{result_id}` |
 | `503` | LLM-бэкенд не сконфигурирован (`LLM_API` / `Chat_Model`) — только чат-режим |

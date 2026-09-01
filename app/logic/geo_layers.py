@@ -3,8 +3,9 @@
 A descriptor tells the frontend where a layer can be fetched, without carrying
 the layer itself. Two kinds exist, and the difference is deliberate:
 
-- **stored layers** (``buildings``, ``blocks_input``) are our own artefacts,
-  written to object storage and served back by ``/files/{slot}/{result_id}``;
+- **stored layers** (``buildings``, ``blocks_input``, ``existing_buildings``) are
+  our own artefacts, written to object storage and served back by
+  ``/files/{slot}/{result_id}``;
 - the **functional zones layer** belongs to UrbanDB, so its descriptor is a live
   query against ``/layers/functional_zones`` — nothing is copied, and UrbanDB
   keeps enforcing access to a private scenario on every fetch.
@@ -24,6 +25,7 @@ MIME_TYPE = "application/geo+json"
 
 SLOT_BUILDINGS = "buildings"
 SLOT_BLOCKS_INPUT = "blocks_input"
+SLOT_EXISTING_BUILDINGS = "existing_buildings"
 
 ZONES_LAYER_NAME = "functional_zones"
 ZONES_LAYER_PATH = "/layers/functional_zones"
@@ -31,6 +33,7 @@ ZONES_LAYER_PATH = "/layers/functional_zones"
 _SLOT_SPECS: dict[str, tuple[str, str, str]] = {
     SLOT_BUILDINGS: ("buildings", "Сгенерированная застройка", "result"),
     SLOT_BLOCKS_INPUT: ("blocks_input", "Загруженные кварталы", "input"),
+    SLOT_EXISTING_BUILDINGS: ("existing_buildings", "Существующие здания", "input"),
 }
 
 FILE_SLOTS: tuple[str, ...] = tuple(_SLOT_SPECS)

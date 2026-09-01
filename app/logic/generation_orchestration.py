@@ -112,11 +112,22 @@ async def generate_by_scenario(
 
 
 async def generate_by_territory(payload: TerritoryRequest) -> dict:
-    """Generate buildings for an arbitrary set of block polygons. Mirrors ``/generate/by_territory``."""
+    """Generate buildings for an arbitrary set of block polygons. Mirrors ``/generate/by_territory``.
+
+    This is the project-less mode: there is no scenario to pull existing
+    buildings from, so the caller may upload them (``existing_buildings``) —
+    their footprints are cut out of the blocks and they come back in the
+    response marked ``is_excluded``.
+    """
     result = await builder.run(
         blocks=payload.blocks,
         targets_by_zone=payload.targets_by_zone,
         generation_parameters_override=payload.generation_parameters,
+        existing_buildings=(
+            payload.existing_buildings.model_dump()
+            if payload.existing_buildings is not None
+            else None
+        ),
     )
     return merge_generation_result(result)
 

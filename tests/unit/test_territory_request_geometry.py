@@ -76,3 +76,58 @@ def test_blocks_file_and_territory_request_accept_the_same_collection():
 
     BlockFeatureCollection.model_validate(blocks)
     TerritoryRequest.model_validate({"blocks": blocks})
+
+
+BUILDING = {
+    "type": "Polygon",
+    "coordinates": [[[31.001, 59.911], [31.002, 59.911], [31.002, 59.912], [31.001, 59.911]]],
+}
+
+
+def _buildings(*geometries, **properties):
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "properties": dict(properties), "geometry": geometry}
+            for geometry in geometries
+        ],
+    }
+
+
+def test_existing_buildings_are_optional():
+    payload = TerritoryRequest.model_validate({"blocks": _collection(POLYGON)})
+
+    assert payload.existing_buildings is None
+
+
+def test_existing_buildings_accept_free_form_properties():
+    payload = TerritoryRequest.model_validate(
+        {
+            "blocks": _collection(POLYGON),
+            "existing_buildings": _buildings(BUILDING, floors_count=5, whatever="kept"),
+        }
+    )
+
+    properties = payload.existing_buildings.features[0].properties
+    assert properties == {"floors_count": 5, "whatever": "kept"}
+
+
+def test_existing_buildings_accept_a_bare_footprint():
+    """Only the geometry is needed to exclude a building from generation."""
+    collection = _buildings(BUILDING)
+    collection["features"][0]["properties"] = None
+
+    payload = TerritoryRequest.model_validate(
+        {"blocks": _collection(POLYGON), "existing_buildings": collection}
+    )
+
+    assert payload.existing_buildings.features[0].geometry.type == "Polygon"
+
+
+def test_existing_buildings_reject_non_polygonal_geometry():
+    point = {"type": "Point", "coordinates": [31.0, 59.91]}
+
+    with pytest.raises(ValidationError):
+        TerritoryRequest.model_validate(
+            {"blocks": _collection(POLYGON), "existing_buildings": _buildings(point)}
+        )

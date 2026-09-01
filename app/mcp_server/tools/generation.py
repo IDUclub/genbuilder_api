@@ -120,6 +120,11 @@ AUTH: none required — this tool operates only on inline geometry.
 PARAMETERS
 - blocks (GeoJSON FeatureCollection, required): Polygon/MultiPolygon features,
   each with `properties.zone` set (e.g. "residential", "business").
+- existing_buildings (GeoJSON FeatureCollection, optional): footprints of
+  buildings that already stand on the territory. They are cut out of the
+  blocks before generation, so nothing is generated on top of them, and they
+  come back in the response marked `is_excluded: true`. Properties are
+  optional — the geometry is what matters.
 - targets_by_zone (object, optional): per-zone generation targets. Omit to
   use the service defaults.
 - generation_parameters (object, optional): low-level generation parameter
@@ -138,6 +143,10 @@ async def generate_by_territory(
         dict[str, Any],
         "GeoJSON FeatureCollection of Polygon/MultiPolygon blocks; each feature needs properties.zone.",
     ],
+    existing_buildings: Annotated[
+        Optional[dict[str, Any]],
+        "GeoJSON FeatureCollection of existing building footprints to exclude from generation.",
+    ] = None,
     targets_by_zone: Annotated[
         Optional[dict[str, dict[str, Any]]], "Per-zone generation targets."
     ] = None,
@@ -148,6 +157,7 @@ async def generate_by_territory(
     payload = _validate(
         TerritoryRequest,
         blocks=blocks,
+        existing_buildings=existing_buildings,
         targets_by_zone=targets_by_zone,
         generation_parameters=generation_parameters,
     )

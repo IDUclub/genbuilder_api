@@ -91,6 +91,7 @@ Authorization: Bearer <keycloak_access_token>
 | Параметр | Тип | Обяз. | Описание |
 |---|---|---|---|
 | `blocks` | GeoJSON FeatureCollection | ✅ | `Polygon`/`MultiPolygon`-фичи, у каждой заполнен `properties.zone` (напр. `"residential"`) |
+| `existing_buildings` | GeoJSON FeatureCollection | ⛔ | Пятна уже стоящих зданий — вырезаются из блоков до генерации и возвращаются с `is_excluded: true`; `properties` необязательны |
 | `targets_by_zone` | object | ⛔ | Как выше |
 | `generation_parameters` | object | ⛔ | Как выше |
 
