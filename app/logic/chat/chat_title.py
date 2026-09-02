@@ -2,8 +2,12 @@
 
 The first user message makes a poor title: "количество жителей 17" and
 "количество жителей 20" are two indistinguishable rows in the sidebar. So the
-title is written by the LLM in one short guided-decoding call — a noun phrase
-naming what the chat is about, not a copy of the request.
+title is written by the LLM in one short guided-decoding call — "Генерация жилья
+на 20 жителей", not a copy of the request.
+
+The shape is deliberate: the leading "Генерация" says which tool the chat
+belongs to (the history sidebar mixes chats of several services), and the
+trailing parameter keeps two similar requests apart.
 
 The call is deliberately cheap and never load-bearing: it runs once, when the
 chat is created, under its own timeout, and any failure (LLM down, junk output,
@@ -30,12 +34,14 @@ TITLE_TIMEOUT_SECONDS = 15.0
 
 _TITLE_SYSTEM_PROMPT = (
     "Ты придумываешь короткий заголовок для чата о генерации городской "
-    "застройки. Заголовок — именная группа из 3–5 слов на русском языке, "
-    "по которой чат можно узнать в списке: что генерируем и главный параметр "
-    "(например «Жильё на 5000 жителей» или «Застройка по своим кварталам»). "
-    "Без кавычек, без точки в конце, без слов «чат», «запрос», «генерация "
-    "застройки» саму по себе. Опирайся только на запрос пользователя, ничего "
-    "не выдумывай: если в запросе нет деталей, опиши его как есть."
+    "застройки. Заголовок начинается со слова «Генерация», дальше — что "
+    "генерируем и главный различающий параметр из запроса. Примеры: "
+    "«Генерация жилья на 5000 жителей», «Генерация застройки по своим "
+    "кварталам», «Генерация общественно-деловой застройки в 12 этажей». "
+    "Всего 3–6 слов на русском языке, без кавычек, без точки в конце, без "
+    "слов «чат» и «запрос». Опирайся только на запрос пользователя, ничего не "
+    "выдумывай: если различающих параметров в запросе нет, ответь просто "
+    "«Генерация застройки»."
 )
 
 _TITLE_SCHEMA: dict[str, Any] = {

@@ -76,7 +76,7 @@ class _FakeBuilder:
 
 
 class _FakeLLM:
-    TITLE = "Жильё на 5000 жителей"
+    TITLE = "Генерация жилья на 5000 жителей"
 
     async def stream_chat(self, messages, model=None, temperature=None):
         for delta in ("Сгенерировано ", "1 здание."):

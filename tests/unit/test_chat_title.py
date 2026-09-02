@@ -34,11 +34,11 @@ def _title(llm, **kwargs) -> str:
 
 
 def test_the_model_writes_the_title():
-    assert _title(_FakeLLM("Жильё на 5000 жителей")) == "Жильё на 5000 жителей"
+    assert _title(_FakeLLM("Генерация жилья на 5000 жителей")) == "Генерация жилья на 5000 жителей"
 
 
 def test_the_user_query_is_the_only_grounding():
-    llm = _FakeLLM("Жильё на 5000 жителей")
+    llm = _FakeLLM("Генерация жилья на 5000 жителей")
 
     _title(llm)
 
@@ -57,7 +57,7 @@ def test_an_unexpected_failure_falls_back_too():
 def test_a_slow_model_does_not_hold_up_chat_creation(monkeypatch):
     monkeypatch.setattr("app.logic.chat.chat_title.TITLE_TIMEOUT_SECONDS", 0.01)
 
-    assert _title(_FakeLLM("Жильё на 5000 жителей", delay=0.5)) == QUERY
+    assert _title(_FakeLLM("Генерация жилья на 5000 жителей", delay=0.5)) == QUERY
 
 
 @pytest.mark.parametrize("answer", ["", "   ", None, "«»"])
@@ -70,11 +70,11 @@ def test_an_explicit_fallback_wins_over_the_query():
 
 
 def test_quotes_and_trailing_punctuation_are_stripped():
-    assert _title(_FakeLLM('"Жильё на 5000 жителей".')) == "Жильё на 5000 жителей"
+    assert _title(_FakeLLM('"Генерация жилья на 5000 жителей".')) == "Генерация жилья на 5000 жителей"
 
 
 def test_a_multiline_answer_becomes_one_line():
-    assert _title(_FakeLLM("Жильё\nна 5000\tжителей")) == "Жильё на 5000 жителей"
+    assert _title(_FakeLLM("Генерация жилья\nна 5000\tжителей")) == "Генерация жилья на 5000 жителей"
 
 
 def test_a_long_title_is_cut_on_a_word_boundary():
