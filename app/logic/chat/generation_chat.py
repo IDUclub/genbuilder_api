@@ -91,6 +91,16 @@ def _blocks_from_geojson(
     return kept, tuple(zones), len(features) - len(kept)
 
 
+def _requested_zones(values: list[str] | None) -> tuple[str, ...]:
+    """Normalize the explicit UI/API zone filter without duplicating zones."""
+    requested: list[str] = []
+    for value in values or []:
+        canonical = normalize_zone(value)
+        if canonical in GENERATED_ZONES and canonical not in requested:
+            requested.append(canonical)
+    return tuple(requested)
+
+
 def _existing_buildings_from_geojson(
     geojson: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], int]:
@@ -310,14 +320,26 @@ async def stream_generation_chat(
                 "message": f"Сообщение не сохранено в историю{_storage_hint(exc)}.",
             }
 
-    # 2.5 Resolve the territory source. A user-uploaded blocks file overrides the
-    # scenario; we keep only residential/business features and derive the zones in
-    # scope from the file (so a file with just one zone doesn't over-ask).
+    # 2.5 Resolve the territory source.  An explicit UI/API zone filter is the
+    # generation scope for a scenario.  A user-uploaded blocks file additionally
+    # limits that scope to zones which are actually present in the file.
     blocks: BlockFeatureCollection | None = None
-    zones_in_scope: tuple[str, ...] = GENERATED_ZONES
+    requested_zones = _requested_zones(functional_zone_types)
+    zones_in_scope: tuple[str, ...] = requested_zones or GENERATED_ZONES
     kept: list[dict[str, Any]] = []
     if blocks_geojson is not None:
-        kept, zones_in_scope, dropped = _blocks_from_geojson(blocks_geojson)
+        kept, file_zones, dropped = _blocks_from_geojson(blocks_geojson)
+        if requested_zones:
+            requested_set = set(requested_zones)
+            kept = [
+                feature
+                for feature in kept
+                if normalize_zone((feature.get("properties") or {}).get("zone"))
+                in requested_set
+            ]
+            zones_in_scope = tuple(zone for zone in file_zones if zone in requested_set)
+        else:
+            zones_in_scope = file_zones
         if dropped:
             yield {
                 "type": "warning",
@@ -329,7 +351,7 @@ async def stream_generation_chat(
             yield {
                 "type": "error",
                 "stage": "load_blocks",
-                "detail": "no residential/business features in uploaded file",
+                "detail": "no in-scope residential/business features in uploaded file",
             }
             yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
             return
@@ -405,8 +427,8 @@ async def stream_generation_chat(
             extracted.facade_style_prompt or extracted.facade_style_name_ru,
             name_ru=extracted.facade_style_name_ru,
         )
-    # Zones come from the territory source: both generated zones for a scenario,
-    # or the zones actually present in an uploaded blocks file.
+    # Zones come from the explicit request filter (when supplied) and the
+    # territory source.  Never ask for parameters of a zone the caller excluded.
     extracted.functional_zone_types = list(zones_in_scope)
 
     # Pin the policy default floor group per zone unless the user set one

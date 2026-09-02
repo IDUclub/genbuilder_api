@@ -201,6 +201,31 @@ def test_scenario_zones_are_fetched_with_the_caller_token():
     ]
 
 
+def test_explicit_residential_scope_does_not_ask_for_business(monkeypatch):
+    async def _extract(llm_client, *, user_query, la_per_person, model=None):
+        return ExtractedTargets(
+            targets_by_zone={
+                "residents": {"residential": 80},
+                "floors_avg": {"residential": 5},
+            },
+            functional_zone_types=["residential"],
+            raw={},
+        )
+
+    monkeypatch.setattr(generation_chat, "extract_generation_targets", _extract)
+    builder = _FakeBuilder()
+
+    events = _collect(
+        builder=builder,
+        user_query="Построй одно жилое здание на 80 жителей, 5 этажей",
+        functional_zone_types=["residential"],
+    )
+
+    assert _of_type(events, "clarification") == []
+    assert builder.calls[0]["functional_zone_types"] == ["residential"]
+    assert builder.calls[0]["targets_by_zone"]["residents"] == {"residential": 80}
+
+
 def test_zones_descriptor_is_a_live_query_not_a_stored_object():
     events = _collect(zones_service=_FakeZones())
 
