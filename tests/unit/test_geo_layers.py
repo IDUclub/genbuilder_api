@@ -7,6 +7,7 @@ from app.logic.geo_layers import (
     FILE_SLOTS,
     SLOT_BLOCKS_INPUT,
     SLOT_BUILDINGS,
+    SLOT_EXISTING_BUILDINGS,
     build_stored_layer,
     build_zones_layer,
     geo_layer_to_file_part,
@@ -57,7 +58,7 @@ def test_object_key_requires_a_result_id():
 
 
 def test_file_slots_are_the_declared_whitelist():
-    assert FILE_SLOTS == (SLOT_BUILDINGS, SLOT_BLOCKS_INPUT)
+    assert FILE_SLOTS == (SLOT_BUILDINGS, SLOT_BLOCKS_INPUT, SLOT_EXISTING_BUILDINGS)
 
 
 def test_build_stored_layer_points_at_the_file_endpoint():

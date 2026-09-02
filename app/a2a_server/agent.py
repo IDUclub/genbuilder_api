@@ -44,8 +44,9 @@ def _extract_payload(context: RequestContext) -> dict[str, Any]:
     """Merge structured fields (data Part / message metadata) with the free-text query.
 
     Accepted structured fields mirror the ``/generate/chat/stream`` form:
-    scenario_id, year, source, functional_zone_types, blocks_geojson, chat_id,
-    project_id, model, temperature. Any of these may arrive as a JSON data
+    scenario_id, year, source, functional_zone_types, blocks_geojson,
+    existing_buildings_geojson, skip_existing_buildings, chat_id, project_id,
+    model, temperature. Any of these may arrive as a JSON data
     Part or as message metadata; metadata is the fallback so a client that
     only knows how to attach plain text + a JSON sidecar still works.
     """
@@ -133,6 +134,10 @@ class GenBuilderAgentExecutor(AgentExecutor):
                     chat_title=user_query[:256],
                     functional_zone_types=payload.get("functional_zone_types"),
                     blocks_geojson=blocks_geojson,
+                    existing_buildings_geojson=payload.get("existing_buildings_geojson"),
+                    existing_buildings_declined=bool(
+                        payload.get("skip_existing_buildings")
+                    ),
                     generation_parameters=payload.get("generation_parameters"),
                     model=payload.get("model"),
                     temperature=payload.get("temperature"),

@@ -14,6 +14,12 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 ENV APP_ENV=development
+ENV RUNTIME_CONFIG_PATH=/runtime-config/overrides.sqlite3
+
+# iduconfig requires the APP_ENV file to exist. Runtime values are injected by
+# Compose; keep only a non-sensitive marker in the image so load_dotenv succeeds
+# without baking deployment secrets into an image layer.
+RUN printf 'APP_ENV=development\n' > .env.development
 
 COPY . .
 

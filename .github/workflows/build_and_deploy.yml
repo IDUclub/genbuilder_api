@@ -1,0 +1,84 @@
+name: Build and Deploy
+on:
+  workflow_call:
+env:
+  IMAGE_NAME: ${{secrets.REGISTRY}}/genbuilder
+  CONTAINER_NAME: genbuilder_api
+  
+jobs:
+  build:
+    runs-on: 46_runner
+    outputs:
+      now: ${{steps.date.outputs.NOW}}
+    steps:
+      - name: Set current date as env variable
+        id: date
+        run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_OUTPUT
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: copy_keys
+        env:
+          KEYS_PATH: ${{secrets.KEYS_PATH}}
+        run: cp -R "$KEYS_PATH" ./app/
+      - name: write_env
+        env:
+          # Preferred repository settings:
+          #   Variables -> ENV_APP, ENV_URLS
+          #   Secrets   -> ENV_SECRET
+          # ENV_SECRET is appended last, so credentials win on duplicates.
+          ENV_APP: ${{ vars.ENV_APP }}
+          ENV_URLS: ${{ vars.ENV_URLS }}
+          ENV_SECRET: ${{ secrets.ENV_SECRET }}
+          # Backward-compatible fallbacks.
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          ENV_PATH: ${{secrets.ENV_PATH}}
+        run: |
+          if [ -n "$ENV_APP" ] || [ -n "$ENV_URLS" ] || [ -n "$ENV_SECRET" ]; then
+            : > .env.development
+            [ -n "$ENV_APP" ] && printf '%s\n' "$ENV_APP" >> .env.development
+            [ -n "$ENV_URLS" ] && printf '%s\n' "$ENV_URLS" >> .env.development
+            [ -n "$ENV_SECRET" ] && printf '%s\n' "$ENV_SECRET" >> .env.development
+            echo "Wrote .env.development from repository settings ($(wc -l < .env.development) lines)"
+          elif [ -n "$ENV_FILE" ]; then
+            printf '%s\n' "$ENV_FILE" > .env.development
+            echo "Wrote .env.development from legacy ENV_FILE secret"
+          elif [ -n "$ENV_PATH" ]; then
+            cp "$ENV_PATH"/.env.development ./
+            echo "Copied .env.development from legacy ENV_PATH"
+          else
+            echo "::error::Configure ENV_APP/ENV_URLS/ENV_SECRET in repository settings"
+            exit 1
+          fi
+      - name: build
+        env:
+          NOW: ${{steps.date.outputs.now}}
+        run: docker build -t "$IMAGE_NAME":"$NOW" .
+      - name: push_to_registry
+        env:
+          NOW: ${{steps.date.outputs.now}}
+        run: docker push "$IMAGE_NAME":"$NOW"
+  stop_container:
+    runs-on: 46_runner
+    needs: build
+    steps:
+      - name: stop_container
+        run: docker rm -f "$CONTAINER_NAME"
+  run_container:
+    runs-on: 46_runner
+    needs: [build, stop_container]
+    env:
+      NOW: ${{needs.build.outputs.now}}
+    steps:
+      - name: set env
+        run: echo "IMAGE=$IMAGE_NAME:$NOW" >> $GITHUB_ENV
+      - name: run
+#        run: docker run -d --name "$CONTAINER_NAME" --env-file ./.env.development -p 8210:8000 "$IMAGE_NAME":"$NOW"
+        run: docker compose -f docker-compose.actions.yml up -d
+      - name: verify container
+        run: |
+          if ! curl --fail --silent --show-error \
+            --retry 30 --retry-delay 2 --retry-connrefused --retry-all-errors \
+            http://localhost:8200/docs > /dev/null; then
+            docker logs --tail 100 "$CONTAINER_NAME"
+            exit 1
+          fi

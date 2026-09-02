@@ -7,7 +7,11 @@ from app.infrastructure.object_storage import LocalStorage, ObjectStorageError
 from app.logic.chat import generation_chat
 from app.logic.chat.generation_chat import stream_generation_chat
 from app.logic.chat.param_extraction import ExtractedTargets
-from app.logic.geo_layers import SLOT_BLOCKS_INPUT, object_key
+from app.logic.geo_layers import (
+    SLOT_BLOCKS_INPUT,
+    SLOT_EXISTING_BUILDINGS,
+    object_key,
+)
 
 PUBLIC_BASE_URL = "http://10.32.1.46:8200"
 ANSWER = "Сгенерировано 1 здание."
@@ -72,16 +76,23 @@ class _FakeBuilder:
 
 
 class _FakeLLM:
+    TITLE = "Жильё на 5000 жителей"
+
     async def stream_chat(self, messages, model=None, temperature=None):
         for delta in ("Сгенерировано ", "1 здание."):
             yield delta
+
+    async def complete_json(self, messages, *, schema, model=None, temperature=0.0):
+        return {"title": self.TITLE}
 
 
 class _FakeChatStorage:
     def __init__(self):
         self.messages: list[dict] = []
+        self.created: list[dict] = []
 
     async def create_chat(self, user_id, **kwargs):
+        self.created.append(kwargs)
         return {"chat_id": "chat-1", "title": kwargs.get("title")}
 
     async def get_chat(self, user_id, chat_id):
@@ -233,6 +244,7 @@ def test_blocks_file_mode_uses_the_filtered_blocks_as_backdrop(tmp_path):
         year=None,
         source=None,
         blocks_geojson=uploaded,
+        existing_buildings_declined=True,
         zones_service=_FakeZones(),
         object_storage=LocalStorage(str(tmp_path)),
     )
@@ -361,3 +373,136 @@ def test_a_failed_generation_stores_nothing(tmp_path):
     assert _types(events) == ["status", "progress", "error", "done"]
     assert _of_type(events, "file") == []
     assert not list(tmp_path.iterdir())
+
+
+def _building(x: float, geometry_type: str = "Polygon") -> dict:
+    if geometry_type == "Point":
+        return {
+            "type": "Feature",
+            "properties": {"floors_count": 5},
+            "geometry": {"type": "Point", "coordinates": [x, 60.0]},
+        }
+    return {
+        "type": "Feature",
+        "properties": {"floors_count": 5, "living_area": 3200},
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [[x, 60.0], [x + 0.001, 60.0], [x + 0.001, 60.001], [x, 60.0]]
+            ],
+        },
+    }
+
+
+def _project_less(**overrides) -> dict:
+    """Territory from an uploaded file, no scenario — the project-less mode."""
+    defaults = dict(
+        scenario_id=None,
+        year=None,
+        source=None,
+        blocks_geojson={
+            "type": "FeatureCollection",
+            "features": [_block("residential", 30.0)],
+        },
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def test_project_less_mode_asks_about_existing_buildings_before_generating():
+    builder = _FakeBuilder()
+
+    events = _collect(**_project_less(builder=builder))
+
+    clarification = _of_type(events, "clarification")[0]
+    question = [m for m in clarification["missing"] if m["field"] == "existing_buildings"][0]
+    assert question["optional"] is True
+    assert question["alt_fields"] == ["buildings_file", "skip_existing_buildings"]
+    assert builder.calls == []
+
+
+def test_declining_existing_buildings_generates_without_exclusion():
+    builder = _FakeBuilder()
+
+    events = _collect(**_project_less(builder=builder, existing_buildings_declined=True))
+
+    assert _of_type(events, "clarification") == []
+    assert builder.calls[0]["existing_buildings"] is None
+    assert _of_type(events, "result")
+
+
+def test_scenario_mode_never_asks_about_existing_buildings():
+    """A scenario brings its own physical objects — the question is project-less only."""
+    events = _collect()
+
+    assert _of_type(events, "clarification") == []
+
+
+def test_uploaded_existing_buildings_are_passed_to_the_generator():
+    builder = _FakeBuilder()
+    uploaded = {"type": "FeatureCollection", "features": [_building(30.002)]}
+
+    _collect(**_project_less(builder=builder, existing_buildings_geojson=uploaded))
+
+    assert builder.calls[0]["existing_buildings"] == uploaded
+
+
+def test_non_polygonal_existing_buildings_are_dropped_with_a_warning():
+    builder = _FakeBuilder()
+    uploaded = {
+        "type": "FeatureCollection",
+        "features": [_building(30.002), _building(30.004, "Point")],
+    }
+
+    events = _collect(**_project_less(builder=builder, existing_buildings_geojson=uploaded))
+
+    warnings = [
+        e for e in _of_type(events, "warning") if e["stage"] == "load_existing_buildings"
+    ]
+    assert warnings and "1" in warnings[0]["detail"]
+    passed = builder.calls[0]["existing_buildings"]["features"]
+    assert [f["geometry"]["type"] for f in passed] == ["Polygon"]
+
+
+def test_existing_buildings_without_polygons_warn_and_generation_continues():
+    builder = _FakeBuilder()
+    uploaded = {"type": "FeatureCollection", "features": [_building(30.004, "Point")]}
+
+    events = _collect(**_project_less(builder=builder, existing_buildings_geojson=uploaded))
+
+    assert _of_type(events, "clarification") == []
+    assert builder.calls[0]["existing_buildings"] is None
+    assert _of_type(events, "result")
+
+
+def test_existing_buildings_are_stored_as_their_own_layer(tmp_path):
+    storage = LocalStorage(str(tmp_path))
+    uploaded = {"type": "FeatureCollection", "features": [_building(30.002)]}
+
+    events = _collect(
+        **_project_less(existing_buildings_geojson=uploaded, object_storage=storage)
+    )
+
+    descriptor = [
+        d for d in _of_type(events, "file") if d["name"] == SLOT_EXISTING_BUILDINGS
+    ][0]
+    key = object_key(_result_id(descriptor), SLOT_EXISTING_BUILDINGS)
+    assert json.loads(b"".join(storage.open_stream(key)).decode("utf-8")) == uploaded
+
+
+def test_a_new_chat_gets_an_llm_written_title():
+    """The raw query makes history rows nobody can tell apart."""
+    storage_client = _FakeChatStorage()
+
+    events = _collect(chat_storage_client=storage_client, user_id="user-1")
+
+    assert storage_client.created[0]["title"] == _FakeLLM.TITLE
+    assert _of_type(events, "chat_created")[0]["title"] == _FakeLLM.TITLE
+
+
+def test_an_existing_chat_is_not_retitled():
+    storage_client = _FakeChatStorage()
+
+    _collect(chat_storage_client=storage_client, user_id="user-1", chat_id="chat-1")
+
+    assert storage_client.created == []

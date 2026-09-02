@@ -14,9 +14,13 @@ from app.exceptions.http_exception_wrapper import http_exception
 class UrbanDBAPI:
     def __init__(self, config: Config):
         self.config = config
-        raw_url = config.get("UrbanDB_API")
-        self.base_url = raw_url.rstrip("/") if raw_url else ""
         self.handler = APIHandler()
+
+    @property
+    def base_url(self) -> str:
+        """Resolve the URL lazily so a runtime override affects new requests."""
+        raw_url = self.config.get("UrbanDB_API")
+        return raw_url.rstrip("/") if raw_url else ""
 
     def _make_headers(
             self,

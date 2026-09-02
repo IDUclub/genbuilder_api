@@ -16,8 +16,11 @@ like "5000 жителей" is combined with the earlier request).
 Event envelope (``{"type": ..., ...}``), matching the reference style:
 
 - ``chat_created``  {chat_id, title}        — a new chat was created.
-- ``clarification`` {content, missing}       — mandatory params are missing; the
-                                               answer is a question, not a result.
+- ``clarification`` {content, missing}       — parameters are missing (or the
+                                               project-less mode's optional
+                                               existing-buildings question is
+                                               unanswered); the answer is a
+                                               question, not a result.
 - ``status``        {content}                — human-readable progress note.
 - ``progress``      {stage, content}         — a pipeline stage marker.
 - ``token``         {content}                — a summary-answer content delta.
@@ -43,15 +46,18 @@ from loguru import logger
 from app.infrastructure.chat_storage_client import ChatStorageClient, ChatStorageError
 from app.infrastructure.object_storage import ObjectStorage, ObjectStorageError
 from app.infrastructure.vllm_chat_client import VLLMChatClient, VLLMChatError
+from app.logic.chat.chat_title import make_chat_title
 from app.logic.chat.param_extraction import (
     DEFAULT_FLOOR_GROUP_BY_ZONE,
     GENERATED_ZONES,
+    existing_buildings_question,
     extract_generation_targets,
     validate_targets,
 )
 from app.logic.geo_layers import (
     SLOT_BLOCKS_INPUT,
     SLOT_BUILDINGS,
+    SLOT_EXISTING_BUILDINGS,
     build_stored_layer,
     build_zones_layer,
     geo_layer_to_file_part,
@@ -82,6 +88,26 @@ def _blocks_from_geojson(
             if canonical not in zones:
                 zones.append(canonical)
     return kept, tuple(zones), len(features) - len(kept)
+
+
+def _existing_buildings_from_geojson(
+    geojson: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep only the polygonal features of an uploaded existing-buildings file.
+
+    Only a footprint can be cut out of a block, so points and lines are dropped
+    (and reported as a warning). Properties are left untouched — the generation
+    layer normalizes them into the excluded-object shape. Returns (kept
+    features, dropped count).
+    """
+    features = geojson.get("features") or []
+    kept = [
+        feature
+        for feature in features
+        if (feature.get("geometry") or {}).get("type") in {"Polygon", "MultiPolygon"}
+    ]
+    return kept, len(features) - len(kept)
+
 
 _SUMMARY_SYSTEM_PROMPT = (
     "Ты — ассистент по генерации застройки. Кратко и по делу опиши на русском "
@@ -129,10 +155,14 @@ def _request_metadata(
     project_id: int | str | None,
     functional_zone_types: list[str] | None,
     has_blocks_file: bool,
+    has_buildings_file: bool,
     extra: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Territory context stored alongside the chat and every persisted turn."""
-    metadata: dict[str, Any] = {"blocks_file": has_blocks_file}
+    metadata: dict[str, Any] = {
+        "blocks_file": has_blocks_file,
+        "buildings_file": has_buildings_file,
+    }
     optional = {
         "scenario_id": scenario_id,
         "year": year,
@@ -198,6 +228,8 @@ async def stream_generation_chat(
     chat_title: str | None = None,
     functional_zone_types: list[str] | None = None,
     blocks_geojson: dict[str, Any] | None = None,
+    existing_buildings_geojson: dict[str, Any] | None = None,
+    existing_buildings_declined: bool = False,
     generation_parameters: dict[str, Any] | None = None,
     model: str | None = None,
     temperature: float | None = None,
@@ -214,6 +246,7 @@ async def stream_generation_chat(
         project_id=project_id,
         functional_zone_types=functional_zone_types,
         has_blocks_file=blocks_geojson is not None,
+        has_buildings_file=existing_buildings_geojson is not None,
         extra=message_metadata,
     )
 
@@ -233,12 +266,16 @@ async def stream_generation_chat(
                 "обрабатываю только текущее сообщение.",
             }
 
-    # 1. Ensure a chat exists.
+    # 1. Ensure a chat exists. Its title is written by the LLM: the raw first
+    # message makes rows that can't be told apart in the history list.
     if persist and not chat_id:
+        title = await make_chat_title(
+            llm_client, user_query=user_query, model=model, fallback=chat_title
+        )
         try:
             created = await chat_storage_client.create_chat(
                 user_id,
-                title=chat_title or user_query[:256],
+                title=title,
                 scenario_id=scenario_id,
                 project_id=project_id,
                 metadata=metadata,
@@ -303,6 +340,36 @@ async def stream_generation_chat(
             yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
             return
 
+    # 2.6 Existing buildings, when the user uploaded them: their footprints are
+    # cut out of the blocks before generation, and they come back in the result
+    # marked ``is_excluded`` — so nothing is generated on top of what stands.
+    existing_buildings: dict[str, Any] | None = None
+    if existing_buildings_geojson is not None:
+        kept_buildings, dropped_buildings = _existing_buildings_from_geojson(
+            existing_buildings_geojson
+        )
+        if dropped_buildings:
+            yield {
+                "type": "warning",
+                "stage": "load_existing_buildings",
+                "detail": f"{dropped_buildings} feature(s) dropped",
+                "message": "Отброшено объектов без полигональной геометрии в файле "
+                f"существующих зданий: {dropped_buildings}.",
+            }
+        if kept_buildings:
+            existing_buildings = {
+                "type": "FeatureCollection",
+                "features": kept_buildings,
+            }
+        else:
+            yield {
+                "type": "warning",
+                "stage": "load_existing_buildings",
+                "detail": "no polygonal features in uploaded file",
+                "message": "В файле существующих зданий нет полигонов — генерация "
+                "пойдёт без исключения существующей застройки.",
+            }
+
     # 3. Extract targets from the (accumulated) request text.
     combined_query = f"{prior_text}\n{user_query}".strip() if prior_text else user_query
     extracted = await extract_generation_targets(
@@ -323,10 +390,27 @@ async def stream_generation_chat(
 
     # 4. Missing mandatory params -> ask, persist the question, stop.
     missing = validate_targets(extracted, zones_in_scope)
+
+    # 4.1 Project-less mode: without a scenario there is nothing to take the
+    # existing buildings from, so ask the user once — upload a file, or decline
+    # explicitly. Bundled into the same clarification as the missing targets, so
+    # everything is answered in a single round.
+    if (
+        scenario_id is None
+        and existing_buildings_geojson is None
+        and not existing_buildings_declined
+    ):
+        missing = [*missing, existing_buildings_question()]
+
     if missing:
-        content = "Чтобы сгенерировать застройку, уточните:\n" + "\n".join(
-            f"— {m.prompt}" for m in missing
+        # An all-optional list means nothing is really incomplete except the
+        # unanswered question itself — so don't say the request is.
+        lead = (
+            "Уточните перед генерацией:"
+            if all(m.optional for m in missing)
+            else "Чтобы сгенерировать застройку, уточните:"
         )
+        content = lead + "\n" + "\n".join(f"— {m.prompt}" for m in missing)
         yield {
             "type": "clarification",
             "content": content,
@@ -337,6 +421,7 @@ async def stream_generation_chat(
                     "control": m.control,
                     "unit": m.unit,
                     "alt_fields": list(m.alt_fields),
+                    "optional": m.optional,
                 }
                 for m in missing
             ],
@@ -404,6 +489,7 @@ async def stream_generation_chat(
             source=source,
             functional_zone_types=extracted.functional_zone_types,
             generation_parameters_override=generation_parameters,
+            existing_buildings=existing_buildings,
         )
     except Exception as exc:  # noqa: BLE001 - surface any pipeline failure to the client
         logger.exception("generation failed")
@@ -422,6 +508,8 @@ async def stream_generation_chat(
         payloads = [(SLOT_BUILDINGS, merged)]
         if blocks_geojson is not None:
             payloads.append((SLOT_BLOCKS_INPUT, blocks_geojson))
+        if existing_buildings is not None:
+            payloads.append((SLOT_EXISTING_BUILDINGS, existing_buildings))
         for slot, payload in payloads:
             try:
                 await asyncio.to_thread(

@@ -89,16 +89,19 @@ def build_extraction_schema() -> dict[str, Any]:
 class Missing:
     """One unmet mandatory requirement, rendered into a clarification prompt.
 
-    ``control``/``unit``/``alt_fields`` let the frontend render the right input
-    (all current requirements are a single numeric housing-demand field).
+    ``control``/``unit``/``alt_fields`` let the frontend render the right input.
+    ``optional`` marks a question the user may decline (generation is not blocked
+    by the answer itself, only by the fact that it hasn't been asked yet);
+    ``zone`` is ``None`` for a question that isn't about one particular zone.
     """
 
-    zone: str
+    zone: str | None
     field: str
     prompt: str
     control: str = "number"
-    unit: str = "чел. или м²"
+    unit: str | None = "чел. или м²"
     alt_fields: tuple[str, ...] = ("residents", "living_area")
+    optional: bool = False
 
 
 @dataclass
@@ -226,3 +229,28 @@ def validate_targets(
             )
 
     return missing
+
+
+def existing_buildings_question() -> Missing:
+    """The project-less mode's question about already existing buildings.
+
+    Without a scenario there is nothing to take existing buildings from, so the
+    frontend has to ask: upload a GeoJSON file (``buildings_file``) and their
+    footprints are cut out of the blocks before generation, or decline
+    (``skip_existing_buildings=true``) and generation runs on the bare blocks.
+    Optional — but asked once before the first generation, so nothing is built
+    on top of what is already standing.
+    """
+    return Missing(
+        zone=None,
+        field="existing_buildings",
+        prompt=(
+            "Хотите загрузить существующие здания? Они будут исключены из "
+            "генерации — приложите файл GeoJSON или откажитесь, и застройка "
+            "будет сгенерирована по всей площади кварталов."
+        ),
+        control="file_or_skip",
+        unit=None,
+        alt_fields=("buildings_file", "skip_existing_buildings"),
+        optional=True,
+    )
