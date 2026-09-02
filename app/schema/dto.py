@@ -42,6 +42,25 @@ class BlockFeatureCollection(FeatureCollection[BlockFeature]):
     pass
 
 
+class ExistingBuildingFeature(Feature[Polygon | MultiPolygon, Optional[Dict[str, Any]]]):
+    """GeoJSON Feature of an already existing building.
+
+    Properties are free-form and entirely optional: only the footprint matters
+    for exclusion. Recognized keys (``floors_count``, ``living_area``,
+    ``building_area``, ``residents_number``, ``building_type``, ``zone``,
+    ``service``) are carried over to the response so an uploaded building looks
+    like any other excluded object.
+    """
+
+    pass
+
+
+class ExistingBuildingsFeatureCollection(FeatureCollection[ExistingBuildingFeature]):
+    """GeoJSON FeatureCollection of existing building footprints."""
+
+    pass
+
+
 class ScenarioBody(BaseModel):
     targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
@@ -233,6 +252,40 @@ class TerritoryRequest(BaseModel):
         },
     )
 
+    existing_buildings: Optional[ExistingBuildingsFeatureCollection] = Field(
+        default=None,
+        description=(
+            "GeoJSON FeatureCollection of existing buildings. Their footprints "
+            "are cut out of the blocks before generation, and the buildings "
+            "themselves come back in the response marked `is_excluded: true`."
+        ),
+        json_schema_extra={
+            "examples": [
+                {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "properties": {"floors_count": 5, "living_area": 3200},
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [
+                                    [
+                                        [31.036, 59.920],
+                                        [31.037, 59.920],
+                                        [31.037, 59.921],
+                                        [31.036, 59.921],
+                                        [31.036, 59.920],
+                                    ]
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
     generation_parameters: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Generation parameters, override base ones",
@@ -240,11 +293,11 @@ class TerritoryRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _ensure_polygons(self):
+    def _ensure_geometry(self):
         for feature in self.blocks.features:
-            if getattr(feature, "geometry", None) is None or feature.geometry.type != "Polygon":
+            if getattr(feature, "geometry", None) is None:
                 raise ValueError(
-                    "Each Feature in `blocks` must have geometry of type Polygon"
+                    "Each Feature in `blocks` must have a Polygon or MultiPolygon geometry"
                 )
         return self
 
@@ -439,5 +492,7 @@ __all__ = [
     "BlockFeatureCollection",
     "TerritoryRequest",
     "BuildingFeatureCollection",
-    "FunctionalZonesRequest"
+    "FunctionalZonesRequest",
+    "ExistingBuildingFeature",
+    "ExistingBuildingsFeatureCollection",
 ]

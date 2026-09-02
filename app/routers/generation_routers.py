@@ -2,6 +2,10 @@ from typing import Annotated, List, Optional
 from fastapi import APIRouter, Body, Query, Depends
 
 from app.logic import generation_orchestration as orchestration
+from app.schema.building_properties import (
+    BUILDING_PROPERTIES_SCHEMA,
+    BuildingPropertiesSchema,
+)
 from app.schema.dto import (
     ScenarioBody,
     TerritoryRequest,
@@ -11,6 +15,15 @@ from app.schema.dto import (
 from app.utils import auth
 
 generation_router = APIRouter()
+
+
+@generation_router.get(
+    "/generate/properties_schema",
+    summary="Display labels for generated building properties",
+    response_model=BuildingPropertiesSchema,
+)
+async def properties_schema() -> BuildingPropertiesSchema:
+    return BUILDING_PROPERTIES_SCHEMA
 
 
 @generation_router.post(

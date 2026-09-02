@@ -301,3 +301,89 @@ class PhysicalObjectsService:
         )
 
         return out
+
+    def normalize_uploaded_features(
+            self,
+            fc: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Return user-uploaded existing buildings normalized to the same schema as
+        :meth:`select_features_by_ids`.
+
+        Used by the project-less flow, where existing buildings come from an
+        uploaded GeoJSON file instead of UrbanDB: there is no physical object id
+        to select by, so every polygonal feature of the file is taken as-is.
+        Properties are read from the flat GeoJSON ``properties`` (all optional),
+        so a bare geometry-only file is valid input.
+        """
+        if not fc:
+            return []
+
+        features = fc.get("features") or []
+        if not features:
+            return []
+
+        def _number(value: Any, default: float = 0.0) -> float:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return default
+            return number
+
+        selected: list[dict[str, Any]] = []
+        skipped = 0
+
+        for feature in features:
+            geometry = feature.get("geometry") or {}
+            if geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+                skipped += 1
+                continue
+
+            source_props = feature.get("properties") or {}
+            if not isinstance(source_props, dict):
+                source_props = {}
+
+            service_value = source_props.get("service")
+            if not isinstance(service_value, list):
+                service_value = []
+
+            raw_physical_object_id = source_props.get("physical_object_id")
+            try:
+                physical_object_id = int(raw_physical_object_id)
+            except (TypeError, ValueError):
+                physical_object_id = None
+
+            result_properties = {
+                "floors_count": _number(
+                    source_props.get("floors_count", source_props.get("floors"))
+                ),
+                "living_area": _number(source_props.get("living_area")),
+                "building_area": _number(source_props.get("building_area")),
+                "service": service_value,
+                "broke_restriction_zone": bool(
+                    source_props.get("broke_restriction_zone", False)
+                ),
+                "building_type": source_props.get("building_type"),
+                "zone": source_props.get("zone"),
+                "residents_number": _number(source_props.get("residents_number")),
+                "is_excluded": True,
+                "physical_object_id": physical_object_id,
+            }
+
+            selected.append(
+                {
+                    "type": "Feature",
+                    "id": feature.get("id"),
+                    "geometry": deepcopy(geometry),
+                    "properties": result_properties,
+                }
+            )
+
+        logger.info(
+            "PhysicalObjectsService.normalize_uploaded_features: accepted {} feature(s), "
+            "skipped {} non-polygonal",
+            len(selected),
+            skipped,
+        )
+
+        return selected

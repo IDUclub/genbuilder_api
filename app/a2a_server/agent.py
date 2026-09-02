@@ -27,7 +27,7 @@ from a2a.types import TaskState
 from app.dependencies import (
     CHAT_LA_PER_PERSON,
     build_chat_storage_client,
-    build_ollama_chat_client,
+    build_vllm_chat_client,
     builder,
     chat_llm_configured,
 )
@@ -44,8 +44,9 @@ def _extract_payload(context: RequestContext) -> dict[str, Any]:
     """Merge structured fields (data Part / message metadata) with the free-text query.
 
     Accepted structured fields mirror the ``/generate/chat/stream`` form:
-    scenario_id, year, source, functional_zone_types, blocks_geojson, chat_id,
-    project_id, model, temperature. Any of these may arrive as a JSON data
+    scenario_id, year, source, functional_zone_types, blocks_geojson,
+    existing_buildings_geojson, skip_existing_buildings, chat_id, project_id,
+    model, temperature. Any of these may arrive as a JSON data
     Part or as message metadata; metadata is the fallback so a client that
     only knows how to attach plain text + a JSON sidecar still works.
     """
@@ -112,14 +113,14 @@ class GenBuilderAgentExecutor(AgentExecutor):
         answer_parts: list[str] = []
         try:
             async with AsyncExitStack() as stack:
-                ollama = await stack.enter_async_context(build_ollama_chat_client(payload.get("temperature")))
+                llm = await stack.enter_async_context(build_vllm_chat_client(payload.get("temperature")))
                 storage = build_chat_storage_client()
                 if storage is not None:
                     await stack.enter_async_context(storage)
 
                 async for event in stream_generation_chat(
                     builder=builder,
-                    ollama_client=ollama,
+                    llm_client=llm,
                     chat_storage_client=storage,
                     token=token,
                     user_id=user_id,
@@ -133,6 +134,10 @@ class GenBuilderAgentExecutor(AgentExecutor):
                     chat_title=user_query[:256],
                     functional_zone_types=payload.get("functional_zone_types"),
                     blocks_geojson=blocks_geojson,
+                    existing_buildings_geojson=payload.get("existing_buildings_geojson"),
+                    existing_buildings_declined=bool(
+                        payload.get("skip_existing_buildings")
+                    ),
                     generation_parameters=payload.get("generation_parameters"),
                     model=payload.get("model"),
                     temperature=payload.get("temperature"),

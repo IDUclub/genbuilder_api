@@ -108,7 +108,8 @@ class ChatStorageClient:
             "title": title,
             "scenario_id": scenario_id,
             "project_id": project_id,
-            "metadata": metadata,
+            # ChatStorage types metadata as a non-nullable object; null is rejected with 422.
+            "metadata": metadata or {},
         }
         return await self._request(
             "POST", "/api/v1/chat_history/create_chat", user_id, json_body=body
@@ -124,7 +125,7 @@ class ChatStorageClient:
         parts: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {"role": role, "metadata": metadata}
+        body: dict[str, Any] = {"role": role, "metadata": metadata or {}}
         if parts is not None:
             body["parts"] = parts
         else:

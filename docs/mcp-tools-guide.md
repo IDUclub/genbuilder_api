@@ -90,13 +90,14 @@ Authorization: Bearer <keycloak_access_token>
 
 | Параметр | Тип | Обяз. | Описание |
 |---|---|---|---|
-| `blocks` | GeoJSON FeatureCollection | ✅ | Polygon-фичи, у каждой заполнен `properties.zone` (напр. `"residential"`) |
+| `blocks` | GeoJSON FeatureCollection | ✅ | `Polygon`/`MultiPolygon`-фичи, у каждой заполнен `properties.zone` (напр. `"residential"`) |
+| `existing_buildings` | GeoJSON FeatureCollection | ⛔ | Пятна уже стоящих зданий — вырезаются из блоков до генерации и возвращаются с `is_excluded: true`; `properties` необязательны |
 | `targets_by_zone` | object | ⛔ | Как выше |
 | `generation_parameters` | object | ⛔ | Как выше |
 
 **Auth:** не требуется.
 **Возвращает:** GeoJSON `FeatureCollection`.
-**Ошибка:** `-32602 Invalid params`, если геометрия блока не Polygon или нет `zone`.
+**Ошибка:** `-32602 Invalid params`, если геометрия блока отсутствует, не `Polygon`/`MultiPolygon` или нет `zone`.
 
 ### 3.3. `generate_by_blocks`
 

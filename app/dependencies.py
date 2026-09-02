@@ -34,8 +34,13 @@ from app.logic.building_params import (
     PARAMS_BY_TYPE
 )
 from app.logic.generation import Genbuilder
-from app.infrastructure.ollama_chat_client import OllamaChatClient
+from app.infrastructure.vllm_chat_client import VLLMChatClient
 from app.infrastructure.chat_storage_client import ChatStorageClient
+from app.infrastructure.object_storage import (
+    ObjectStorage,
+    ObjectStorageError,
+    get_object_storage,
+)
 
 if TYPE_CHECKING:
     from idu_service_auth import KeycloakTokenClient, KeycloakTokenConfig
@@ -89,15 +94,40 @@ def _optional_env(key: str) -> str | None:
     return value or None
 
 
+def public_base_url() -> str | None:
+    """Absolute base for links that are persisted into chat history.
+
+    Without it links are relative, which is fine for a live stream but useless
+    once the history is read back from another origin.
+    """
+    return _optional_env("PUBLIC_BASE_URL")
+
+
+def optional_object_storage() -> ObjectStorage | None:
+    """Object storage for the chat stream, or ``None`` when it is unusable.
+
+    A misconfigured backend must not take conversational generation down with
+    it: the stream simply carries no layer links.
+    """
+    try:
+        return get_object_storage()
+    except ObjectStorageError as exc:
+        logger.error(
+            "Object storage unavailable, generated layers will not be stored: {}",
+            exc,
+        )
+        return None
+
+
 def chat_llm_configured() -> bool:
-    """True when an Ollama backend + chat model are configured."""
-    return bool(_optional_env("Ollama_API")) and bool(_optional_env("Chat_Model"))
+    """True when a vLLM backend + chat model are configured."""
+    return bool(_optional_env("LLM_API")) and bool(_optional_env("Chat_Model"))
 
 
-def build_ollama_chat_client(temperature: float | None = None) -> OllamaChatClient:
-    """Construct a per-request Ollama chat client (caller owns its lifetime)."""
-    return OllamaChatClient(
-        _optional_env("Ollama_API") or "",
+def build_vllm_chat_client(temperature: float | None = None) -> VLLMChatClient:
+    """Construct a per-request vLLM chat client (caller owns its lifetime)."""
+    return VLLMChatClient(
+        _optional_env("LLM_API") or "",
         default_model=_optional_env("Chat_Model") or "",
         temperature=0.3 if temperature is None else temperature,
     )
