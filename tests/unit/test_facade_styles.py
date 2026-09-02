@@ -62,6 +62,11 @@ def test_chat_extraction_schema_and_normalization_include_facade_style():
     properties = build_extraction_schema()["properties"]
     assert "facade_style_name_ru" in properties
     assert "facade_style_prompt" in properties
+    assert set(build_extraction_schema()["required"]) == {
+        "zones",
+        "facade_style_name_ru",
+        "facade_style_prompt",
+    }
 
     extracted = normalize_targets(
         {

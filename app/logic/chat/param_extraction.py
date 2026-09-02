@@ -87,7 +87,10 @@ def build_extraction_schema() -> dict[str, Any]:
                 },
             }
         },
-        "required": ["zones"],
+        # Guided decoding must emit the nullable style keys.  When optional,
+        # some models omit them even after recognizing a style in the text,
+        # making an explicit style indistinguishable from no style at all.
+        "required": ["zones", "facade_style_name_ru", "facade_style_prompt"],
     }
 
 
