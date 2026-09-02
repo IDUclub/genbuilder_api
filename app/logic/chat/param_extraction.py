@@ -59,7 +59,11 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "или «30 000 м² жилья»), это общее значение на всю территорию: запиши его в "
     "total_residents или total_living_area и НЕ повторяй его в zones. В zones "
     "указывай residents/living_area только для зон, которые пользователь назвал "
-    "явно."
+    "явно. "
+    "Также извлеки стиль фасадов, только если пользователь явно его указал. "
+    "facade_style_name_ru — короткое название стиля на русском, "
+    "facade_style_prompt — короткое описание этого стиля на английском для "
+    "генерации архитектурной текстуры. Если стиль не указан, оставь оба поля null."
 )
 
 
@@ -68,6 +72,8 @@ def build_extraction_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
+            "facade_style_name_ru": {"type": ["string", "null"]},
+            "facade_style_prompt": {"type": ["string", "null"]},
             "zones": {
                 "type": "array",
                 "items": {
@@ -123,6 +129,8 @@ class ExtractedTargets:
 
     targets_by_zone: dict[str, dict[str, Any]] = field(default_factory=dict)
     functional_zone_types: list[str] = field(default_factory=list)
+    facade_style_name_ru: str | None = None
+    facade_style_prompt: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     # Demand named without a zone ("2000 жителей") — for the whole territory,
@@ -138,6 +146,13 @@ def _num(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return num if num > 0 else None
+
+
+def _text(value: Any, *, max_length: int = 4000) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value[:max_length] if value else None
 
 
 def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTargets:
@@ -194,6 +209,8 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
     return ExtractedTargets(
         targets_by_zone=targets_by_zone,
         functional_zone_types=requested,
+        facade_style_name_ru=_text(raw.get("facade_style_name_ru")),
+        facade_style_prompt=_text(raw.get("facade_style_prompt")),
         raw=raw,
         total_residents=total_residents,
     )

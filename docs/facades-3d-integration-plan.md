@@ -272,13 +272,19 @@ orchestration-функции, три REST-ручки с ответом `202`, ч
 `FACADE_JOBS_TIMEOUT_SECONDS` и unit-тесты клиента. Для фактического запуска
 остаётся развернуть этап 1 и прописать URL сервиса.
 
+**Дополнено 2026-09-02:** 3D-ручки принимают необязательный `facade_style`,
+чат извлекает стиль из свободного текста и переводит произвольное описание в
+английский prompt. Известные русские/английские названия нормализуются в
+русское имя для UI. Без стиля передаётся пустой `style_by_zone`, поэтому
+сохраняются серверные дефолты `facade-jobs` по функциональным зонам.
+
 Новые роутеры, существующие `/generate/*` **не меняем**.
 
 | Новая ручка | Дублирует | Возврат |
 |---|---|---|
-| `POST /generate/3d/by_scenario` | `/generate/by_scenario` | `202 {job_id, status_url}` |
-| `POST /generate/3d/by_blocks` | `/generate/by_blocks` | `202 {job_id, status_url}` |
-| `POST /generate/3d/by_territory` | `/generate/by_territory` | `202 {job_id, status_url}` |
+| `POST /generate/3d/by_scenario` | `/generate/by_scenario` | `202 {job_id, status_url, facade_style}` |
+| `POST /generate/3d/by_blocks` | `/generate/by_blocks` | `202 {job_id, status_url, facade_style}` |
+| `POST /generate/3d/by_territory` | `/generate/by_territory` | `202 {job_id, status_url, facade_style}` |
 | `POST /generate/chat/stream/3d` | `/generate/chat/stream` | тот же SSE + событие `facade_job` с `job_id` в конце |
 
 Требования:

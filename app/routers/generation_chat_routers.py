@@ -141,6 +141,9 @@ async def generate_chat_stream(
         year=year,
         source=source,
         blocks_file=blocks_file,
+        buildings_file=buildings_file,
+        skip_existing_buildings=skip_existing_buildings,
+        facade_style=None,
         functional_zone_types=functional_zone_types,
         chat_id=chat_id,
         project_id=project_id,
@@ -164,6 +167,34 @@ async def generate_chat_stream_3d(
         Optional[UploadFile],
         File(description="Optional GeoJSON FeatureCollection of blocks; each feature needs properties.zone"),
     ] = None,
+    buildings_file: Annotated[
+        Optional[UploadFile],
+        File(
+            description=(
+                "Optional GeoJSON FeatureCollection of existing buildings "
+                "(project-less mode): their footprints are excluded from generation"
+            )
+        ),
+    ] = None,
+    skip_existing_buildings: Annotated[
+        bool,
+        Form(
+            description=(
+                "Set to true when the user declined to upload existing buildings, "
+                "so the question is not asked again"
+            )
+        ),
+    ] = False,
+    facade_style: Annotated[
+        Optional[str],
+        Form(
+            max_length=4000,
+            description=(
+                "Optional explicit facade style in Russian or English. The same "
+                "style can also be specified naturally in user_query."
+            ),
+        ),
+    ] = None,
     functional_zone_types: Annotated[
         Optional[str],
         Form(description="Optional comma-separated zone filter, e.g. 'residential,business'"),
@@ -180,6 +211,9 @@ async def generate_chat_stream_3d(
         year=year,
         source=source,
         blocks_file=blocks_file,
+        buildings_file=buildings_file,
+        skip_existing_buildings=skip_existing_buildings,
+        facade_style=facade_style,
         functional_zone_types=functional_zone_types,
         chat_id=chat_id,
         project_id=project_id,
@@ -197,6 +231,9 @@ async def _generate_chat_stream_response(
     year: int | None,
     source: str | None,
     blocks_file: UploadFile | None,
+    buildings_file: UploadFile | None,
+    skip_existing_buildings: bool,
+    facade_style: str | None,
     functional_zone_types: str | None,
     chat_id: str | None,
     project_id: int | None,
@@ -248,6 +285,8 @@ async def _generate_chat_stream_response(
                     await stack.enter_async_context(storage)
 
                 facade_buildings: dict[str, Any] | None = None
+                facade_style_prompt: str | None = None
+                facade_style_name_ru: str | None = None
                 async for event in stream_generation_chat(
                     builder=builder,
                     llm_client=llm,
@@ -267,6 +306,8 @@ async def _generate_chat_stream_response(
                     existing_buildings_geojson=buildings_geojson,
                     existing_buildings_declined=skip_existing_buildings,
                     territory_id=territory_id,
+                    facade_style=facade_style,
+                    enable_facade_styles=queue_facades,
                     model=model,
                     temperature=temperature,
                     zones_service=zones_service,
@@ -278,6 +319,11 @@ async def _generate_chat_stream_response(
                         content = event.get("content")
                         if isinstance(content, dict):
                             facade_buildings = content
+                            prompt = event.get("facade_style_prompt")
+                            facade_style_prompt = prompt if isinstance(prompt, str) else None
+                            style_name = event.get("facade_style")
+                            if isinstance(style_name, str):
+                                facade_style_name_ru = style_name
 
                     # Submit after the textual summary and immediately before the
                     # terminal event, so ``facade_job`` is the final useful SSE
@@ -291,6 +337,8 @@ async def _generate_chat_stream_response(
                             job = await orchestration.submit_facade_job(
                                 facade_buildings,
                                 requested_by=user.user_id,
+                                facade_style=facade_style_prompt,
+                                facade_style_name_ru=facade_style_name_ru,
                             )
                         except HTTPException as exc:
                             yield ServerSentEvent(
