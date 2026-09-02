@@ -207,6 +207,7 @@ def test_explicit_residential_scope_does_not_ask_for_business(monkeypatch):
             targets_by_zone={
                 "residents": {"residential": 80},
                 "floors_avg": {"residential": 5},
+                "buildings_count": {"residential": 1},
             },
             functional_zone_types=["residential"],
             raw={},
@@ -224,6 +225,9 @@ def test_explicit_residential_scope_does_not_ask_for_business(monkeypatch):
     assert _of_type(events, "clarification") == []
     assert builder.calls[0]["functional_zone_types"] == ["residential"]
     assert builder.calls[0]["targets_by_zone"]["residents"] == {"residential": 80}
+    assert builder.calls[0]["targets_by_zone"]["buildings_count"] == {
+        "residential": 1
+    }
 
 
 def test_zones_descriptor_is_a_live_query_not_a_stored_object():

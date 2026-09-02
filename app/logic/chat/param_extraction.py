@@ -54,7 +54,8 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "Заполняй только те значения, которые пользователь назвал явно; всё "
     "остальное оставляй null. Ничего не выдумывай. Числа — без единиц измерения. "
     "residents — число жителей, living_area — жилая площадь в м², "
-    "floors_avg — средняя этажность, density_scenario — один из: min, mean, max. "
+    "floors_avg — средняя этажность, buildings_count — явно указанное число "
+    "зданий, density_scenario — один из: min, mean, max. "
     "Также извлеки стиль фасадов, только если пользователь явно его указал. "
     "facade_style_name_ru — короткое название стиля на русском, "
     "facade_style_prompt — короткое описание этого стиля на английском для "
@@ -78,6 +79,10 @@ def build_extraction_schema() -> dict[str, Any]:
                         "residents": {"type": ["integer", "null"]},
                         "living_area": {"type": ["number", "null"]},
                         "floors_avg": {"type": ["number", "null"]},
+                        "buildings_count": {
+                            "type": ["integer", "null"],
+                            "minimum": 1,
+                        },
                         "density_scenario": {
                             "type": ["string", "null"],
                             "enum": [*DENSITY_SCENARIOS, None],
@@ -149,6 +154,7 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
     """
     residents: dict[str, int] = {}
     floors_avg: dict[str, float] = {}
+    buildings_count: dict[str, int] = {}
     density_scenario: dict[str, str] = {}
     requested: list[str] = []
 
@@ -170,6 +176,10 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         if floors is not None:
             floors_avg[zone] = floors
 
+        count = _num(item.get("buildings_count"))
+        if count is not None:
+            buildings_count[zone] = max(1, int(round(count)))
+
         dens = item.get("density_scenario")
         if isinstance(dens, str) and dens.strip() in DENSITY_SCENARIOS:
             density_scenario[zone] = dens.strip()
@@ -179,6 +189,8 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         targets_by_zone["residents"] = residents
     if floors_avg:
         targets_by_zone["floors_avg"] = floors_avg
+    if buildings_count:
+        targets_by_zone["buildings_count"] = buildings_count
     if density_scenario:
         targets_by_zone["density_scenario"] = density_scenario
 

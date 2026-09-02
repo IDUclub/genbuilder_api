@@ -90,6 +90,39 @@ class BlockGenerator:
 
         return gdf
 
+    @staticmethod
+    def _limit_candidate_blocks(
+        gdf: gpd.GeoDataFrame,
+        max_buildings: int | None,
+    ) -> gpd.GeoDataFrame:
+        """Use at most one territory block per explicitly requested building.
+
+        Distributing a small target across every block forces the downstream
+        solver to place at least one minimum-size building in each block. An
+        explicit building count therefore limits the number of active blocks.
+        Largest blocks are preferred because they are most likely to fit.
+        """
+        if max_buildings is None or max_buildings <= 0 or len(gdf) <= max_buildings:
+            return gdf.copy()
+        selected = gdf.geometry.area.nlargest(max_buildings).index
+        return gdf.loc[selected].copy()
+
+    @staticmethod
+    def _cap_generated_buildings(
+        buildings: gpd.GeoDataFrame,
+        max_buildings: int | None,
+        total_target: float,
+    ) -> gpd.GeoDataFrame:
+        """Enforce the explicit maximum after geometric packing."""
+        if max_buildings is None or max_buildings <= 0 or len(buildings) <= max_buildings:
+            return buildings
+        if "living_area" not in buildings.columns or total_target <= 0:
+            return buildings.head(max_buildings).copy()
+        expected = total_target / max_buildings
+        score = (buildings["living_area"].fillna(0.0) - expected).abs()
+        selected = score.nsmallest(max_buildings).index
+        return buildings.loc[selected].copy()
+
     async def run(
         self,
         mode: str,
@@ -101,6 +134,7 @@ class BlockGenerator:
         coverage_target: Optional[float] = None,
         coverage_target_by_zone: Optional[Dict[str, float]] = None,
         floors_avg_by_zone: Optional[Dict[str, float]] = None,
+        max_buildings: int | None = None,
     ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
 
         mode = str(mode).lower()
@@ -116,7 +150,7 @@ class BlockGenerator:
             f"floors_avg_by_zone={floors_avg_by_zone}"
         )
 
-        blocks_gdf = blocks.copy()
+        blocks_gdf = self._limit_candidate_blocks(blocks, max_buildings)
 
         if floors_avg_by_zone:
             blocks_gdf["floors_avg"] = blocks_gdf["zone"].map(
@@ -263,6 +297,11 @@ class BlockGenerator:
             self.buildings_generator.generate_buildings_from_plots,
             plots,
             mode=mode,
+        )
+        buildings_gdf = self._cap_generated_buildings(
+            buildings_gdf,
+            max_buildings,
+            float(la_target or coverage_target or 0.0),
         )
 
         logger.debug(

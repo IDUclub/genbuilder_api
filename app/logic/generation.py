@@ -379,6 +379,9 @@ class Genbuilder:
         floors_avg_by_zone: Dict[str, float] = (
             targets_by_zone.get("floors_avg", {}) or {}
         )
+        buildings_count_by_zone: Dict[str, float] = (
+            targets_by_zone.get("buildings_count", {}) or {}
+        )
         density_by_zone: Dict[str, str] = (
             targets_by_zone.get("density_scenario", {}) or {}
         )
@@ -389,6 +392,7 @@ class Genbuilder:
         res_la_target = float(la_by_zone.get("residential", 0.0))
         res_density_scenario = str(density_by_zone.get("residential", "min"))
         res_default_fg = str(default_fg_by_zone.get("residential", "medium"))
+        res_buildings_limit = int(buildings_count_by_zone.get("residential", 0)) or None
 
         logger.info(
             f"Genbuilder.run: residential group -> blocks={len(res_blocks)}, "
@@ -431,6 +435,10 @@ class Genbuilder:
             or default_fg_by_zone.get("unknown")
             or "high"
         )
+        mixed_buildings_limit = int(
+            buildings_count_by_zone.get("business", 0)
+            + buildings_count_by_zone.get("unknown", 0)
+        ) or None
 
         floors_avg_mixed: Dict[str, float] = {
             z: float(floors_avg_by_zone[z])
@@ -481,6 +489,12 @@ class Genbuilder:
                             la_target=res_la_target,
                             density_scenario=res_density_scenario,
                             default_floor_group=res_default_fg,
+                            floors_avg_by_zone={
+                                "residential": floors_avg_by_zone["residential"]
+                            }
+                            if "residential" in floors_avg_by_zone
+                            else None,
+                            max_buildings=res_buildings_limit,
                         )
                     )
                     logger.info(
@@ -493,7 +507,8 @@ class Genbuilder:
                     )
 
                     if (
-                        service_normatives is not None
+                        res_buildings_limit is None
+                        and service_normatives is not None
                         and res_blocks_out is not None
                         and res_plots is not None
                         and res_buildings is not None
@@ -563,6 +578,7 @@ class Genbuilder:
                             density_scenario=mixed_density_scenario,
                             default_floor_group=mixed_default_fg,
                             floors_avg_by_zone=floors_avg_mixed,
+                            max_buildings=mixed_buildings_limit,
                         )
                     )
                     logger.info(
