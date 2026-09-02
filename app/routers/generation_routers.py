@@ -141,6 +141,17 @@ async def generate_3d_by_scenario(
             examples=[[2058130, 2058131]],
         ),
     ] = None,
+    facade_style: Annotated[
+        Optional[str],
+        Query(
+            max_length=4000,
+            description=(
+                "Optional Russian preset name or English facade prompt. Omit it "
+                "to use facade-jobs defaults for each functional zone."
+            ),
+            examples=["кирпичный"],
+        ),
+    ] = None,
     user: auth.AuthUser = Depends(auth.get_current_user),
     body: ScenarioBody = Body(default_factory=ScenarioBody),
 ) -> dict[str, str]:
@@ -152,6 +163,7 @@ async def generate_3d_by_scenario(
         physical_object_id=physical_object_id,
         token=user.token,
         requested_by=user.user_id,
+        facade_style=facade_style,
         targets_by_zone=body.targets_by_zone,
         generation_parameters=body.generation_parameters,
     )
@@ -165,10 +177,24 @@ async def generate_3d_by_scenario(
 )
 async def generate_3d_by_territory(
     payload: TerritoryRequest = Body(..., description="Body for request"),
+    facade_style: Annotated[
+        Optional[str],
+        Query(
+            max_length=4000,
+            description=(
+                "Optional Russian preset name or English facade prompt. Omit it "
+                "to use facade-jobs defaults for each functional zone."
+            ),
+            examples=["скандинавский"],
+        ),
+    ] = None,
 ) -> dict[str, str]:
     # The original /generate/by_territory endpoint is intentionally anonymous;
     # mirror that contract and let facade-jobs place it in the anonymous quota.
-    return await orchestration.generate_3d_by_territory(payload)
+    return await orchestration.generate_3d_by_territory(
+        payload,
+        facade_style=facade_style,
+    )
 
 
 @generation_router.post(
@@ -196,6 +222,17 @@ async def generate_3d_by_blocks(
             examples=[[2058130, 2058131]],
         ),
     ] = None,
+    facade_style: Annotated[
+        Optional[str],
+        Query(
+            max_length=4000,
+            description=(
+                "Optional Russian preset name or English facade prompt. Omit it "
+                "to use facade-jobs defaults for each functional zone."
+            ),
+            examples=["Современный"],
+        ),
+    ] = None,
     user: auth.AuthUser = Depends(auth.get_current_user),
     body: FunctionalZonesRequest = Body(
         ..., description="Per-zone targets and generation parameters"
@@ -209,6 +246,7 @@ async def generate_3d_by_blocks(
         physical_object_id=physical_object_id,
         token=user.token,
         requested_by=user.user_id,
+        facade_style=facade_style,
         body=body,
     )
 

@@ -356,6 +356,13 @@ class FacadeJobAccepted(BaseModel):
 
     job_id: str = Field(..., description="Facade generation job identifier")
     status_url: str = Field(..., description="URL to poll for job status and result")
+    facade_style: str = Field(
+        ...,
+        description=(
+            "Applied Russian preset name or the original free-text style label"
+        ),
+        examples=["Кирпичный"],
+    )
 
 
 class FunctionalZoneGenerationConfig(BaseModel):

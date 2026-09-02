@@ -15,6 +15,12 @@ See [the frontend API guide](docs/frontend-api-guide.md#3d-фасады) and
 [the integration plan](docs/facades-3d-integration-plan.md) for the endpoint and
 service contracts.
 
+All `/generate/3d/*` endpoints accept an optional Russian preset name or English
+prompt in the `facade_style` query parameter. `/generate/chat/stream/3d`
+accepts the same value as a multipart field and can also extract arbitrary
+Russian descriptions from `user_query`. Omitting the style keeps the
+`facade-jobs` per-zone defaults.
+
 ## Configuration
 
 The deployment workflow can build `.env.development` directly from GitHub

@@ -506,3 +506,39 @@ def test_an_existing_chat_is_not_retitled():
     _collect(chat_storage_client=storage_client, user_id="user-1", chat_id="chat-1")
 
     assert storage_client.created == []
+
+
+def test_explicit_facade_style_is_normalized_in_status_and_result_events():
+    events = _collect(facade_style="brick", enable_facade_styles=True)
+
+    status = _of_type(events, "status")[0]
+    result = _of_type(events, "result")[0]
+    assert status["facade_style"] == "Кирпичный"
+    assert result["facade_style"] == "Кирпичный"
+    assert "exposed brick" in result["facade_style_prompt"]
+
+
+def test_regular_chat_does_not_expose_unused_facade_fields():
+    events = _collect()
+
+    assert "facade_style" not in _of_type(events, "status")[0]
+    assert "facade_style" not in _of_type(events, "result")[0]
+
+
+def test_free_text_chat_style_uses_extracted_english_prompt(monkeypatch):
+    async def _extract(llm_client, *, user_query, la_per_person, model=None):
+        return ExtractedTargets(
+            targets_by_zone={"residents": {"residential": 5000, "business": 200}},
+            facade_style_name_ru="Бионический",
+            facade_style_prompt="biomorphic facade with organic flowing forms",
+        )
+
+    monkeypatch.setattr(generation_chat, "extract_generation_targets", _extract)
+    events = _collect(
+        user_query="Сделай фасады в бионическом стиле",
+        enable_facade_styles=True,
+    )
+
+    result = _of_type(events, "result")[0]
+    assert result["facade_style"] == "Бионический"
+    assert result["facade_style_prompt"].startswith("biomorphic facade")

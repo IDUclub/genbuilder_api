@@ -22,6 +22,7 @@ from app.dependencies import (
 )
 from app.exceptions.http_exception_wrapper import http_exception
 from app.infrastructure.facade_jobs_client import FacadeJobsError
+from app.logic.facade_styles import build_style_by_zone, resolve_facade_style
 from app.logic.polygon_converter import (
     _explode_to_polygons,
     _scale_numeric_targets,
@@ -286,13 +287,21 @@ async def submit_facade_job(
     buildings: dict[str, Any],
     *,
     requested_by: str | None,
+    facade_style: str | None = None,
+    facade_style_name_ru: str | None = None,
 ) -> dict[str, str]:
     """Submit generated buildings to ``facade-jobs`` without waiting for GLB."""
     _require_facade_jobs()
+    style = resolve_facade_style(facade_style, name_ru=facade_style_name_ru)
+    style_by_zone = build_style_by_zone(buildings, style)
 
     try:
         async with build_facade_jobs_client() as client:
-            job = await client.submit_job(buildings, requested_by=requested_by)
+            job = await client.submit_job(
+                buildings,
+                requested_by=requested_by,
+                style_by_zone=style_by_zone,
+            )
     except FacadeJobsError as exc:
         if exc.status_code == 0 or exc.status_code == 503:
             status_code = 503
@@ -311,6 +320,7 @@ async def submit_facade_job(
     return {
         "job_id": job["job_id"],
         "status_url": job["status_url"],
+        "facade_style": style.name_ru,
     }
 
 
@@ -323,6 +333,7 @@ async def generate_3d_by_scenario(
     physical_object_id: Optional[list[int]],
     token: str,
     requested_by: str | None,
+    facade_style: str | None,
     targets_by_zone: Optional[dict[str, dict[str, Any]]],
     generation_parameters: Optional[dict[str, Any]],
 ) -> dict[str, str]:
@@ -337,17 +348,26 @@ async def generate_3d_by_scenario(
         targets_by_zone=targets_by_zone,
         generation_parameters=generation_parameters,
     )
-    return await submit_facade_job(buildings, requested_by=requested_by)
+    return await submit_facade_job(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+    )
 
 
 async def generate_3d_by_territory(
     payload: TerritoryRequest,
     *,
     requested_by: str | None = None,
+    facade_style: str | None = None,
 ) -> dict[str, str]:
     _require_facade_jobs()
     buildings = await generate_by_territory(payload)
-    return await submit_facade_job(buildings, requested_by=requested_by)
+    return await submit_facade_job(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+    )
 
 
 async def generate_3d_by_blocks(
@@ -359,6 +379,7 @@ async def generate_3d_by_blocks(
     physical_object_id: Optional[list[int]],
     token: str,
     requested_by: str | None,
+    facade_style: str | None,
     body: FunctionalZonesRequest,
 ) -> dict[str, str]:
     _require_facade_jobs()
@@ -371,7 +392,11 @@ async def generate_3d_by_blocks(
         token=token,
         body=body,
     )
-    return await submit_facade_job(buildings, requested_by=requested_by)
+    return await submit_facade_job(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+    )
 
 
 async def estimate_max_residents_by_blocks(

@@ -54,6 +54,7 @@ from app.logic.chat.param_extraction import (
     extract_generation_targets,
     validate_targets,
 )
+from app.logic.facade_styles import resolve_facade_style
 from app.logic.geo_layers import (
     SLOT_BLOCKS_INPUT,
     SLOT_BUILDINGS,
@@ -230,6 +231,8 @@ async def stream_generation_chat(
     blocks_geojson: dict[str, Any] | None = None,
     existing_buildings_geojson: dict[str, Any] | None = None,
     existing_buildings_declined: bool = False,
+    facade_style: str | None = None,
+    enable_facade_styles: bool = False,
     generation_parameters: dict[str, Any] | None = None,
     model: str | None = None,
     temperature: float | None = None,
@@ -372,12 +375,36 @@ async def stream_generation_chat(
 
     # 3. Extract targets from the (accumulated) request text.
     combined_query = f"{prior_text}\n{user_query}".strip() if prior_text else user_query
+    extraction_query = combined_query
+    if enable_facade_styles and facade_style:
+        extraction_query += f"\nЯвно выбранный стиль фасада: {facade_style}"
     extracted = await extract_generation_targets(
         llm_client,
-        user_query=combined_query,
+        user_query=extraction_query,
         la_per_person=la_per_person,
         model=model,
     )
+
+    # A known explicit preset is deterministic.  For arbitrary prose, use the
+    # extractor's English image-generation prompt while retaining its Russian
+    # display name.  If no style was mentioned, resolve to the facade-jobs
+    # per-zone defaults (prompt=None).
+    explicit_style = resolve_facade_style(facade_style)
+    extracted_name_style = resolve_facade_style(extracted.facade_style_name_ru)
+    if facade_style and explicit_style.source == "preset":
+        selected_facade_style = explicit_style
+    elif facade_style:
+        selected_facade_style = resolve_facade_style(
+            extracted.facade_style_prompt or facade_style,
+            name_ru=extracted.facade_style_name_ru or facade_style,
+        )
+    elif extracted_name_style.source == "preset":
+        selected_facade_style = extracted_name_style
+    else:
+        selected_facade_style = resolve_facade_style(
+            extracted.facade_style_prompt or extracted.facade_style_name_ru,
+            name_ru=extracted.facade_style_name_ru,
+        )
     # Zones come from the territory source: both generated zones for a scenario,
     # or the zones actually present in an uploaded blocks file.
     extracted.functional_zone_types = list(zones_in_scope)
@@ -433,12 +460,15 @@ async def stream_generation_chat(
         return
 
     # 5. Run generation inline.
-    yield {
+    status_event = {
         "type": "status",
         "content": "Параметры приняты, запускаю генерацию застройки.",
         "targets_by_zone": extracted.targets_by_zone,
         "functional_zone_types": extracted.functional_zone_types,
     }
+    if enable_facade_styles:
+        status_event["facade_style"] = selected_facade_style.name_ru
+    yield status_event
     # 5.1 Zones backdrop, inline and before generation, so the map can draw the
     # territory while buildings are still being computed. An uploaded file wins
     # over the scenario: the backdrop must match what actually went in.
@@ -498,7 +528,17 @@ async def stream_generation_chat(
         return
 
     merged, summary = _merge_result(result)
-    yield {"type": "result", "content": merged, "summary": summary}
+    result_event = {
+        "type": "result",
+        "content": merged,
+        "summary": summary,
+    }
+    if enable_facade_styles:
+        result_event.update(
+            facade_style=selected_facade_style.name_ru,
+            facade_style_prompt=selected_facade_style.prompt,
+        )
+    yield result_event
 
     # 5.2 Store the artefacts and hand out durable links. Done after ``result``
     # so the client sees the buildings without waiting on the write, and

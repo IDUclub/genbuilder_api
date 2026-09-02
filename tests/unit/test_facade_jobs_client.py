@@ -84,6 +84,33 @@ def test_submit_job_uses_anonymous_quota_for_legacy_territory_route():
     assert captured_payload["requested_by"] == "anonymous"
 
 
+def test_submit_job_sends_explicit_zone_styles():
+    captured_payload: dict = {}
+    styles = {
+        "residential": {
+            "prompt": "residential apartment building facade, exposed brick"
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_payload.update(json.loads(request.content))
+        return httpx.Response(202, json={"job_id": "styled-job"})
+
+    async def run() -> None:
+        async with FacadeJobsClient(
+            "http://facade-jobs:8000",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            await client.submit_job(
+                BUILDINGS,
+                requested_by="user-7",
+                style_by_zone=styles,
+            )
+
+    asyncio.run(run())
+    assert captured_payload["style_by_zone"] == styles
+
+
 @pytest.mark.parametrize("status_code", [400, 409, 422, 503])
 def test_submit_job_preserves_downstream_error(status_code):
     def handler(request: httpx.Request) -> httpx.Response:
