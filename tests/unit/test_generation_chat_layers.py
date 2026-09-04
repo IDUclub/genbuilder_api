@@ -76,7 +76,7 @@ class _FakeBuilder:
 
 
 class _FakeLLM:
-    TITLE = "Жильё на 5000 жителей"
+    TITLE = "Генерация жилья на 5000 жителей"
 
     async def stream_chat(self, messages, model=None, temperature=None):
         for delta in ("Сгенерировано ", "1 здание."):
@@ -199,6 +199,33 @@ def test_scenario_zones_are_fetched_with_the_caller_token():
             "functional_zone_types": ["residential", "business"],
         }
     ]
+
+
+def test_scenario_without_business_only_requires_and_generates_residential(tmp_path):
+    """A missing business zone must not create a phantom demand requirement."""
+    async def residential_only(_llm_client, *, user_query, la_per_person, model=None):
+        return ExtractedTargets(
+            targets_by_zone={"residents": {"residential": 5000}},
+            functional_zone_types=[],
+            raw={},
+        )
+
+    builder = _FakeBuilder()
+    zones = _FakeZones(layer=ZONES_LAYER)
+    original = generation_chat.extract_generation_targets
+    generation_chat.extract_generation_targets = residential_only
+    try:
+        events = _collect(
+            builder=builder,
+            zones_service=zones,
+            object_storage=LocalStorage(str(tmp_path)),
+        )
+    finally:
+        generation_chat.extract_generation_targets = original
+
+    assert not _of_type(events, "clarification")
+    assert builder.calls[0]["functional_zone_types"] == ["residential"]
+    assert builder.calls[0]["targets_by_zone"]["residents"] == {"residential": 5000}
 
 
 def test_zones_descriptor_is_a_live_query_not_a_stored_object():

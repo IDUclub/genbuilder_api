@@ -90,6 +90,16 @@ def _blocks_from_geojson(
     return kept, tuple(zones), len(features) - len(kept)
 
 
+def _zones_from_layer(layer: dict[str, Any]) -> tuple[str, ...]:
+    """Return the generated-zone types actually present in a zones layer."""
+    zones: list[str] = []
+    for feature in layer.get("features") or []:
+        zone = normalize_zone((feature.get("properties") or {}).get("zone"))
+        if zone in GENERATED_ZONES and zone not in zones:
+            zones.append(zone)
+    return tuple(zones)
+
+
 def _existing_buildings_from_geojson(
     geojson: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], int]:
@@ -308,10 +318,11 @@ async def stream_generation_chat(
             }
 
     # 2.5 Resolve the territory source. A user-uploaded blocks file overrides the
-    # scenario; we keep only residential/business features and derive the zones in
-    # scope from the file (so a file with just one zone doesn't over-ask).
+    # scenario; derive the zones in scope from the actual territory so a missing
+    # business zone never results in a business-demand clarification.
     blocks: BlockFeatureCollection | None = None
     zones_in_scope: tuple[str, ...] = GENERATED_ZONES
+    scenario_zones_layer: dict[str, Any] | None = None
     kept: list[dict[str, Any]] = []
     if blocks_geojson is not None:
         kept, zones_in_scope, dropped = _blocks_from_geojson(blocks_geojson)
@@ -339,6 +350,28 @@ async def stream_generation_chat(
             yield {"type": "error", "stage": "load_blocks", "detail": str(exc)}
             yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
             return
+
+    elif zones_service is not None and scenario_id is not None:
+        # Fetch this before asking clarifying questions: the layer is the source
+        # of truth for which generated zone types exist in the scenario. Reuse it
+        # below for the map backdrop rather than making a second request.
+        try:
+            scenario_zones_layer = await zones_service.prepare_zones_layer(
+                scenario_id=scenario_id,
+                year=year,
+                source=source,
+                token=token,
+                functional_zone_types=list(GENERATED_ZONES),
+            )
+            zones_in_scope = _zones_from_layer(scenario_zones_layer)
+        except Exception as exc:  # noqa: BLE001 - preserve generation fallback
+            logger.warning("functional zones scope lookup failed: {}", exc)
+            yield {
+                "type": "warning",
+                "stage": "zones",
+                "detail": str(exc),
+                "message": "Не удалось определить состав функциональных зон сценария.",
+            }
 
     # 2.6 Existing buildings, when the user uploaded them: their footprints are
     # cut out of the blocks before generation, and they come back in the result
@@ -378,8 +411,8 @@ async def stream_generation_chat(
         la_per_person=la_per_person,
         model=model,
     )
-    # Zones come from the territory source: both generated zones for a scenario,
-    # or the zones actually present in an uploaded blocks file.
+    # Zones come from the territory source: the generated zones actually present
+    # in a scenario or in an uploaded blocks file.
     extracted.functional_zone_types = list(zones_in_scope)
 
     # Pin the policy default floor group per zone unless the user set one
@@ -449,6 +482,18 @@ async def stream_generation_chat(
             "source": "blocks_file",
             "content": {"type": "FeatureCollection", "features": kept},
         }
+    elif scenario_zones_layer is not None:
+        # The same layer determined ``zones_in_scope`` before clarification.
+        yield {"type": "zones", "source": "scenario", "content": scenario_zones_layer}
+        descriptor = build_zones_layer(
+            scenario_id=scenario_id,
+            year=year,
+            source=source,
+            functional_zone_types=list(extracted.functional_zone_types),
+            public_base_url=public_base_url,
+        )
+        file_layers.append(descriptor)
+        yield {"type": "file", **descriptor}
     elif zones_service is not None and scenario_id is not None:
         try:
             zones_layer = await zones_service.prepare_zones_layer(

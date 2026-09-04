@@ -30,6 +30,7 @@ from app.dependencies import (
     build_vllm_chat_client,
     builder,
     chat_llm_configured,
+    zones_service,
 )
 from app.logic.chat.generation_chat import stream_generation_chat
 from app.utils.auth import authenticate_token
@@ -141,6 +142,7 @@ class GenBuilderAgentExecutor(AgentExecutor):
                     generation_parameters=payload.get("generation_parameters"),
                     model=payload.get("model"),
                     temperature=payload.get("temperature"),
+                    zones_service=zones_service,
                 ):
                     event_type = event.get("type")
 
