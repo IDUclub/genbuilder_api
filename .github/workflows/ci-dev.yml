@@ -18,5 +18,7 @@ jobs:
         uv python install 3.11
         uv venv --python 3.11
         uv pip install --python .venv/bin/python --requirement requirements-dev.txt
+        cp .env.example .env.test
+        export APP_ENV=test
         .venv/bin/python -m pytest --verbose tests/unit
     secrets: inherit
