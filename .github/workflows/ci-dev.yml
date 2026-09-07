@@ -1,0 +1,22 @@
+name: Kubernetes dev release
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: IDUclub/urban-assistant-deploy/.github/workflows/reusable-application-release.yaml@main
+    with:
+      service: genbuilder
+      test-command: |
+        python -m pip install --disable-pip-version-check uv==0.12.10
+        uv python install 3.11
+        uv venv --python 3.11
+        uv pip install --python .venv/bin/python --requirement requirements-dev.txt
+        .venv/bin/python -m pytest --verbose tests/unit
+    secrets: inherit
