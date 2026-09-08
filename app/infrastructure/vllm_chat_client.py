@@ -28,14 +28,32 @@ import httpx
 _SSE_DATA_PREFIX = "data:"
 _SSE_DONE = "[DONE]"
 
+# Pseudo-status for a failure that never reached the server (connect error,
+# DNS failure, timeout) — there is no HTTP status to report in that case.
+TRANSPORT_ERROR = 0
+
 
 class VLLMChatError(RuntimeError):
-    """Non-2xx response (or malformed stream) from vLLM ``/v1/chat/completions``."""
+    """Any failed call to vLLM ``/v1/chat/completions``.
+
+    Covers a non-2xx response, a malformed stream, and — with
+    ``status == TRANSPORT_ERROR`` — a transport failure (host down, DNS,
+    timeout). Callers only ever have to catch this one type: an ``httpx`` error
+    escaping the client would abort the SSE stream it is running inside.
+    """
 
     def __init__(self, status: int, body: Any) -> None:
         self.status = status
         self.body = body
-        super().__init__(f"vllm /v1/chat/completions returned {status}: {body!r}")
+        if status == TRANSPORT_ERROR:
+            super().__init__(f"vllm /v1/chat/completions is unreachable: {body}")
+        else:
+            super().__init__(f"vllm /v1/chat/completions returned {status}: {body!r}")
+
+
+def _transport_error(exc: httpx.HTTPError) -> VLLMChatError:
+    """Wrap an ``httpx`` transport failure so callers catch one type only."""
+    return VLLMChatError(TRANSPORT_ERROR, f"{type(exc).__name__}: {exc}")
 
 
 class VLLMChatClient:
@@ -102,8 +120,8 @@ class VLLMChatClient:
         """Stream assistant content deltas for ``messages``.
 
         Yields the incremental ``choices[0].delta.content`` chunks as they
-        arrive. Raises ``VLLMChatError`` on a non-2xx status or unparseable
-        stream.
+        arrive. Raises ``VLLMChatError`` on a non-2xx status, an unparseable
+        stream, or a transport failure (the server could not be reached).
         """
         payload = self._payload(
             messages,
@@ -113,27 +131,30 @@ class VLLMChatClient:
             reasoning_effort=reasoning_effort,
         )
 
-        async with self._client.stream("POST", self._chat_path, json=payload) as resp:
-            if resp.status_code >= 400:
-                body = await resp.aread()
-                raise VLLMChatError(resp.status_code, body.decode("utf-8", "replace"))
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line or not line.startswith(_SSE_DATA_PREFIX):
-                    continue
-                data = line[len(_SSE_DATA_PREFIX) :].strip()
-                if data == _SSE_DONE:
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError as exc:
-                    raise VLLMChatError(resp.status_code, data) from exc
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                delta = (choices[0].get("delta") or {}).get("content") or ""
-                if delta:
-                    yield delta
+        try:
+            async with self._client.stream("POST", self._chat_path, json=payload) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise VLLMChatError(resp.status_code, body.decode("utf-8", "replace"))
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith(_SSE_DATA_PREFIX):
+                        continue
+                    data = line[len(_SSE_DATA_PREFIX) :].strip()
+                    if data == _SSE_DONE:
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise VLLMChatError(resp.status_code, data) from exc
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content") or ""
+                    if delta:
+                        yield delta
+        except httpx.HTTPError as exc:
+            raise _transport_error(exc) from exc
 
     async def complete_json(
         self,
@@ -149,8 +170,8 @@ class VLLMChatClient:
         Sends ``stream: false`` and an OpenAI-style ``response_format`` of type
         ``json_schema`` so the model must return JSON conforming to ``schema``.
         Parses ``choices[0].message.content`` and returns it as a dict. Raises
-        ``VLLMChatError`` on a non-2xx status or when the content is not a JSON
-        object.
+        ``VLLMChatError`` on a non-2xx status, a transport failure, or when the
+        content is not a JSON object.
         """
         payload = self._payload(
             messages,
@@ -163,10 +184,17 @@ class VLLMChatClient:
             "type": "json_schema",
             "json_schema": {"name": "response", "schema": schema},
         }
-        resp = await self._client.post(self._chat_path, json=payload)
+        try:
+            resp = await self._client.post(self._chat_path, json=payload)
+        except httpx.HTTPError as exc:
+            raise _transport_error(exc) from exc
         if resp.status_code >= 400:
             raise VLLMChatError(resp.status_code, resp.text)
-        choices = resp.json().get("choices") or []
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise VLLMChatError(resp.status_code, resp.text) from exc
+        choices = body.get("choices") or []
         if not choices:
             raise VLLMChatError(resp.status_code, resp.text)
         content = (choices[0].get("message") or {}).get("content") or ""
