@@ -125,6 +125,9 @@ PARAMETERS
   blocks before generation, so nothing is generated on top of them, and they
   come back in the response marked `is_excluded: true`. Properties are
   optional — the geometry is what matters.
+- territory_id (int, optional): UrbanDB territory (usually the project
+  region) whose service normatives place services (schools, kindergartens…)
+  in residential blocks. Omit it and no services are generated.
 - targets_by_zone (object, optional): per-zone generation targets. Omit to
   use the service defaults.
 - generation_parameters (object, optional): low-level generation parameter
@@ -147,6 +150,10 @@ async def generate_by_territory(
         Optional[dict[str, Any]],
         "GeoJSON FeatureCollection of existing building footprints to exclude from generation.",
     ] = None,
+    territory_id: Annotated[
+        Optional[int],
+        "UrbanDB territory (region) id whose service normatives place services; omit to skip services.",
+    ] = None,
     targets_by_zone: Annotated[
         Optional[dict[str, dict[str, Any]]], "Per-zone generation targets."
     ] = None,
@@ -158,6 +165,7 @@ async def generate_by_territory(
         TerritoryRequest,
         blocks=blocks,
         existing_buildings=existing_buildings,
+        territory_id=territory_id,
         targets_by_zone=targets_by_zone,
         generation_parameters=generation_parameters,
     )

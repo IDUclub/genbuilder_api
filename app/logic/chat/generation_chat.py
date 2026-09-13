@@ -41,6 +41,8 @@ import json
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
+import aiohttp
+from fastapi import HTTPException
 from loguru import logger
 
 from app.infrastructure.chat_storage_client import ChatStorageClient, ChatStorageError
@@ -157,6 +159,39 @@ def _storage_hint(exc: ChatStorageError) -> str:
     return ""
 
 
+def _services_warning(detail: str, reason: str) -> dict[str, Any]:
+    return {
+        "type": "warning",
+        "stage": "service_normatives",
+        "detail": detail,
+        "message": f"Сервисы (школы, детские сады и т. п.) не расставлены: {reason}.",
+    }
+
+
+async def _region_for_services(
+    territory_id: int | None,
+    project_id: int | str | None,
+    urban_api: Any | None,
+    token: str | None,
+) -> tuple[int | None, dict[str, Any] | None]:
+    """Region whose normatives place services in the blocks-file mode, or a warning why there is none.
+
+    An explicit ``territory_id`` wins; otherwise the region of ``project_id`` is looked up.
+    """
+    if territory_id is not None:
+        return territory_id, None
+    if project_id is None or urban_api is None:
+        return None, _services_warning(
+            "neither territory_id nor project_id is set",
+            "не указан регион (territory_id) или проект",
+        )
+    try:
+        return await urban_api.get_region_by_project(project_id, token), None
+    except (HTTPException, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        logger.warning("project {} region lookup failed: {}", project_id, exc)
+        return None, _services_warning(str(exc), "не удалось определить регион проекта")
+
+
 def _request_metadata(
     *,
     scenario_id: int | None,
@@ -240,11 +275,13 @@ async def stream_generation_chat(
     blocks_geojson: dict[str, Any] | None = None,
     existing_buildings_geojson: dict[str, Any] | None = None,
     existing_buildings_declined: bool = False,
+    territory_id: int | None = None,
     generation_parameters: dict[str, Any] | None = None,
     model: str | None = None,
     temperature: float | None = None,
     message_metadata: dict[str, Any] | None = None,
     zones_service: Any | None = None,
+    urban_api: Any | None = None,
     object_storage: ObjectStorage | None = None,
     public_base_url: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -523,6 +560,14 @@ async def stream_generation_chat(
             file_layers.append(descriptor)
             yield {"type": "file", **descriptor}
 
+    region_id: int | None = None
+    if blocks_geojson is not None and scenario_id is None:
+        region_id, services_warning = await _region_for_services(
+            territory_id, project_id, urban_api, token
+        )
+        if services_warning is not None:
+            yield services_warning
+
     yield {"type": "progress", "stage": "generation", "content": "Генерация зданий…"}
     try:
         result = await builder.run(
@@ -535,6 +580,7 @@ async def stream_generation_chat(
             functional_zone_types=extracted.functional_zone_types,
             generation_parameters_override=generation_parameters,
             existing_buildings=existing_buildings,
+            territory_id=region_id,
         )
     except Exception as exc:  # noqa: BLE001 - surface any pipeline failure to the client
         logger.exception("generation failed")
@@ -544,6 +590,15 @@ async def stream_generation_chat(
 
     merged, summary = _merge_result(result)
     yield {"type": "result", "content": merged, "summary": summary}
+    if (
+        region_id is not None
+        and isinstance(result, dict)
+        and result.get("service_normatives_loaded") is False
+    ):
+        yield _services_warning(
+            f"no service normatives loaded for territory {region_id}",
+            f"нормативы региона {region_id} не загрузились или пусты",
+        )
 
     # 5.2 Store the artefacts and hand out durable links. Done after ``result``
     # so the client sees the buildings without waiting on the write, and

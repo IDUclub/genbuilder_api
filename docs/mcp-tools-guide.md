@@ -92,6 +92,7 @@ Authorization: Bearer <keycloak_access_token>
 |---|---|---|---|
 | `blocks` | GeoJSON FeatureCollection | ✅ | `Polygon`/`MultiPolygon`-фичи, у каждой заполнен `properties.zone` (напр. `"residential"`) |
 | `existing_buildings` | GeoJSON FeatureCollection | ⛔ | Пятна уже стоящих зданий — вырезаются из блоков до генерации и возвращаются с `is_excluded: true`; `properties` необязательны |
+| `territory_id` | int | ⛔ | Регион UrbanDB: по его нормативам в жилых блоках расставляются сервисы (школы, детские сады и т. п.). Без него сервисов нет |
 | `targets_by_zone` | object | ⛔ | Как выше |
 | `generation_parameters` | object | ⛔ | Как выше |
 
