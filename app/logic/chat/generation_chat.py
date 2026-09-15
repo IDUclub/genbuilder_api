@@ -31,7 +31,9 @@ Event envelope (``{"type": ..., ...}``), matching the reference style:
                                                same payload is persisted to
                                                history as a ``file`` part.
 - ``warning``       {stage, detail, message} — non-fatal (e.g. not persisted).
-- ``error``         {stage, detail}          — fatal; generation/answer failed.
+- ``error``         {stage, detail, ...}   — fatal; generation/answer failed.
+                                              Carries a user-facing ``message``
+                                              when the cause is explainable.
 - ``done``          {chat_id, assistant_message_id} — terminal marker.
 """
 from __future__ import annotations
@@ -411,6 +413,19 @@ async def stream_generation_chat(
         la_per_person=la_per_person,
         model=model,
     )
+    # The extractor is the only way free text becomes targets — when the call
+    # itself failed there is nothing to ask for either, so say so instead of
+    # asking for the parameters the user has already given.
+    if extracted.error:
+        yield {
+            "type": "error",
+            "stage": "param_extraction",
+            "detail": extracted.error,
+            "message": "Языковая модель недоступна — не удалось разобрать "
+            "параметры генерации. Попробуйте позже.",
+        }
+        yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
+        return
     # Zones come from the territory source: the generated zones actually present
     # in a scenario or in an uploaded blocks file.
     extracted.functional_zone_types = list(zones_in_scope)

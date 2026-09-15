@@ -106,11 +106,18 @@ class Missing:
 
 @dataclass
 class ExtractedTargets:
-    """Normalized generation targets plus the requested zone list."""
+    """Normalized generation targets plus the requested zone list.
+
+    ``error`` is set when the extraction call itself failed (the LLM is down or
+    answered with junk). It is not the same as "the user named no parameters":
+    nothing was parsed at all, so asking for the missing values again would only
+    loop — the caller reports the failure instead.
+    """
 
     targets_by_zone: dict[str, dict[str, Any]] = field(default_factory=dict)
     functional_zone_types: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
 
 
 def _num(value: Any) -> float | None:
@@ -180,8 +187,8 @@ async def extract_generation_targets(
 ) -> ExtractedTargets:
     """Ask the LLM to extract targets from ``user_query`` (structured output).
 
-    On any LLM failure returns empty targets so the caller falls through to
-    clarification rather than crashing the stream.
+    Never raises: on an LLM failure it returns empty targets with ``error`` set,
+    so the caller decides what to do rather than the stream dying mid-flight.
     """
     messages = [
         {"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
@@ -193,7 +200,7 @@ async def extract_generation_targets(
         )
     except VLLMChatError as exc:
         logger.warning("param extraction failed: {}", exc)
-        return ExtractedTargets(raw={"error": str(exc)})
+        return ExtractedTargets(raw={"error": str(exc)}, error=str(exc))
     return normalize_targets(raw, la_per_person)
 
 
