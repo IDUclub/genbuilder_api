@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import pytest
+from fastapi import HTTPException
 
 from app.infrastructure.object_storage import LocalStorage, ObjectStorageError
 from app.logic.chat import generation_chat
@@ -533,3 +534,101 @@ def test_an_existing_chat_is_not_retitled():
     _collect(chat_storage_client=storage_client, user_id="user-1", chat_id="chat-1")
 
     assert storage_client.created == []
+
+
+class _FakeUrbanApi:
+    def __init__(self, region=1, exc=None):
+        self._region = region
+        self._exc = exc
+        self.calls: list[tuple] = []
+
+    async def get_region_by_project(self, project_id, token):
+        self.calls.append((project_id, token))
+        if self._exc is not None:
+            raise self._exc
+        return self._region
+
+
+def _services_warnings(events):
+    return [e for e in _of_type(events, "warning") if e["stage"] == "service_normatives"]
+
+
+def test_file_mode_places_services_by_the_given_region():
+    builder = _FakeBuilder()
+    urban_api = _FakeUrbanApi()
+
+    events = _collect(
+        **_project_less(
+            builder=builder,
+            existing_buildings_declined=True,
+            territory_id=47,
+            project_id=120,
+            urban_api=urban_api,
+        )
+    )
+
+    assert builder.calls[0]["territory_id"] == 47
+    assert urban_api.calls == []
+    assert _services_warnings(events) == []
+
+
+def test_file_mode_takes_the_region_of_the_project():
+    builder = _FakeBuilder()
+    urban_api = _FakeUrbanApi(region=1)
+
+    _collect(
+        **_project_less(
+            builder=builder, existing_buildings_declined=True, project_id=120, urban_api=urban_api
+        )
+    )
+
+    assert urban_api.calls == [(120, "user-token")]
+    assert builder.calls[0]["territory_id"] == 1
+
+
+def test_file_mode_without_a_region_warns_that_services_are_skipped():
+    builder = _FakeBuilder()
+
+    events = _collect(**_project_less(builder=builder, existing_buildings_declined=True))
+
+    assert builder.calls[0]["territory_id"] is None
+    assert len(_services_warnings(events)) == 1
+    assert _of_type(events, "result")
+
+
+def test_a_failed_project_lookup_warns_and_generation_still_runs():
+    builder = _FakeBuilder()
+    urban_api = _FakeUrbanApi(exc=HTTPException(status_code=404, detail="no project"))
+
+    events = _collect(
+        **_project_less(
+            builder=builder, existing_buildings_declined=True, project_id=120, urban_api=urban_api
+        )
+    )
+
+    assert builder.calls[0]["territory_id"] is None
+    assert "404" in _services_warnings(events)[0]["detail"]
+    assert _of_type(events, "result")
+
+
+def test_normatives_that_did_not_load_are_reported():
+    builder = _FakeBuilder(result={**GENERATED, "service_normatives_loaded": False})
+
+    events = _collect(
+        **_project_less(builder=builder, existing_buildings_declined=True, territory_id=47)
+    )
+
+    warnings = _services_warnings(events)
+    assert len(warnings) == 1
+    assert "47" in warnings[0]["message"]
+
+
+def test_scenario_mode_takes_the_region_from_the_scenario():
+    builder = _FakeBuilder(result={**GENERATED, "service_normatives_loaded": False})
+    urban_api = _FakeUrbanApi()
+
+    events = _collect(builder=builder, project_id=120, urban_api=urban_api)
+
+    assert urban_api.calls == []
+    assert builder.calls[0]["territory_id"] is None
+    assert _services_warnings(events) == []
