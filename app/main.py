@@ -7,6 +7,7 @@ from fastmcp.utilities.lifespan import combine_lifespans
 from loguru import logger
 from starlette.responses import RedirectResponse
 
+from app.__version__ import APP_VERSION
 from app.a2a_server import register_a2a_routes
 from app.dependencies import (
     build_keycloak_token_config,
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GenBuilder API",
-    version="0.1.1",
+    version=APP_VERSION,
     lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
 )
 

@@ -6,7 +6,7 @@
 
 - **Базовый URL:** `<host>` (роутеры подключены без префикса, напр. `https://api.example.com`)
 - **Формат:** JSON для классических эндпоинтов; `text/event-stream` (SSE) для чат-режима
-- **Версия:** GenBuilder API `0.1.1`
+- **Версия:** GenBuilder API `0.1.2`
 
 ---
 
@@ -693,7 +693,31 @@ Body (`ScenarioBody`): `targets_by_zone`, `generation_parameters`.
 нормативам в жилых кварталах ставятся сервисы; без него сервисов нет),
 `existing_buildings` (опц., GeoJSON существующих
 зданий — исключаются из генерации), `targets_by_zone`, `generation_parameters`.
-→ `FeatureCollection`.
+Неизвестные поля body отклоняются с `422`, а не игнорируются.
+
+→ `FeatureCollection` с верхнеуровневым объектом `service_diagnostics`:
+
+```json
+{
+  "territory_id_provided": true,
+  "territory_id": 1,
+  "normatives_found": 12,
+  "services_requested": 8,
+  "services_placed": 6,
+  "services_unplaced": 2,
+  "service_buildings_placed": 9,
+  "capacity_requested": 2100,
+  "capacity_placed": 1850,
+  "capacity_unplaced": 250,
+  "status": "partial",
+  "warning": "не удалось полностью разместить 2 из 8 требуемых типов сервисов"
+}
+```
+
+`services_requested/placed/unplaced` считают цели вида «тип сервиса + зона»;
+`service_buildings_placed` — фактически записанные в `features` здания сервисов.
+Статус и `warning` явно различают отсутствие `territory_id`, недоступный/пустой
+набор нормативов, нулевую расчётную потребность и нехватку места.
 
 ### `POST /generate/by_blocks`
 Генерация по конкретным функциональным зонам сценария. Query: `scenario_id`,

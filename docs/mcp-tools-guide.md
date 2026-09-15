@@ -8,7 +8,7 @@
 
 - **Транспорт:** MCP streamable-HTTP (JSON-RPC 2.0 поверх HTTP/SSE)
 - **Путь:** `/mcp`
-- **Версия:** GenBuilder API `0.1.1`
+- **Версия:** GenBuilder API `0.1.2`
 
 > ✅ **Статус на проде: живой.** MCP-сервер реализован на ветке `feat/mcp_tools`
 > (`app/mcp_server/`), которая ещё **не смержена** в `main`/`dev`, но уже
@@ -97,8 +97,12 @@ Authorization: Bearer <keycloak_access_token>
 | `generation_parameters` | object | ⛔ | Как выше |
 
 **Auth:** не требуется.
-**Возвращает:** GeoJSON `FeatureCollection`.
-**Ошибка:** `-32602 Invalid params`, если геометрия блока отсутствует, не `Polygon`/`MultiPolygon` или нет `zone`.
+**Возвращает:** GeoJSON `FeatureCollection` с `service_diagnostics`: передан ли
+`territory_id`, число нормативов и целей сервисов, число полностью размещённых и
+неразмещённых целей, число фактических зданий сервисов, а также `status` и
+человекочитаемый `warning`.
+**Ошибка:** `-32602 Invalid params`, если геометрия блока отсутствует, не
+`Polygon`/`MultiPolygon`, нет `zone` или передано неизвестное поле.
 
 ### 3.3. `generate_by_blocks`
 
