@@ -10,6 +10,8 @@ from shapely.geometry import shape
 from app.api.api_error_handler import APIHandler
 from app.exceptions.http_exception_wrapper import http_exception
 
+NORMATIVE_COLUMNS = ["service_id", "service_name", "service_capacity"]
+
 
 class UrbanDBAPI:
     def __init__(self, config: Config):
@@ -100,23 +102,57 @@ class UrbanDBAPI:
         logger.info(f"Territory id for scenario {scenario_id} collected.")
         return territory_id
     
-    async def get_normatives_for_territory(self, territory_id: int, token: str):
+    async def get_region_by_project(self, project_id: int | str, token: str) -> int:
+        """Region of a project: Urban API keeps it as the project's ``territory``."""
+        api_url = f"{self.base_url}/api/v1/projects/{project_id}"
+        logger.info(f"Fetching project region from API: {api_url}")
+        headers = self._make_headers(token=token)
+        async with aiohttp.ClientSession() as session:
+            json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
+        region_id = (json_data.get("territory") or {}).get("id")
+        if not region_id:
+            raise http_exception(404, f"No territory id found for project {project_id}")
+        return region_id
+
+    async def get_normatives_for_territory(self, territory_id: int, token: Optional[str] = None):
+        """Service capacity normatives per 1000 residents of a territory.
+
+        The endpoint is public, so the file mode calls it without a token. A territory
+        without normatives gives an empty frame with the same columns.
+        """
         api_url = f"{self.base_url}/api/v1/territory/{territory_id}/normatives?last_only=true&include_child_territories=false&cities_only=false"
         logger.info(f"Fetching service normatives from API: {api_url}")
-        headers = {'Authorization': f'Bearer {token}'}
+        headers = self._make_headers(token=token) if token else {}
         async with aiohttp.ClientSession() as session:
             json_data = await self.handler.request("GET", api_url, session=session, headers=headers, expect_json=True)
         service_normatives = []
-        for service in json_data:
-            service_data = service.get("service_type")
+        for service in json_data or []:
+            service_data = service.get("service_type") or {}
             service_id = service_data.get("id")
             service_name = service_data.get("name")
             service_capacity = service.get("services_capacity_per_1000_normative")
             record = {"service_id":service_id, "service_name":service_name, "service_capacity":service_capacity}
             service_normatives.append(record)
-        service_normatives = pd.DataFrame(service_normatives)
+        service_normatives = pd.DataFrame(service_normatives, columns=NORMATIVE_COLUMNS)
+        received_count = len(service_normatives)
         service_normatives.dropna(subset=['service_capacity'], inplace=True)
-        logger.info(f"Normatives for territory {territory_id} collected.")
+        dropped_count = received_count - len(service_normatives)
+        if dropped_count:
+            logger.warning(
+                "Territory {} has {} service normatives without "
+                "services_capacity_per_1000_normative; they were ignored",
+                territory_id,
+                dropped_count,
+            )
+        if service_normatives.empty:
+            logger.warning("для территории {} нет нормативов", territory_id)
+        else:
+            logger.info(
+                "Normatives for territory {} collected: {} usable of {} received",
+                territory_id,
+                len(service_normatives),
+                received_count,
+            )
         return service_normatives
 
     async def get_scenario_functional_zones(self, scenario_id: int, source:str, year: int, token: str):

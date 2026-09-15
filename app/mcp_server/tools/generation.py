@@ -66,6 +66,7 @@ _RESULT_DOC = f"""RETURNS: {{
   layer: {{ name, title, role, url (/files/buildings/<result_id>, needs the
     same bearer token), filename, mime_type, source_service }} or null,
   summary: see below,
+  service_diagnostics: service normative and placement summary when available,
   seed: the random seed used (pass it back to reproduce the layout),
   applied_parameters: {{ generation_parameters (effective, after overrides),
     targets_by_zone }},
@@ -177,6 +178,8 @@ async def _generation_result(
         "applied_parameters": applied_parameters,
         "duration_s": round(time.perf_counter() - started, 2),
     }
+    if isinstance(fc.get("service_diagnostics"), dict):
+        result["service_diagnostics"] = fc["service_diagnostics"]
 
     storage = optional_object_storage()
     stored = False
@@ -380,6 +383,9 @@ PARAMETERS
   blocks before generation, so nothing is generated on top of them, and they
   come back in the response marked `is_excluded: true`. Properties are
   optional — the geometry is what matters.
+- territory_id (int, optional): UrbanDB territory (usually the project
+   region) whose service normatives place services (schools, kindergartens…)
+   in residential blocks. Omit it and no services are generated.
 - generation_parameters (object, optional): low-level generation parameter
   overrides.
 {_RESULT_PARAMS_DOC}
@@ -408,6 +414,10 @@ async def generate_by_territory(
         Optional[dict[str, Any]],
         "GeoJSON FeatureCollection of existing building footprints to exclude from generation.",
     ] = None,
+    territory_id: Annotated[
+        Optional[int],
+        "UrbanDB territory (region) id whose service normatives place services; omit to skip services.",
+    ] = None,
     generation_parameters: Annotated[
         Optional[dict[str, Any]], "Generation parameter overrides."
     ] = None,
@@ -421,6 +431,7 @@ async def generate_by_territory(
         TerritoryRequest,
         blocks=blocks,
         existing_buildings=existing_buildings,
+        territory_id=territory_id,
         targets_by_zone=targets_by_zone,
         generation_parameters=_with_seed(generation_parameters, seed),
     )

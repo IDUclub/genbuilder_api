@@ -92,13 +92,16 @@ def merge_generation_result(result: dict | None) -> dict:
     generated_fc = _get_generated_buildings(result)
     selected_fc = _get_selected_features(result)
 
-    return {
+    response = {
         "type": "FeatureCollection",
         "features": [
             *(generated_fc.get("features") or []),
             *_build_excluded_features(selected_fc),
         ],
     }
+    if isinstance(result, dict) and isinstance(result.get("service_diagnostics"), dict):
+        response["service_diagnostics"] = result["service_diagnostics"]
+    return response
 
 
 def _zone_type_name(feature: dict) -> Optional[str]:
@@ -209,7 +212,8 @@ async def generate_by_territory(payload: TerritoryRequest) -> dict:
     This is the project-less mode: there is no scenario to pull existing
     buildings from, so the caller may upload them (``existing_buildings``) —
     their footprints are cut out of the blocks and they come back in the
-    response marked ``is_excluded``.
+    response marked ``is_excluded``. Services need the region's normatives, so
+    they are placed only when ``territory_id`` names that region.
     """
     result = await builder.run(
         blocks=payload.blocks,
@@ -220,6 +224,7 @@ async def generate_by_territory(payload: TerritoryRequest) -> dict:
             if payload.existing_buildings is not None
             else None
         ),
+        territory_id=payload.territory_id,
     )
     return merge_generation_result(result)
 

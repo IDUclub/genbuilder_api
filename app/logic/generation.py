@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import asyncio
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 
+import aiohttp
 import geopandas as gpd
 import pandas as pd
 from fastapi import HTTPException
@@ -54,6 +55,107 @@ class Genbuilder:
         self.buildings_generation_parameters = buildings_params_provider
         self.physical_objects_service = physical_objects_service
 
+    @staticmethod
+    def _base_service_diagnostics(territory_id: Optional[int]) -> dict[str, Any]:
+        return {
+            "territory_id_provided": territory_id is not None,
+            "territory_id": territory_id,
+            "normatives_found": 0,
+            "services_requested": 0,
+            "services_placed": 0,
+            "services_unplaced": 0,
+            "service_buildings_placed": 0,
+            "capacity_requested": 0.0,
+            "capacity_placed": 0.0,
+            "capacity_unplaced": 0.0,
+            "status": "pending",
+            "warning": None,
+        }
+
+    async def _load_service_normatives_with_diagnostics(
+        self,
+        scenario_id: Optional[int],
+        territory_id: Optional[int],
+        token: Optional[str],
+    ) -> tuple[Optional[pd.DataFrame], dict[str, Any]]:
+        """Load normatives and retain a caller-visible reason when they are absent.
+
+        A scenario names its own region, and a failure there stays fatal. In the file
+        mode the caller names the region; if it cannot be loaded, generation goes on
+        without services.
+        """
+        diagnostics = self._base_service_diagnostics(territory_id)
+        if scenario_id is not None:
+            region_id = await self.urban_api.get_territory_by_scenario(scenario_id, token)
+            diagnostics["territory_id"] = region_id
+            normatives = await self.urban_api.get_normatives_for_territory(region_id, token)
+        elif territory_id is not None:
+            region_id = territory_id
+            try:
+                normatives = await self.urban_api.get_normatives_for_territory(region_id, token)
+            except (HTTPException, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                logger.warning(
+                    "Genbuilder.run: service normatives for territory_id={} are not loaded, "
+                    "services are skipped: {}",
+                    region_id,
+                    exc,
+                )
+                detail = getattr(exc, "detail", None) or str(exc)
+                status = (
+                    "territory_not_found"
+                    if isinstance(exc, HTTPException) and exc.status_code == 404
+                    else "normatives_unavailable"
+                )
+                diagnostics.update(
+                    status=status,
+                    warning=(
+                        f"не удалось загрузить нормативы для территории "
+                        f"{region_id}: {detail}"
+                    ),
+                )
+                return None, diagnostics
+        else:
+            warning = "territory_id не передан; сервисы не генерировались"
+            logger.warning(
+                "Genbuilder.run: neither scenario_id nor territory_id is set, "
+                "service normatives are not loaded"
+            )
+            diagnostics.update(
+                status="territory_not_provided",
+                warning=warning,
+            )
+            return None, diagnostics
+        diagnostics["normatives_found"] = len(normatives)
+        if normatives.empty:
+            warning = f"для территории {region_id} нет нормативов"
+            logger.warning(
+                "Genbuilder.run: {}, services are skipped", warning
+            )
+            diagnostics.update(
+                status="normatives_not_found",
+                warning=warning,
+            )
+            return None, diagnostics
+        diagnostics["status"] = "ready"
+        logger.info(
+            "Genbuilder.run: loaded {} service normatives for territory_id={}",
+            len(normatives),
+            region_id,
+        )
+        return normatives, diagnostics
+
+    async def _load_service_normatives(
+        self,
+        scenario_id: Optional[int],
+        territory_id: Optional[int],
+        token: Optional[str],
+    ) -> Optional[pd.DataFrame]:
+        """Backward-compatible normative loader used by focused unit tests."""
+        normatives, _ = await self._load_service_normatives_with_diagnostics(
+            scenario_id, territory_id, token
+        )
+        return normatives
+
     async def run(
         self,
         targets_by_zone: Dict[str, Dict[str, float]],
@@ -67,7 +169,10 @@ class Genbuilder:
         buildings_parameters_override: dict | None = None,
         physical_object_ids: Optional[list[int]] = None,
         existing_buildings: Optional[dict] = None,
+        territory_id: Optional[int] = None,
     ):
+        service_diagnostics = self._base_service_diagnostics(territory_id)
+
         def build_feature_collection_response(
             buildings_fc: dict,
             selected_fc: dict,
@@ -75,6 +180,8 @@ class Genbuilder:
             return {
                 "generated_buildings": buildings_fc,
                 "selected_features": selected_fc,
+                "service_normatives_loaded": service_diagnostics["normatives_found"] > 0,
+                "service_diagnostics": service_diagnostics,
             }
 
         def normalize_selected_features_payload(selected: object) -> dict:
@@ -157,6 +264,10 @@ class Genbuilder:
 
         if gdf_blocks.empty:
             logger.warning("Genbuilder.run: no blocks to process, returning empty FC")
+            service_diagnostics.update(
+                status="not_processed",
+                warning="в запросе нет кварталов; сервисы не генерировались",
+            )
             empty = gpd.GeoDataFrame(
                 columns=[
                     "floors_count",
@@ -322,6 +433,13 @@ class Genbuilder:
                             "Genbuilder.run: all blocks removed after physical objects exclusion, returning empty "
                             "FC"
                         )
+                        service_diagnostics.update(
+                            status="not_processed",
+                            warning=(
+                                "после исключения существующих объектов не осталось "
+                                "кварталов; сервисы не генерировались"
+                            ),
+                        )
                         empty = gpd.GeoDataFrame(
                             columns=["geometry"],
                             geometry="geometry",
@@ -454,20 +572,11 @@ class Genbuilder:
             f"floors_avg_mixed={floors_avg_mixed}"
         )
 
-        service_normatives = None
-        if scenario_id is not None:
-            territory_id = await self.urban_api.get_territory_by_scenario(scenario_id, token)
-            service_normatives = await self.urban_api.get_normatives_for_territory(
-                territory_id, token
+        service_normatives, service_diagnostics = (
+            await self._load_service_normatives_with_diagnostics(
+                scenario_id, territory_id, token
             )
-            logger.info(
-                "Genbuilder.run: loaded service normatives for territory_id={}",
-                territory_id
-            )
-        else:
-            logger.warning(
-                "Genbuilder.run: scenario_id is None, service normatives are not loaded"
-            )
+        )
 
         res_blocks_out = res_plots = res_buildings = None
         nonres_blocks_out = nonres_plots = nonres_buildings = None
@@ -514,6 +623,40 @@ class Genbuilder:
                             service_normatives,
                             utm,
                         )
+                        service_diagnostics.update(
+                            residential_services.attrs.get("service_diagnostics", {})
+                        )
+                        if service_diagnostics["services_requested"] == 0:
+                            service_diagnostics.update(
+                                status="no_demand",
+                                warning=(
+                                    "нормативы найдены, но расчётная потребность "
+                                    "в сервисах равна нулю"
+                                ),
+                            )
+                        elif service_diagnostics["services_unplaced"] == 0:
+                            service_diagnostics.update(
+                                status="completed",
+                                warning=None,
+                            )
+                        elif service_diagnostics["service_buildings_placed"] > 0:
+                            service_diagnostics.update(
+                                status="partial",
+                                warning=(
+                                    "не удалось полностью разместить "
+                                    f"{service_diagnostics['services_unplaced']} из "
+                                    f"{service_diagnostics['services_requested']} "
+                                    "требуемых типов сервисов"
+                                ),
+                            )
+                        else:
+                            service_diagnostics.update(
+                                status="not_placed",
+                                warning=(
+                                    "сервисы запрошены по нормативам, но ни один "
+                                    "сервис не удалось разместить в кварталах"
+                                ),
+                            )
                         logger.info(
                             "Genbuilder.run: residential services generated, "
                             "count={}",
@@ -524,11 +667,27 @@ class Genbuilder:
                             "Genbuilder.run: residential services not generated "
                             "(missing normatives or buildings)"
                         )
+                        if service_normatives is not None:
+                            service_diagnostics.update(
+                                status="no_demand",
+                                warning=(
+                                    "жилые здания не сгенерированы; сервисы не "
+                                    "запрашивались"
+                                ),
+                            )
                 else:
                     logger.info(
                         "Genbuilder.run: residential generation skipped "
                         "(no blocks or la_target <= 0)"
                     )
+                    if service_normatives is not None:
+                        service_diagnostics.update(
+                            status="no_demand",
+                            warning=(
+                                "нет жилых кварталов или целевого населения; "
+                                "сервисы не запрашивались"
+                            ),
+                        )
                 if len(nonres_blocks) > 0 and total_nonres_cov_target > 0:
                     logger.info(
                         "Genbuilder.run: starting non-residential generation pipeline"

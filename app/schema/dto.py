@@ -145,6 +145,8 @@ class ScenarioBody(BaseModel):
 
 
 class TerritoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     blocks: BlockFeatureCollection = Field(
         ...,
         description=(
@@ -152,6 +154,16 @@ class TerritoryRequest(BaseModel):
             "Each Feature must include `properties.zone`."
         ),
         json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
+    )
+
+    territory_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "UrbanDB territory (usually the project region) whose service normatives "
+            "place services in residential blocks. Without it no services are generated."
+        ),
+        json_schema_extra={"examples": [1]},
     )
 
     targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
@@ -302,6 +314,73 @@ class TerritoryRequest(BaseModel):
         return self
 
 
+class ServiceGenerationDiagnostics(BaseModel):
+    """Why service generation did or did not produce output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    territory_id_provided: bool = Field(
+        ...,
+        description="Whether the caller supplied territory_id in the request.",
+    )
+    territory_id: Optional[int] = Field(
+        default=None,
+        description="Territory whose service normatives were requested.",
+    )
+    normatives_found: int = Field(
+        default=0,
+        ge=0,
+        description="Number of usable service normatives found for the territory.",
+    )
+    services_requested: int = Field(
+        default=0,
+        ge=0,
+        description="Number of positive service-capacity targets calculated from the normatives.",
+    )
+    services_placed: int = Field(
+        default=0,
+        ge=0,
+        description="Number of service-capacity targets that were fully satisfied.",
+    )
+    services_unplaced: int = Field(
+        default=0,
+        ge=0,
+        description="Number of service-capacity targets that were not fully satisfied.",
+    )
+    service_buildings_placed: int = Field(
+        default=0,
+        ge=0,
+        description="Number of generated service-building features.",
+    )
+    capacity_requested: float = Field(
+        default=0.0,
+        ge=0,
+        description="Total service capacity requested by all calculated targets.",
+    )
+    capacity_placed: float = Field(
+        default=0.0,
+        ge=0,
+        description="Total capacity of placed service buildings.",
+    )
+    capacity_unplaced: float = Field(
+        default=0.0,
+        ge=0,
+        description="Requested capacity that could not be placed.",
+    )
+    status: str = Field(
+        ...,
+        description=(
+            "Machine-readable result: pending, territory_not_provided, "
+            "territory_not_found, normatives_unavailable, normatives_not_found, "
+            "ready, no_demand, completed, partial, not_placed, or not_processed."
+        ),
+    )
+    warning: Optional[str] = Field(
+        default=None,
+        description="Human-readable reason for skipped or incomplete service generation.",
+    )
+
+
 class BuildingFeatureCollection(BaseModel):
     type: str = Field(...)
     features: list = Field(
@@ -311,6 +390,13 @@ class BuildingFeatureCollection(BaseModel):
             "`properties` should at least contain "
             "`floors_count`, `living_area`, `functional_area`, `building_area`, "
             "`zone`; `service` is optional (else - empty list or null)."
+        ),
+    )
+    service_diagnostics: Optional[ServiceGenerationDiagnostics] = Field(
+        default=None,
+        description=(
+            "Service-generation summary. Returned by /generate/by_territory so callers "
+            "can distinguish missing normatives from placement failures."
         ),
     )
 
@@ -491,6 +577,7 @@ __all__ = [
     "ScenarioBody",
     "BlockFeatureCollection",
     "TerritoryRequest",
+    "ServiceGenerationDiagnostics",
     "BuildingFeatureCollection",
     "FunctionalZonesRequest",
     "ExistingBuildingFeature",

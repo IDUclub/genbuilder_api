@@ -25,12 +25,28 @@ BLOCKS = {
     ],
 }
 
+SERVICE_DIAGNOSTICS = {
+    "territory_id_provided": True,
+    "territory_id": 1,
+    "normatives_found": 3,
+    "services_requested": 2,
+    "services_placed": 1,
+    "services_unplaced": 1,
+    "service_buildings_placed": 1,
+    "capacity_requested": 150.0,
+    "capacity_placed": 100.0,
+    "capacity_unplaced": 50.0,
+    "status": "partial",
+    "warning": "не все сервисы размещены",
+}
+
 RESULT_FC = {
     "type": "FeatureCollection",
     "features": [
         {"type": "Feature", "properties": {"zone": "residential", "residents_number": 800}, "geometry": None},
         {"type": "Feature", "properties": {"is_excluded": True, "residents_number": 50}, "geometry": None},
     ],
+    "service_diagnostics": SERVICE_DIAGNOSTICS,
 }
 
 
@@ -127,6 +143,7 @@ def test_territory_with_explicit_targets_reports_request(monkeypatch):
     assert summary["targets_source"] == "request"
     assert summary["targets"]["residential"]["residents_deficit"] == 0
     assert "existing_buildings_preserved" not in summary
+    assert result["service_diagnostics"] == SERVICE_DIAGNOSTICS
 
 
 def test_blocks_summary_combines_per_zone_targets(monkeypatch):
