@@ -14,7 +14,7 @@
 > (`app/mcp_server/`), которая ещё **не смержена** в `main`/`dev`, но уже
 > **задеплоена** на `http://10.32.1.46:8200`. Проверено вручную 2026-07-24:
 > `POST /mcp/` (`initialize`) → `200 OK` с `serverInfo: "GenBuilder MCP"`,
-> `tools/list` отдаёт все 4 тулзы ниже — идентично локальной Docker-сборке этой же
+> `tools/list` отдавал 4 тулзы (всё ниже, кроме добавленной позже `list_functional_zones`) — идентично локальной Docker-сборке этой же
 > ветки. Раньше в тот же день на этом хосте `/mcp` отдавал чистый `404` — то есть
 > прод обновляется отдельными выкатками, а не сразу при пуше в ветку; если снова
 > увидишь `404` без редиректа на `/mcp` и `/mcp/` — деплой мог откатиться или уйти
@@ -65,7 +65,49 @@ Authorization: Bearer <keycloak_access_token>
 
 Определены в [app/mcp_server/tools/generation.py](../app/mcp_server/tools/generation.py).
 
-### 3.1. `generate_by_scenario`
+Рекомендуемый порядок работы агента: `list_functional_zones` →
+`estimate_max_residents_by_blocks` (реалистичные targets) → `generate_by_blocks` /
+`generate_by_scenario`.
+
+> **Отличия MCP от REST.**
+> - MCP **не подставляет дефолтные targets молча**. Нужно либо передать
+>   `targets_by_zone`, либо явно указать `use_defaults: true`. Иначе вернётся `-32602`.
+> - Каждый результат генерации содержит `summary` (см. [3.6](#36-summary-в-ответе-генерации)).
+
+### 3.1. `list_functional_zones`
+
+Список функциональных зон сценария: id, тип и площадь. Нужен, чтобы выбрать
+`functional_zone_ids` для `generate_by_blocks` / `estimate_max_residents_by_blocks`.
+
+| Параметр | Тип | Обяз. | Описание |
+|---|---|---|---|
+| `scenario_id` | int | ✅ | ID проекта/сценария |
+| `year` | int | ✅ | Год данных функциональных зон |
+| `source` | string | ✅ | Источник зон, напр. `"OSM"`, `"PZZ"`, `"User"` |
+| `functional_zone_types` | list[string] | ⛔ | Оставить только зоны этих типов |
+
+**Auth:** нужен bearer-токен. Read-only.
+**Возвращает:**
+
+```json
+{
+  "scenario_id": 843, "year": 2025, "source": "User",
+  "zones": [
+    { "functional_zone_id": 6679027, "functional_zone_type": "residential_midrise",
+      "generation_zone": "residential", "name": null,
+      "geometry_type": "Polygon", "area_m2": 84210.5 }
+  ],
+  "totals_by_type": { "residential_midrise": { "count": 1, "area_m2": 84210.5 } }
+}
+```
+
+`generation_zone` — каноническая зона, в которую тип зоны превращается при
+генерации (`residential_*` → `residential`, `mixed_use` → `business`). Площадь
+считается в локальной UTM-проекции. Пустой `zones` означает, что для этих
+year/source зон нет. Какие year/source вообще доступны, gateway не отдаёт —
+их нужно знать заранее.
+
+### 3.2. `generate_by_scenario`
 
 Генерация зданий по всей территории сценария UrbanDB.
 
@@ -75,31 +117,38 @@ Authorization: Bearer <keycloak_access_token>
 | `year` | int | ✅ | Год данных функциональных зон |
 | `source` | string | ✅ | Источник зон, напр. `"OSM"`, `"PZZ"`, `"User"` |
 | `functional_zone_types` | list[string] | ✅ | Типы зон для генерации, напр. `["residential", "business", "industrial"]` |
+| `targets_by_zone` | object | ✅* | Спрос по зонам (residents / coverage_area / floors_avg / density_scenario / default_floor_group). *Обязателен, если не задан `use_defaults: true` |
+| `use_defaults` | bool | ⛔ | `true` — явно генерировать на дефолтных targets сервиса. Использовать только с согласия пользователя |
+| `preserve_existing_buildings` | bool | ⛔ | `true` — сохранить существующие здания сценария: они вырезаются из территории и возвращаются с `is_excluded: true`. Если здания не удалось загрузить, генерация **не запускается** (`-32603`) |
 | `physical_object_id` | list[int] | ⛔ | Id физ. объектов, исключить из территории |
-| `targets_by_zone` | object | ⛔ | Спрос по зонам (residents / coverage_area / floors_avg / density_scenario / default_floor_group). Без указания — дефолты сервиса |
 | `generation_parameters` | object | ⛔ | Низкоуровневые оверрайды генерации (напр. `{"rectangle_finder_step": 5}`) |
 
 **Auth:** нужен bearer-токен.
-**Возвращает:** GeoJSON `FeatureCollection` сгенерированных + исключённых зданий
+**Возвращает:** GeoJSON `FeatureCollection` сгенерированных и исключённых зданий
 (в `properties` каждой фичи — `floors_count`, `living_area`, `functional_area`,
-`building_area`, `zone`, `service`).
+`building_area`, `zone`, `service`) + `summary`.
 
-### 3.2. `generate_by_territory`
+Зданием считается физ. объект с записью `building` или с типом «жилой дом»
+(`physical_object_type_id = 4`) и полигональной геометрией. Точечные здания
+вырезать из квартала нельзя, поэтому они пропускаются.
+
+### 3.3. `generate_by_territory`
 
 Генерация по присланным полигонам блоков — без привязки к сценарию.
 
 | Параметр | Тип | Обяз. | Описание |
 |---|---|---|---|
 | `blocks` | GeoJSON FeatureCollection | ✅ | `Polygon`/`MultiPolygon`-фичи, у каждой заполнен `properties.zone` (напр. `"residential"`) |
+| `targets_by_zone` | object | ✅* | Как выше, *или `use_defaults: true` |
+| `use_defaults` | bool | ⛔ | Как выше |
 | `existing_buildings` | GeoJSON FeatureCollection | ⛔ | Пятна уже стоящих зданий — вырезаются из блоков до генерации и возвращаются с `is_excluded: true`; `properties` необязательны |
-| `targets_by_zone` | object | ⛔ | Как выше |
 | `generation_parameters` | object | ⛔ | Как выше |
 
 **Auth:** не требуется.
-**Возвращает:** GeoJSON `FeatureCollection`.
-**Ошибка:** `-32602 Invalid params`, если геометрия блока отсутствует, не `Polygon`/`MultiPolygon` или нет `zone`.
+**Возвращает:** GeoJSON `FeatureCollection` + `summary` (без `existing_buildings_preserved`).
+**Ошибка:** `-32602 Invalid params`, если нет ни `targets_by_zone`, ни `use_defaults: true`, либо геометрия блока отсутствует, не `Polygon`/`MultiPolygon` или нет `zone`.
 
-### 3.3. `generate_by_blocks`
+### 3.4. `generate_by_blocks`
 
 Генерация по выбранным functional zone id внутри сценария — свои targets на
 каждую зону, один прогон на зону (или на часть полигона, если зона — MultiPolygon).
@@ -108,25 +157,69 @@ Authorization: Bearer <keycloak_access_token>
 |---|---|---|---|
 | `scenario_id`, `year`, `source`, `functional_zone_types` | — | ✅ | Как в `generate_by_scenario` |
 | `zones` | list[object] | ✅ | `[{ functional_zone_id, targets_by_zone, generation_parameters? }, ...]` — по записи на зону |
+| `preserve_existing_buildings` | bool | ⛔ | Сохранить существующие здания внутри запрошенных зон (как выше) |
 | `physical_object_id` | list[int] | ⛔ | Как выше |
 
 **Auth:** нужен bearer-токен.
-**Возвращает:** GeoJSON `FeatureCollection`, объединяющий здания всех запрошенных зон.
+**Возвращает:** GeoJSON `FeatureCollection`, объединяющий здания всех запрошенных
+зон, + `summary`. Targets в `summary` — сумма targets по всем зонам.
 **Ошибки:** `-32602`, если `functional_zone_id` не существует для этого
-сценария/года/источника, либо геометрия зоны не Polygon/MultiPolygon.
+сценария/года/источника, либо геометрия зоны не Polygon/MultiPolygon; `-32603`,
+если при `preserve_existing_buildings: true` не удалось загрузить здания.
 
-### 3.4. `estimate_max_residents_by_blocks`
+### 3.5. `estimate_max_residents_by_blocks`
 
-Оценка вместимости (макс. число жителей) по зонам на дефолтных
-(максимально-плотных) targets — без полного построения застройки.
+Оценка вместимости зон на дефолтных (максимально плотных) targets — без
+полного построения застройки.
 
 | Параметр | Тип | Обяз. | Описание |
 |---|---|---|---|
 | `scenario_id`, `year`, `source`, `functional_zone_types` | — | ✅ | Как выше |
 | `functional_zone_ids` | list[int] | ✅ | Зоны для оценки |
+| `preserve_existing_buildings` | bool | ⛔ | `true` — сначала вырезать существующие здания, чтобы оценка показала **дополнительную** вместимость свободной земли |
 
 **Auth:** нужен bearer-токен. Read-only (`annotations.readOnlyHint: true`).
-**Возвращает:** объект `{ <functional_zone_id>: <residents_count> }`.
+**Возвращает:**
+
+```json
+{
+  "zones": [
+    { "functional_zone_id": 6679027, "functional_zone_type": "residential",
+      "zone_area_m2": 84210.5, "max_residents": 2350, "max_living_area": 70500.0,
+      "existing_buildings_count": 12, "existing_living_area": 18400.0, "existing_residents": 610 }
+  ],
+  "totals": { "zone_area_m2": 84210.5, "max_residents": 2350, "max_living_area": 70500.0,
+              "existing_buildings_count": 12, "existing_living_area": 18400.0, "existing_residents": 610 },
+  "existing_buildings_preserved": false
+}
+```
+
+Поля `existing_*` заполняются всегда, независимо от флага. REST-эндпоинт
+`/generate/max_residents_by_blocks` по-прежнему отдаёт старый формат
+`{ <functional_zone_id>: <residents_count> }`.
+
+### 3.6. `summary` в ответе генерации
+
+```json
+"summary": {
+  "buildings": 42, "living_area_total": 61234.5, "residents_total": 2040,
+  "buildings_by_zone": { "residential": 30, "business": 12 },
+  "residents_by_zone": { "residential": 2040, "business": 0 },
+  "excluded_buildings": 7, "existing_living_area": 9800.0, "existing_residents": 320,
+  "targets": {
+    "residential": { "target_residents": 3000, "achieved_residents": 2040, "residents_deficit": 960 },
+    "business": { "target_functional_area": 20000.0, "achieved_functional_area": 18500.0, "functional_area_deficit": 1500.0 }
+  },
+  "targets_source": "request",
+  "existing_buildings_preserved": true
+}
+```
+
+- Поля `buildings`, `*_total` и `*_by_zone` считаются **только по новым** зданиям.
+  Исключённые (существующие) здания учитываются отдельно — в `excluded_buildings` и `existing_*`.
+- `targets` содержит плановые и фактические значения и дефицит по каждой зоне
+  (дефицит не бывает отрицательным).
+- `targets_source` — откуда взяты targets: `"request"` или `"service_defaults"`.
 
 ---
 
@@ -164,8 +257,11 @@ async def main():
                 "year": 2025,
                 "source": "User",
                 "functional_zone_types": ["residential", "business", "industrial"],
+                "targets_by_zone": {"residents": {"residential": 3000}},
+                "preserve_existing_buildings": True,
             },
         )
+        print(result.structured_content["summary"])
 
 asyncio.run(main())
 ```
@@ -201,7 +297,9 @@ curl -s -X POST http://10.32.1.46:8200/mcp/ \
         "scenario_id": 843,
         "year": 2025,
         "source": "User",
-        "functional_zone_types": ["residential", "business", "industrial"]
+        "functional_zone_types": ["residential", "business", "industrial"],
+        "use_defaults": true,
+        "preserve_existing_buildings": true
       }
     }
   }'
@@ -234,8 +332,8 @@ JSON-RPC коды, см. [app/mcp_server/exceptions.py](../app/mcp_server/except
 | Код | Когда |
 |---|---|
 | `-32002` | `AUTH_TOKEN_EXPIRED` — токен отсутствует/просрочен/отклонён UrbanDB (HTTP 401/403 от апстрима). Взять свежий токен и повторить — **не** ретраить тем же токеном |
-| `-32602` | Invalid params — клиентская ошибка (HTTP 4xx от оркестрации: не найден сценарий/зона, невалидная геометрия и т.п.) |
-| `-32603` | Internal error — серверная ошибка (HTTP 5xx или необработанное исключение) |
+| `-32602` | Invalid params — клиентская ошибка (HTTP 4xx от оркестрации: не найден сценарий/зона, невалидная геометрия и т.п.), а также генерация без `targets_by_zone` и без `use_defaults: true` |
+| `-32603` | Internal error — серверная ошибка (HTTP 5xx или необработанное исключение), в т.ч. `Failed to load existing buildings` при `preserve_existing_buildings: true` (UrbanDB недоступен) |
 
 ---
 

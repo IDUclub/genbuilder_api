@@ -18,6 +18,10 @@ from app.mcp_server.tools.generation import generation_mcp
 _INSTRUCTIONS = """GenBuilder — generate building layouts for urban blocks and UrbanDB
 scenarios.
 
+START WITH list_functional_zones (scenario_id, year, source) to see which
+functional zones exist, their ids, types and areas. An empty list means no
+zones for that year/source — do not generate against it.
+
 THREE WAYS TO GENERATE:
 1. generate_by_scenario: generate across a whole scenario's territory. Needs
    scenario_id, year, source, functional_zone_types. Requires the caller's
@@ -27,8 +31,23 @@ THREE WAYS TO GENERATE:
 3. generate_by_territory: generate for caller-supplied GeoJSON block
    polygons, no scenario needed. No auth required.
 
-Use estimate_max_residents_by_blocks to get a capacity estimate (max
-residents per zone) without producing a full building layout.
+TARGETS: generate_by_scenario / generate_by_territory require targets_by_zone.
+Pass use_defaults=true only if the user explicitly accepts the service
+default targets; the result's summary.targets_source says which were used.
+
+EXISTING BUILDINGS: in scenario modes pass preserve_existing_buildings=true
+unless the site is greenfield — existing buildings are then kept and nothing
+is generated on top of them. If they can't be loaded the tool fails instead
+of silently ignoring them.
+
+RESULTS: every generation result carries `summary` (buildings, residents,
+living area, per-zone breakdown, excluded buildings, and target vs achieved
+with the deficit per zone). Ground your answer on it instead of counting
+features.
+
+Use estimate_max_residents_by_blocks to get a capacity estimate (zone area,
+max residents, max living area, existing buildings per zone) without
+producing a full building layout.
 
 If a tool returns AUTH_TOKEN_EXPIRED, ask for a fresh bearer token and
 retry — do not reuse the rejected one."""

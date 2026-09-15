@@ -65,6 +65,7 @@ from app.logic.geo_layers import (
     geo_layer_to_file_part,
     object_key,
 )
+from app.logic.generation_summary import summarize_buildings
 from app.schema.dto import BlockFeatureCollection
 from app.logic.zone_taxonomy import normalize_zone
 
@@ -188,27 +189,6 @@ def _request_metadata(
     return metadata
 
 
-def _summarize_buildings(features: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compact totals over generated building features, for grounding + the UI."""
-    total = len(features)
-    living_area = 0.0
-    residents = 0
-    by_zone: dict[str, int] = {}
-    for feature in features:
-        props = feature.get("properties") or {}
-        living_area += float(props.get("living_area") or 0.0)
-        residents += int(props.get("residents_number") or 0)
-        zone = props.get("zone")
-        if zone:
-            by_zone[zone] = by_zone.get(zone, 0) + 1
-    return {
-        "buildings": total,
-        "living_area_total": round(living_area, 1),
-        "residents_total": residents,
-        "buildings_by_zone": by_zone,
-    }
-
-
 def _merge_result(result: dict | None) -> tuple[dict, dict]:
     """Split a Genbuilder.run result into (merged FeatureCollection, summary)."""
     result = result if isinstance(result, dict) else {}
@@ -220,7 +200,7 @@ def _merge_result(result: dict | None) -> tuple[dict, dict]:
         "type": "FeatureCollection",
         "features": [*gen_features, *sel_features],
     }
-    return merged, _summarize_buildings(gen_features)
+    return merged, summarize_buildings(gen_features)
 
 
 async def stream_generation_chat(
