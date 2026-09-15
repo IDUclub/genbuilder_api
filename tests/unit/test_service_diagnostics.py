@@ -42,6 +42,14 @@ def test_service_summary_counts_fulfilled_and_unfulfilled_targets():
         "capacity_requested": 150.0,
         "capacity_placed": 120.0,
         "capacity_unplaced": 30.0,
+        "unplaced_no_template": 0,
+        "unplaced_no_space": 1,
+        "unplaced_site_limit": 0,
+        "unplaced_by_reason": {
+            "no_template": [],
+            "no_space": ["Детский сад"],
+            "site_limit": [],
+        },
     }
 
 
@@ -69,6 +77,8 @@ def test_response_model_keeps_service_diagnostics():
 
     assert payload.service_diagnostics is not None
     assert payload.service_diagnostics.status == "territory_not_provided"
+    assert payload.service_diagnostics.unplaced_no_template == 0
+    assert payload.service_diagnostics.unplaced_by_reason["no_template"] == []
 
 
 def test_openapi_exposes_strict_territory_contract_and_diagnostics():
@@ -80,7 +90,11 @@ def test_openapi_exposes_strict_territory_contract_and_diagnostics():
         "BuildingFeatureCollection"
     ]
 
-    assert schema["info"]["version"] == "0.1.2"
+    assert schema["info"]["version"] == "0.1.3"
     assert territory_request["additionalProperties"] is False
     assert "territory_id" in territory_request["properties"]
     assert "service_diagnostics" in generation_response["properties"]
+    diagnostics = schema["components"]["schemas"]["ServiceGenerationDiagnostics"]
+    assert "unplaced_no_template" in diagnostics["properties"]
+    assert "unplaced_no_space" in diagnostics["properties"]
+    assert "unplaced_site_limit" in diagnostics["properties"]

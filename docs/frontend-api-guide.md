@@ -6,7 +6,7 @@
 
 - **Базовый URL:** `<host>` (роутеры подключены без префикса, напр. `https://api.example.com`)
 - **Формат:** JSON для классических эндпоинтов; `text/event-stream` (SSE) для чат-режима
-- **Версия:** GenBuilder API `0.1.2`
+- **Версия:** GenBuilder API `0.1.3`
 
 ---
 
@@ -719,19 +719,30 @@ Body (`ScenarioBody`): `targets_by_zone`, `generation_parameters`.
   "services_requested": 8,
   "services_placed": 6,
   "services_unplaced": 2,
+  "unplaced_no_template": 1,
+  "unplaced_no_space": 1,
+  "unplaced_site_limit": 0,
+  "unplaced_by_reason": {
+    "no_template": ["Библиотека"],
+    "no_space": ["Школа"],
+    "site_limit": []
+  },
   "service_buildings_placed": 9,
   "capacity_requested": 2100,
   "capacity_placed": 1850,
   "capacity_unplaced": 250,
   "status": "partial",
-  "warning": "не удалось полностью разместить 2 из 8 требуемых типов сервисов"
+  "warning": "не удалось полностью разместить 2 из 8 требуемых типов сервисов (нет шаблона: 1; не хватило места: 1; достигнут лимит размещения: 0)"
 }
 ```
 
 `services_requested/placed/unplaced` считают цели вида «тип сервиса + зона»;
 `service_buildings_placed` — фактически записанные в `features` здания сервисов.
-Статус и `warning` явно различают отсутствие `territory_id`, недоступный/пустой
-набор нормативов, нулевую расчётную потребность и нехватку места.
+Поля `unplaced_no_template`, `unplaced_no_space`, `unplaced_site_limit` и
+`unplaced_by_reason` отдельно показывают отсутствие шаблона здания, нехватку
+свободной площади и достижение лимита размещений на квартал. Статус и `warning`
+также явно различают отсутствие `territory_id`, недоступный/пустой набор
+нормативов и нулевую расчётную потребность.
 
 ### `POST /generate/by_blocks`
 Генерация по конкретным функциональным зонам сценария. Query: `scenario_id`,

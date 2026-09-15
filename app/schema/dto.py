@@ -347,6 +347,29 @@ class ServiceGenerationDiagnostics(BaseModel):
         ge=0,
         description="Number of service-capacity targets that were not fully satisfied.",
     )
+    unplaced_no_template: int = Field(
+        default=0,
+        ge=0,
+        description="Unfulfilled service targets for which no building template exists.",
+    )
+    unplaced_no_space: int = Field(
+        default=0,
+        ge=0,
+        description="Unfulfilled service targets for which no suitable free area was found.",
+    )
+    unplaced_site_limit: int = Field(
+        default=0,
+        ge=0,
+        description="Unfulfilled service targets stopped by the per-block placement limit.",
+    )
+    unplaced_by_reason: Dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "no_template": [],
+            "no_space": [],
+            "site_limit": [],
+        },
+        description="Service names grouped by the reason their targets remain unfulfilled.",
+    )
     service_buildings_placed: int = Field(
         default=0,
         ge=0,

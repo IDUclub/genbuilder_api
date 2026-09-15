@@ -64,6 +64,14 @@ class Genbuilder:
             "services_requested": 0,
             "services_placed": 0,
             "services_unplaced": 0,
+            "unplaced_no_template": 0,
+            "unplaced_no_space": 0,
+            "unplaced_site_limit": 0,
+            "unplaced_by_reason": {
+                "no_template": [],
+                "no_space": [],
+                "site_limit": [],
+            },
             "service_buildings_placed": 0,
             "capacity_requested": 0.0,
             "capacity_placed": 0.0,
@@ -639,23 +647,38 @@ class Genbuilder:
                                 status="completed",
                                 warning=None,
                             )
-                        elif service_diagnostics["service_buildings_placed"] > 0:
-                            service_diagnostics.update(
-                                status="partial",
-                                warning=(
+                        else:
+                            failure_summary = (
+                                "нет шаблона: "
+                                f"{service_diagnostics['unplaced_no_template']}; "
+                                "не хватило места: "
+                                f"{service_diagnostics['unplaced_no_space']}; "
+                                "достигнут лимит размещения: "
+                                f"{service_diagnostics['unplaced_site_limit']}"
+                            )
+                            if service_diagnostics["service_buildings_placed"] > 0:
+                                status = "partial"
+                                warning = (
                                     "не удалось полностью разместить "
                                     f"{service_diagnostics['services_unplaced']} из "
                                     f"{service_diagnostics['services_requested']} "
-                                    "требуемых типов сервисов"
-                                ),
-                            )
-                        else:
-                            service_diagnostics.update(
-                                status="not_placed",
-                                warning=(
+                                    "требуемых типов сервисов "
+                                    f"({failure_summary})"
+                                )
+                            else:
+                                status = "not_placed"
+                                warning = (
                                     "сервисы запрошены по нормативам, но ни один "
-                                    "сервис не удалось разместить в кварталах"
-                                ),
+                                    "сервис не удалось разместить в кварталах "
+                                    f"({failure_summary})"
+                                )
+                            service_diagnostics.update(
+                                status=status,
+                                warning=warning,
+                            )
+                            logger.warning(
+                                "Genbuilder.run: incomplete service placement: {}",
+                                warning,
                             )
                         logger.info(
                             "Genbuilder.run: residential services generated, "
