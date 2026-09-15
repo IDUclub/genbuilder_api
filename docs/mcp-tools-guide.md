@@ -8,7 +8,7 @@
 
 - **Транспорт:** MCP streamable-HTTP (JSON-RPC 2.0 поверх HTTP/SSE)
 - **Путь:** `/mcp`
-- **Версия:** GenBuilder API `0.1.2`
+- **Версия:** GenBuilder API `0.1.3`
 
 > ✅ **Статус на проде: живой.** MCP-сервер реализован на ветке `feat/mcp_tools`
 > (`app/mcp_server/`), которая ещё **не смержена** в `main`/`dev`, но уже
