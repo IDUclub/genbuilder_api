@@ -66,6 +66,7 @@ _RESULT_DOC = f"""RETURNS: {{
   layer: {{ name, title, role, url (/files/buildings/<result_id>, needs the
     same bearer token), filename, mime_type, source_service }} or null,
   summary: see below,
+  service_diagnostics: service normative and placement summary when available,
   seed: the random seed used (pass it back to reproduce the layout),
   applied_parameters: {{ generation_parameters (effective, after overrides),
     targets_by_zone }},
@@ -177,6 +178,8 @@ async def _generation_result(
         "applied_parameters": applied_parameters,
         "duration_s": round(time.perf_counter() - started, 2),
     }
+    if isinstance(fc.get("service_diagnostics"), dict):
+        result["service_diagnostics"] = fc["service_diagnostics"]
 
     storage = optional_object_storage()
     stored = False
