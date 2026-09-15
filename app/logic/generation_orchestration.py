@@ -92,13 +92,16 @@ def merge_generation_result(result: dict | None) -> dict:
     generated_fc = _get_generated_buildings(result)
     selected_fc = _get_selected_features(result)
 
-    return {
+    response = {
         "type": "FeatureCollection",
         "features": [
             *(generated_fc.get("features") or []),
             *_build_excluded_features(selected_fc),
         ],
     }
+    if isinstance(result, dict) and isinstance(result.get("service_diagnostics"), dict):
+        response["service_diagnostics"] = result["service_diagnostics"]
+    return response
 
 
 def _zone_type_name(feature: dict) -> Optional[str]:

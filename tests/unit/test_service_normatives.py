@@ -44,6 +44,23 @@ def _load(urban_api, scenario_id=None, territory_id=None, token=None):
     return asyncio.run(builder._load_service_normatives(scenario_id, territory_id, token))
 
 
+def _load_with_diagnostics(urban_api, scenario_id=None, territory_id=None, token=None):
+    builder = Genbuilder(
+        config=None,
+        urban_api=urban_api,
+        params_provider=None,
+        residential_buildings_generator=None,
+        residential_service_generator=None,
+        buildings_params_provider=None,
+        physical_objects_service=None,
+    )
+    return asyncio.run(
+        builder._load_service_normatives_with_diagnostics(
+            scenario_id, territory_id, token
+        )
+    )
+
+
 def test_file_mode_loads_the_normatives_of_the_given_region_without_a_token():
     urban_api = _FakeUrbanApi()
 
@@ -76,10 +93,44 @@ def test_a_region_without_normatives_skips_services():
     assert _load(urban_api, territory_id=1) is None
 
 
+def test_a_region_without_normatives_has_an_explicit_diagnostic():
+    urban_api = _FakeUrbanApi(normatives=pd.DataFrame(columns=NORMATIVE_COLUMNS))
+
+    normatives, diagnostics = _load_with_diagnostics(urban_api, territory_id=17)
+
+    assert normatives is None
+    assert diagnostics == {
+        "territory_id_provided": True,
+        "territory_id": 17,
+        "normatives_found": 0,
+        "services_requested": 0,
+        "services_placed": 0,
+        "services_unplaced": 0,
+        "service_buildings_placed": 0,
+        "capacity_requested": 0.0,
+        "capacity_placed": 0.0,
+        "capacity_unplaced": 0.0,
+        "status": "normatives_not_found",
+        "warning": "для территории 17 нет нормативов",
+    }
+
+
 def test_file_mode_goes_on_without_services_when_urban_api_fails():
     urban_api = _FakeUrbanApi(exc=HTTPException(status_code=503, detail="down"))
 
     assert _load(urban_api, territory_id=1) is None
+
+
+def test_an_unknown_region_has_an_explicit_diagnostic():
+    urban_api = _FakeUrbanApi(exc=HTTPException(status_code=404, detail="not found"))
+
+    normatives, diagnostics = _load_with_diagnostics(urban_api, territory_id=999)
+
+    assert normatives is None
+    assert diagnostics["status"] == "territory_not_found"
+    assert diagnostics["warning"] == (
+        "не удалось загрузить нормативы для территории 999: not found"
+    )
 
 
 def test_scenario_mode_failure_is_still_fatal():

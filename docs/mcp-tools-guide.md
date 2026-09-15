@@ -8,7 +8,7 @@
 
 - **Транспорт:** MCP streamable-HTTP (JSON-RPC 2.0 поверх HTTP/SSE)
 - **Путь:** `/mcp`
-- **Версия:** GenBuilder API `0.1.1`
+- **Версия:** GenBuilder API `0.1.2`
 
 > ✅ **Статус на проде: живой.** MCP-сервер реализован на ветке `feat/mcp_tools`
 > (`app/mcp_server/`), которая ещё **не смержена** в `main`/`dev`, но уже
@@ -161,8 +161,13 @@ year/source зон нет. Какие year/source вообще доступны,
 
 **Auth:** не требуется.
 **Возвращает:** результат генерации, как у `generate_by_scenario`; в `summary` нет
-`existing_buildings_preserved`.
-**Ошибка:** `-32602 Invalid params`, если нет ни `targets_by_zone`, ни `use_defaults: true`, либо геометрия блока отсутствует, не `Polygon`/`MultiPolygon` или нет `zone`.
+`existing_buildings_preserved`. Поле `service_diagnostics` показывает, передан ли
+`territory_id`, число нормативов и целей сервисов, число полностью размещённых и
+неразмещённых целей, число фактических зданий сервисов, а также `status` и
+человекочитаемый `warning`.
+**Ошибка:** `-32602 Invalid params`, если нет ни `targets_by_zone`, ни
+`use_defaults: true`, геометрия блока отсутствует, не `Polygon`/`MultiPolygon`,
+нет `zone` или передано неизвестное поле.
 
 ### 3.4. `generate_by_blocks`
 

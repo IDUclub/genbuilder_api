@@ -58,3 +58,37 @@ def test_without_a_region_the_generator_gets_none(builder):
 def test_the_region_id_must_be_positive():
     with pytest.raises(ValidationError):
         TerritoryRequest.model_validate({"blocks": BLOCKS, "territory_id": 0})
+
+
+def test_unknown_request_fields_are_rejected_instead_of_silently_ignored():
+    with pytest.raises(ValidationError) as caught:
+        TerritoryRequest.model_validate({"blocks": BLOCKS, "region_id": 1})
+
+    assert caught.value.errors()[0]["type"] == "extra_forbidden"
+
+
+def test_service_diagnostics_are_preserved_in_the_public_result():
+    diagnostics = {
+        "territory_id_provided": True,
+        "territory_id": 1,
+        "normatives_found": 2,
+        "services_requested": 2,
+        "services_placed": 1,
+        "services_unplaced": 1,
+        "service_buildings_placed": 1,
+        "capacity_requested": 150.0,
+        "capacity_placed": 100.0,
+        "capacity_unplaced": 50.0,
+        "status": "partial",
+        "warning": "не все сервисы удалось разместить",
+    }
+
+    result = orchestration.merge_generation_result(
+        {
+            "generated_buildings": {"type": "FeatureCollection", "features": []},
+            "selected_features": {"type": "FeatureCollection", "features": []},
+            "service_diagnostics": diagnostics,
+        }
+    )
+
+    assert result["service_diagnostics"] == diagnostics

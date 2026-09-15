@@ -134,8 +134,25 @@ class UrbanDBAPI:
             record = {"service_id":service_id, "service_name":service_name, "service_capacity":service_capacity}
             service_normatives.append(record)
         service_normatives = pd.DataFrame(service_normatives, columns=NORMATIVE_COLUMNS)
+        received_count = len(service_normatives)
         service_normatives.dropna(subset=['service_capacity'], inplace=True)
-        logger.info(f"Normatives for territory {territory_id} collected.")
+        dropped_count = received_count - len(service_normatives)
+        if dropped_count:
+            logger.warning(
+                "Territory {} has {} service normatives without "
+                "services_capacity_per_1000_normative; they were ignored",
+                territory_id,
+                dropped_count,
+            )
+        if service_normatives.empty:
+            logger.warning("для территории {} нет нормативов", territory_id)
+        else:
+            logger.info(
+                "Normatives for territory {} collected: {} usable of {} received",
+                territory_id,
+                len(service_normatives),
+                received_count,
+            )
         return service_normatives
 
     async def get_scenario_functional_zones(self, scenario_id: int, source:str, year: int, token: str):

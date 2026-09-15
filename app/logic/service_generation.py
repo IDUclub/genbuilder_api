@@ -76,6 +76,68 @@ class ServiceGenerator:
 
         return all_limits
 
+    @staticmethod
+    def summarize_service_generation(
+        all_limits: Dict[Hashable, Dict[str, float]],
+        service_buildings: gpd.GeoDataFrame,
+    ) -> Dict[str, float | int]:
+        """Summarize requested targets and the capacity actually placed.
+
+        A request is one positive ``(zone, service type)`` capacity target.  A
+        request is considered placed only when generated buildings cover its
+        full target capacity; partial placements remain visible through the
+        capacity and service-building counters.
+        """
+        targets = [
+            (zone, service_name, float(target_capacity))
+            for zone, limits in all_limits.items()
+            for service_name, target_capacity in limits.items()
+            if float(target_capacity) > 0.0
+        ]
+
+        placed_capacity_by_target: Dict[tuple[Hashable, str], float] = {}
+        if (
+            not service_buildings.empty
+            and {"zone", "service", "capacity"}.issubset(service_buildings.columns)
+        ):
+            grouped = service_buildings.groupby(
+                ["zone", "service"], dropna=False
+            )["capacity"].sum()
+            placed_capacity_by_target = {
+                (zone, str(service_name)): float(capacity)
+                for (zone, service_name), capacity in grouped.items()
+            }
+
+        fulfilled = 0
+        capacity_requested = 0.0
+        capacity_unplaced = 0.0
+        for zone, service_name, target_capacity in targets:
+            placed_capacity = placed_capacity_by_target.get(
+                (zone, str(service_name)), 0.0
+            )
+            capacity_requested += target_capacity
+            capacity_unplaced += max(target_capacity - placed_capacity, 0.0)
+            if placed_capacity >= target_capacity:
+                fulfilled += 1
+
+        capacity_placed = 0.0
+        if not service_buildings.empty and "capacity" in service_buildings.columns:
+            capacity_placed = float(
+                pd.to_numeric(service_buildings["capacity"], errors="coerce")
+                .fillna(0.0)
+                .sum()
+            )
+
+        return {
+            "services_requested": len(targets),
+            "services_placed": fulfilled,
+            "services_unplaced": len(targets) - fulfilled,
+            "service_buildings_placed": len(service_buildings),
+            "capacity_requested": capacity_requested,
+            "capacity_placed": capacity_placed,
+            "capacity_unplaced": capacity_unplaced,
+        }
+
     def load_service_projects(self) -> gpd.GeoDataFrame:
         projects_gdf = gpd.read_file(self.generation_parameters.service_projects_file)
         projects_gdf = projects_gdf.to_crs("EPSG:4326")
@@ -522,7 +584,7 @@ class ServiceGenerator:
             raise ValueError("blocks must contain 'zone' column for service generation")
         blocks = blocks[blocks["zone"] == "residential"].copy()
         if blocks.empty:
-            return gpd.GeoDataFrame(
+            empty = gpd.GeoDataFrame(
                 columns=[
                     "service",
                     "capacity",
@@ -534,6 +596,10 @@ class ServiceGenerator:
                 geometry="geometry",
                 crs=crs,
             )
+            empty.attrs["service_diagnostics"] = self.summarize_service_generation(
+                {}, empty
+            )
+            return empty
 
         blocks = blocks.reset_index()
         blocks.rename(columns={"index": "src_index"}, inplace=True)
@@ -553,5 +619,8 @@ class ServiceGenerator:
             all_limits,
             projects_gdf,
             crs,
+        )
+        services_buildings_gdf.attrs["service_diagnostics"] = (
+            self.summarize_service_generation(all_limits, services_buildings_gdf)
         )
         return services_buildings_gdf
