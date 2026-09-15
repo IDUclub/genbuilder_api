@@ -2,7 +2,7 @@ from pathlib import Path
 import contextvars
 import contextlib
 
-from typing import Dict, Any, Iterator
+from typing import Dict, Any, Iterator, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -34,6 +34,8 @@ class GenParams(BaseModel):
     """Upper bound for dynamic buffer (in meters)."""
     service_projects_file: str = str( Path(__file__).resolve().parent / "service_projects.geojson")
     """path to service projects file with geometry and plot/building parameters"""
+    seed: Optional[int] = None
+    """random seed for service placement; None - non-deterministic"""
 
     def patched(self, patch: Dict[str, Any]) -> "GenParams":
         def deep_merge(a, b):

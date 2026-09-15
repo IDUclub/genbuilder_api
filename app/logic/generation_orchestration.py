@@ -10,7 +10,7 @@ through the ASGI stack.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import geopandas as gpd
 from fastapi import HTTPException
@@ -29,6 +29,15 @@ from app.logic.polygon_converter import (
 from app.logic.zone_taxonomy import normalize_zone
 from app.schema.default_params import DEFAULT_BLOCK_GENERATION_PARAMETERS, DEFAULT_BLOCK_TARGETS_BY_ZONE
 from app.schema.dto import BlockFeatureCollection, FunctionalZonesRequest, TerritoryRequest
+
+
+ProgressCallback = Callable[[int, int], Awaitable[None]]
+"""``await progress(done, total)`` after each zone of a multi-zone run."""
+
+
+async def _report(progress: Optional[ProgressCallback], done: int, total: int) -> None:
+    if progress is not None:
+        await progress(done, total)
 
 
 def _empty_feature_collection() -> dict:
@@ -225,12 +234,14 @@ async def generate_by_blocks(
     token: str,
     body: FunctionalZonesRequest,
     preserve_existing_buildings: bool = False,
+    progress: Optional[ProgressCallback] = None,
 ) -> dict:
     """Generate buildings for specific functional zones of a scenario, one block per
     zone (or per polygon part for a MultiPolygon zone). Mirrors ``/generate/by_blocks``.
 
     With ``preserve_existing_buildings`` the scenario's existing buildings that
     intersect the requested zones are cut out and returned marked ``is_excluded``.
+    ``progress`` is awaited after each requested zone.
     """
     response_json = await urban_db_api.get_scenario_functional_zones(
         scenario_id=scenario_id,
@@ -277,7 +288,8 @@ async def generate_by_blocks(
     combined_features = []
     selected_features_fc = _empty_feature_collection()
 
-    for zone in body.zones:
+    total_zones = len(body.zones)
+    for done, zone in enumerate(body.zones, 1):
         feature = feature_by_id[zone.functional_zone_id]
         props = feature.get("properties", {})
         zone_type = (props.get("functional_zone_type") or {}).get("name")
@@ -307,6 +319,7 @@ async def generate_by_blocks(
             combined_features.extend(_get_generated_buildings(result).get("features", []))
             if not selected_features_fc.get("features"):
                 selected_features_fc = _get_selected_features(result)
+            await _report(progress, done, total_zones)
             continue
 
         if geom_type == "MultiPolygon":
@@ -329,6 +342,7 @@ async def generate_by_blocks(
 
             if not parts:
                 logger.warning("No polygon parts after filtering for zone_id={}", zone.functional_zone_id)
+                await _report(progress, done, total_zones)
                 continue
 
             for part in parts:
@@ -356,6 +370,7 @@ async def generate_by_blocks(
                 combined_features.extend(_get_generated_buildings(result).get("features", []))
             if not selected_features_fc.get("features"):
                 selected_features_fc = _get_selected_features(result)
+            await _report(progress, done, total_zones)
             continue
 
         raise http_exception(422, f"Unsupported geometry type for zone {zone.functional_zone_id}: {geom_type}")
@@ -426,13 +441,14 @@ async def estimate_capacity_by_blocks(
     functional_zone_ids: list[int],
     token: str,
     preserve_existing_buildings: bool = False,
+    progress: Optional[ProgressCallback] = None,
 ) -> dict[int, dict[str, Any]]:
     """Estimate per-zone capacity at the service's maximum-density targets.
 
     Each zone reports its area, max residents and max living area, plus the
     existing buildings standing inside it. With ``preserve_existing_buildings``
     those buildings are cut out first, so the estimate is the *additional*
-    capacity of the remaining land.
+    capacity of the remaining land. ``progress`` is awaited after each zone.
     """
     blocks_by_zone = await zones_service.prepare_blocks_by_zones(
         scenario_id=scenario_id,
@@ -452,7 +468,7 @@ async def estimate_capacity_by_blocks(
     areas = await _areas_m2([geometries[zid][0] for zid in zone_ids])
 
     estimates: dict[int, dict[str, Any]] = {}
-    for zid, zone_area in zip(zone_ids, areas):
+    for done, (zid, zone_area) in enumerate(zip(zone_ids, areas), 1):
         blocks = blocks_by_zone[zid]
         in_zone = _buildings_within(buildings, geometries[zid])
 
@@ -493,6 +509,7 @@ async def estimate_capacity_by_blocks(
                 round(sum(float(f["properties"].get("residents_number") or 0.0) for f in in_zone))
             ),
         }
+        await _report(progress, done, len(zone_ids))
 
     return estimates
 

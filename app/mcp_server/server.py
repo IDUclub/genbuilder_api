@@ -45,9 +45,27 @@ living area, per-zone breakdown, excluded buildings, and target vs achieved
 with the deficit per zone). Ground your answer on it instead of counting
 features.
 
+RESULT STORAGE: layers are large, so generation tools store the full
+FeatureCollection and return `result_id` + `layer` (a /files link for maps or
+other services) instead of geometry. Pass include_geometry=true only when you
+really need the features inline, or read them later with
+get_generation_result(result_id). Stored results expire after a while. If
+`storage_warning` is present, storage failed and the features are inlined.
+
+REPRODUCIBILITY: each result echoes `seed`, `applied_parameters` (effective
+generation parameters and targets), `generation_id` and `duration_s`. To
+reproduce a layout, call the same tool with the same inputs and that seed.
+
 Use estimate_max_residents_by_blocks to get a capacity estimate (zone area,
 max residents, max living area, existing buildings per zone) without
 producing a full building layout.
+
+LONG CHAINS: the bearer token is read from the Authorization header on every
+call and lives ~5 minutes, so refresh it between steps of a long chain rather
+than holding one token for the whole plan. generate_by_blocks and
+estimate_max_residents_by_blocks send progress notifications per zone when
+the request carries a progressToken; cancelling the request stops them at
+the next zone boundary.
 
 If a tool returns AUTH_TOKEN_EXPIRED, ask for a fresh bearer token and
 retry — do not reuse the rejected one."""
