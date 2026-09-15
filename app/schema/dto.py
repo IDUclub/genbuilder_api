@@ -154,6 +154,16 @@ class TerritoryRequest(BaseModel):
         json_schema_extra={"examples": [EXAMPLE_BLOCKS]},
     )
 
+    territory_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "UrbanDB territory (usually the project region) whose service normatives "
+            "place services in residential blocks. Without it no services are generated."
+        ),
+        json_schema_extra={"examples": [1]},
+    )
+
     targets_by_zone: Optional[Dict[str, Dict[str, Any]]] = Field(
         default={
             "residents": {

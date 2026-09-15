@@ -33,6 +33,7 @@ from app.dependencies import (
     chat_llm_configured,
     optional_object_storage,
     public_base_url,
+    urban_db_api,
     zones_service,
 )
 from app.exceptions.http_exception_wrapper import http_exception
@@ -109,6 +110,16 @@ async def generate_chat_stream(
             )
         ),
     ] = False,
+    territory_id: Annotated[
+        Optional[int],
+        Form(
+            ge=1,
+            description=(
+                "Region (UrbanDB territory id) whose service normatives place services "
+                "in the blocks_file mode; without it the region of project_id is used"
+            ),
+        ),
+    ] = None,
     functional_zone_types: Annotated[
         Optional[str],
         Form(description="Optional comma-separated zone filter, e.g. 'residential,business'"),
@@ -173,9 +184,11 @@ async def generate_chat_stream(
                     blocks_geojson=blocks_geojson,
                     existing_buildings_geojson=buildings_geojson,
                     existing_buildings_declined=skip_existing_buildings,
+                    territory_id=territory_id,
                     model=model,
                     temperature=temperature,
                     zones_service=zones_service,
+                    urban_api=urban_db_api,
                     object_storage=optional_object_storage(),
                     public_base_url=public_base_url(),
                 ):

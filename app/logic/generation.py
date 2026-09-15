@@ -4,6 +4,7 @@ import json
 import asyncio
 from typing import Dict, Optional, List
 
+import aiohttp
 import geopandas as gpd
 import pandas as pd
 from fastapi import HTTPException
@@ -54,6 +55,48 @@ class Genbuilder:
         self.buildings_generation_parameters = buildings_params_provider
         self.physical_objects_service = physical_objects_service
 
+    async def _load_service_normatives(
+        self,
+        scenario_id: Optional[int],
+        territory_id: Optional[int],
+        token: Optional[str],
+    ) -> Optional[pd.DataFrame]:
+        """Normatives that place services in residential blocks, or None to skip services.
+
+        A scenario names its own region, and a failure there stays fatal. In the file
+        mode the caller names the region; if it cannot be loaded, generation goes on
+        without services.
+        """
+        if scenario_id is not None:
+            region_id = await self.urban_api.get_territory_by_scenario(scenario_id, token)
+            normatives = await self.urban_api.get_normatives_for_territory(region_id, token)
+        elif territory_id is not None:
+            region_id = territory_id
+            try:
+                normatives = await self.urban_api.get_normatives_for_territory(region_id, token)
+            except (HTTPException, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                logger.warning(
+                    "Genbuilder.run: service normatives for territory_id={} are not loaded, "
+                    "services are skipped: {}",
+                    region_id,
+                    exc,
+                )
+                return None
+        else:
+            logger.warning(
+                "Genbuilder.run: neither scenario_id nor territory_id is set, "
+                "service normatives are not loaded"
+            )
+            return None
+        if normatives.empty:
+            logger.warning(
+                "Genbuilder.run: territory_id={} has no service normatives, services are skipped",
+                region_id,
+            )
+            return None
+        logger.info("Genbuilder.run: loaded service normatives for territory_id={}", region_id)
+        return normatives
+
     async def run(
         self,
         targets_by_zone: Dict[str, Dict[str, float]],
@@ -67,14 +110,17 @@ class Genbuilder:
         buildings_parameters_override: dict | None = None,
         physical_object_ids: Optional[list[int]] = None,
         existing_buildings: Optional[dict] = None,
+        territory_id: Optional[int] = None,
     ):
         def build_feature_collection_response(
             buildings_fc: dict,
             selected_fc: dict,
+            service_normatives_loaded: Optional[bool] = None,
         ) -> dict:
             return {
                 "generated_buildings": buildings_fc,
                 "selected_features": selected_fc,
+                "service_normatives_loaded": service_normatives_loaded,
             }
 
         def normalize_selected_features_payload(selected: object) -> dict:
@@ -454,20 +500,9 @@ class Genbuilder:
             f"floors_avg_mixed={floors_avg_mixed}"
         )
 
-        service_normatives = None
-        if scenario_id is not None:
-            territory_id = await self.urban_api.get_territory_by_scenario(scenario_id, token)
-            service_normatives = await self.urban_api.get_normatives_for_territory(
-                territory_id, token
-            )
-            logger.info(
-                "Genbuilder.run: loaded service normatives for territory_id={}",
-                territory_id
-            )
-        else:
-            logger.warning(
-                "Genbuilder.run: scenario_id is None, service normatives are not loaded"
-            )
+        service_normatives = await self._load_service_normatives(
+            scenario_id, territory_id, token
+        )
 
         res_blocks_out = res_plots = res_buildings = None
         nonres_blocks_out = nonres_plots = nonres_buildings = None
@@ -620,6 +655,7 @@ class Genbuilder:
             return build_feature_collection_response(
                 buildings_fc=json.loads(empty_json),
                 selected_fc=selected_features_payload,
+                service_normatives_loaded=service_normatives is not None,
             )
 
         concat_df = await asyncio.to_thread(pd.concat, frames, ignore_index=True)
@@ -709,6 +745,7 @@ class Genbuilder:
         return build_feature_collection_response(
             buildings_fc=json.loads(buildings_all.to_json()),
             selected_fc=selected_features_payload,
+            service_normatives_loaded=service_normatives is not None,
         )
 
 

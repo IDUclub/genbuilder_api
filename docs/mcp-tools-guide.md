@@ -155,6 +155,7 @@ year/source зон нет. Какие year/source вообще доступны,
 | `targets_by_zone` | object | ✅* | Как выше, *или `use_defaults: true` |
 | `use_defaults` | bool | ⛔ | Как выше |
 | `existing_buildings` | GeoJSON FeatureCollection | ⛔ | Пятна уже стоящих зданий — вырезаются из блоков до генерации и возвращаются с `is_excluded: true`; `properties` необязательны |
+| `territory_id` | int | ⛔ | Регион UrbanDB: по его нормативам в жилых блоках расставляются сервисы (школы, детские сады и т. п.). Без него сервисов нет |
 | `generation_parameters` | object | ⛔ | Как выше |
 | `seed`, `include_geometry` | — | ⛔ | Как выше |
 

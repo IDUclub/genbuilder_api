@@ -209,7 +209,8 @@ async def generate_by_territory(payload: TerritoryRequest) -> dict:
     This is the project-less mode: there is no scenario to pull existing
     buildings from, so the caller may upload them (``existing_buildings``) —
     their footprints are cut out of the blocks and they come back in the
-    response marked ``is_excluded``.
+    response marked ``is_excluded``. Services need the region's normatives, so
+    they are placed only when ``territory_id`` names that region.
     """
     result = await builder.run(
         blocks=payload.blocks,
@@ -220,6 +221,7 @@ async def generate_by_territory(payload: TerritoryRequest) -> dict:
             if payload.existing_buildings is not None
             else None
         ),
+        territory_id=payload.territory_id,
     )
     return merge_generation_result(result)
 

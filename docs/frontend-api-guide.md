@@ -58,6 +58,12 @@
 
 ### Изменения в существующих эндпоинтах
 
+- `POST /generate/chat/stream` и `POST /generate/by_territory` — новое
+  необязательное поле `territory_id` (регион UrbanDB). По нормативам этого
+  региона в жилых кварталах расставляются сервисы — школы, детские сады и т. п.;
+  раньше в режиме без сценария их не было вовсе. В чате без `territory_id`
+  берётся регион `project_id`, а если нет и его — сервисов не будет и придёт
+  `warning` со `stage: "service_normatives"`. См. [4.2](#42-сервисы-territory_id).
 - `POST /generate/chat/stream` — новые поля формы `buildings_file` и
   `skip_existing_buildings` (см. выше).
 - `POST /generate/by_territory` — в теле появилось поле `existing_buildings`
@@ -123,6 +129,7 @@ Accept: text/event-stream
 | `blocks_file` | file (GeoJSON) | ⚠️ | Свой набор блоков. Альтернатива сценарию как источник территории |
 | `buildings_file` | file (GeoJSON) | ⛔ | Существующие здания — их пятна исключаются из генерации (режим без проекта) |
 | `skip_existing_buildings` | bool | ⛔ | `true`, если пользователь отказался загружать существующие здания |
+| `territory_id` | int | ⛔ | Регион (id территории UrbanDB) для нормативов сервисов в режиме `blocks_file`. Без него берётся регион `project_id`. См. [4.2](#42-сервисы-territory_id) |
 | `functional_zone_types` | string | ⛔ | CSV-фильтр зон (в агентном режиме игнорируется — всегда residential+business) |
 | `chat_id` | string | ⛔ | ID существующего чата для многоходового диалога |
 | `project_id` | int | ⛔ | ID проекта (для истории) |
@@ -532,6 +539,22 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 Тот же механизм в классическом режиме — поле `existing_buildings` в теле
 `POST /generate/by_territory` (см. [раздел 6](#6-классические-эндпоинты-генерации-справочно)).
 
+### 4.2. Сервисы (`territory_id`)
+
+Сервисы (школы, детские сады, поликлиники и т. п.) ставятся только в жилых
+кварталах и только по нормативам региона из UrbanDB. У сценария регион известен,
+у своего файла кварталов — нет, поэтому в режиме `blocks_file` он берётся так:
+
+1. `territory_id` из формы, если передан;
+2. иначе регион проекта `project_id`;
+3. иначе сервисы не ставятся: генерация идёт дальше, а в потоке приходит
+   `warning` со `stage: "service_normatives"`.
+
+Здание с сервисами отличается непустым `properties.service`
+(`[{ "<название сервиса>": <мощность> }]`).
+
+То же в классическом режиме — поле `territory_id` в теле `POST /generate/by_territory`.
+
 ---
 
 ## 5. Геослои: подложка и ссылки в истории
@@ -680,7 +703,9 @@ Body (`ScenarioBody`): `targets_by_zone`, `generation_parameters`.
 
 ### `POST /generate/by_territory`
 Генерация по присланным блокам (без сценария). Body (`TerritoryRequest`):
-`blocks` (GeoJSON блоков), `existing_buildings` (опц., GeoJSON существующих
+`blocks` (GeoJSON блоков), `territory_id` (опц., регион UrbanDB — по его
+нормативам в жилых кварталах ставятся сервисы; без него сервисов нет),
+`existing_buildings` (опц., GeoJSON существующих
 зданий — исключаются из генерации), `targets_by_zone`, `generation_parameters`.
 → `FeatureCollection`.
 
