@@ -6,9 +6,11 @@ from typing import Dict, Optional, List
 
 import geopandas as gpd
 import pandas as pd
+from fastapi import HTTPException
 from loguru import logger
 from iduconfig import Config
 
+from app.exceptions.http_exception_wrapper import http_exception
 from app.logic.physical_objects_service import PhysicalObjectsService
 from app.schema.dto import BlockFeatureCollection
 from app.dependencies import UrbanDBAPI
@@ -189,12 +191,18 @@ class Genbuilder:
                     scenario_id=scenario_id,
                     token=token,
                 )
+            except HTTPException:
+                raise
             except Exception as e:
-                logger.warning(
-                    "Genbuilder.run: failed to load physical objects; skipping exclusion: "
-                    f"{e}"
-                )
-                fc = {}
+                # Fail loudly: silently generating on top of buildings the
+                # caller asked to exclude produces a plausible but wrong layout.
+                logger.exception("Genbuilder.run: failed to load physical objects for exclusion")
+                raise http_exception(
+                    502,
+                    f"Failed to load physical objects for scenario {scenario_id}",
+                    input_data={"physical_object_ids": sorted(ids_set)},
+                    detail=str(e),
+                ) from e
 
             by_ids = self.physical_objects_service.select_features_by_ids(fc, ids_set)
             if not by_ids:

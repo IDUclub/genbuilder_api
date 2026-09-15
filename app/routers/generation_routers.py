@@ -48,6 +48,10 @@ async def pipeline_route(
             examples=[[2058130, 2058131]],
         ),
     ] = None,
+    preserve_existing_buildings: Annotated[
+        bool,
+        Query(description="Keep the scenario's existing buildings and generate only around them."),
+    ] = False,
     token: str = Depends(auth.verify_token),
     body: ScenarioBody = Body(default_factory=ScenarioBody),
 ):
@@ -60,6 +64,7 @@ async def pipeline_route(
         token=token,
         targets_by_zone=body.targets_by_zone,
         generation_parameters=body.generation_parameters,
+        preserve_existing_buildings=preserve_existing_buildings,
     )
 
 
@@ -99,6 +104,10 @@ async def generate_by_functional_zones(
                     examples=[[2058130, 2058131]],
                 ),
             ] = None,
+        preserve_existing_buildings: Annotated[
+            bool,
+            Query(description="Keep existing buildings inside the requested zones and generate only around them."),
+        ] = False,
         token: str = Depends(auth.verify_token),
         body: FunctionalZonesRequest = Body(
             ..., description="Per-zone targets and generation parameters"
@@ -112,6 +121,7 @@ async def generate_by_functional_zones(
         physical_object_id=physical_object_id,
         token=token,
         body=body,
+        preserve_existing_buildings=preserve_existing_buildings,
     )
 
 
