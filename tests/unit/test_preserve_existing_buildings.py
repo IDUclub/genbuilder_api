@@ -148,6 +148,11 @@ def test_blocks_pass_only_buildings_inside_requested_zones(monkeypatch):
     body = FunctionalZonesRequest.model_validate(
         {"zones": [{"functional_zone_id": 7, "targets_by_zone": {"residents": {"residential": 500}}}]}
     )
+    progress = []
+
+    async def _progress(done, total):
+        progress.append((done, total))
+
     asyncio.run(
         orchestration.generate_by_blocks(
             scenario_id=1,
@@ -158,9 +163,11 @@ def test_blocks_pass_only_buildings_inside_requested_zones(monkeypatch):
             token="t",
             body=body,
             preserve_existing_buildings=True,
+            progress=_progress,
         )
     )
 
+    assert progress == [(1, 1)]
     existing = builder.calls[0]["existing_buildings"]["features"]
     assert [f["properties"]["physical_object_id"] for f in existing] == [10]
 
@@ -226,6 +233,10 @@ def test_capacity_estimate_reports_area_living_area_and_existing(monkeypatch, pr
     monkeypatch.setattr(orchestration, "urban_db_api", _FakeUrbanDb(physical_objects=_fc(HOUSE_INSIDE, HOUSE_OUTSIDE)))
     monkeypatch.setattr(orchestration, "zones_service", _FakeZonesService())
     monkeypatch.setattr(orchestration, "builder", builder)
+    progress = []
+
+    async def _progress(done, total):
+        progress.append((done, total))
 
     estimates = asyncio.run(
         orchestration.estimate_capacity_by_blocks(
@@ -236,10 +247,12 @@ def test_capacity_estimate_reports_area_living_area_and_existing(monkeypatch, pr
             functional_zone_ids=[7],
             token="t",
             preserve_existing_buildings=preserve,
+            progress=_progress,
         )
     )
 
     estimate = estimates[7]
+    assert progress == [(1, 1)]
     assert estimate["functional_zone_type"] == "residential"
     assert estimate["max_residents"] == 300
     assert estimate["max_living_area"] == 6000.5

@@ -171,7 +171,9 @@ class ServiceGenerator:
         preferred_angle: Optional[float] = None,
         existing_centroids: Optional[List[Point]] = None,
         min_dist_between_centers: Optional[float] = None,
+        rng: Optional[random.Random] = None,
     ) -> Optional[Polygon]:
+        rng = rng or random.Random()
         if poly.is_empty:
             return None
 
@@ -197,16 +199,16 @@ class ServiceGenerator:
             angle_candidates = [0.0, 90.0, 45.0, -45.0, 30.0, -30.0]
 
         for _ in range(max_attempts):
-            length = random.uniform(len_min, len_max)
-            width = random.uniform(wid_min, wid_max)
+            length = rng.uniform(len_min, len_max)
+            width = rng.uniform(wid_min, wid_max)
 
             rect = box(-length / 2.0, -width / 2.0, length / 2.0, width / 2.0)
 
-            angle = random.choice(angle_candidates)
+            angle = rng.choice(angle_candidates)
             rect_rot = rotate(rect, angle, origin=(0, 0), use_radians=False)
 
-            cx = random.uniform(minx, maxx)
-            cy = random.uniform(miny, maxy)
+            cx = rng.uniform(minx, maxx)
+            cy = rng.uniform(miny, maxy)
 
             rect_shifted = translate(rect_rot, xoff=cx, yoff=cy)
 
@@ -236,8 +238,12 @@ class ServiceGenerator:
         return translate(geom, xoff=-c.x, yoff=-c.y)
 
     def _place_building_in_plot(
-        self, building_template: BaseGeometry, plot_geom: BaseGeometry
+        self,
+        building_template: BaseGeometry,
+        plot_geom: BaseGeometry,
+        rng: Optional[random.Random] = None,
     ) -> Optional[BaseGeometry]:
+        rng = rng or random.Random()
         allowed_area = plot_geom.buffer(-self.generation_parameters.INNER_BORDER)
         if allowed_area.is_empty:
             return None
@@ -247,8 +253,8 @@ class ServiceGenerator:
             return None
 
         for _ in range(self.generation_parameters.max_service_attempts):
-            cx = random.uniform(minx, maxx)
-            cy = random.uniform(miny, maxy)
+            cx = rng.uniform(minx, maxx)
+            cy = rng.uniform(miny, maxy)
 
             if not allowed_area.contains(box(cx, cy, cx, cy)):
                 continue
@@ -281,8 +287,9 @@ class ServiceGenerator:
         all_limits: Dict[Hashable, Dict[str, float]],
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
+        rng: Optional[random.Random] = None,
     ) -> gpd.GeoDataFrame:
-        
+        rng = rng or random.Random(self.generation_parameters.seed)
         projects_local = ensure_crs(projects_gdf, blocks_crs)
 
         normalized_buildings: Dict[Any, BaseGeometry] = {}
@@ -403,6 +410,7 @@ class ServiceGenerator:
                             preferred_angle=block_angle,
                             existing_centroids=placed_plot_centers,
                             min_dist_between_centers=min_spacing,
+                            rng=rng,
                         )
 
                         if plot_geom is None:
@@ -418,6 +426,7 @@ class ServiceGenerator:
                         building_geom = self._place_building_in_plot(
                             building_template=building_oriented_main,
                             plot_geom=plot_geom,
+                            rng=rng,
                         )
 
                         if building_geom is None:
@@ -430,6 +439,7 @@ class ServiceGenerator:
                             building_geom = self._place_building_in_plot(
                                 building_template=building_oriented_orth,
                                 plot_geom=plot_geom,
+                                rng=rng,
                             )
 
                         if building_geom is None:
