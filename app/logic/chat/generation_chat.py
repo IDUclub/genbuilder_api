@@ -31,7 +31,9 @@ Event envelope (``{"type": ..., ...}``), matching the reference style:
                                                same payload is persisted to
                                                history as a ``file`` part.
 - ``warning``       {stage, detail, message} — non-fatal (e.g. not persisted).
-- ``error``         {stage, detail}          — fatal; generation/answer failed.
+- ``error``         {stage, detail, code?, message?} — fatal; generation/answer failed.
+                                              Carries a user-facing ``message``
+                                              when the cause is explainable.
 - ``done``          {chat_id, assistant_message_id} — terminal marker.
 """
 from __future__ import annotations
@@ -52,8 +54,10 @@ from app.logic.chat.chat_title import make_chat_title
 from app.logic.chat.param_extraction import (
     DEFAULT_FLOOR_GROUP_BY_ZONE,
     GENERATED_ZONES,
+    ZONE_LABELS,
     existing_buildings_question,
     extract_generation_targets,
+    split_total_residents,
     validate_targets,
 )
 from app.logic.geo_layers import (
@@ -65,31 +69,160 @@ from app.logic.geo_layers import (
     geo_layer_to_file_part,
     object_key,
 )
+from app.logic.generation_summary import summarize_buildings
 from app.schema.dto import BlockFeatureCollection
+from app.logic.chat.zone_detection import ZONE_TYPE_LABELS, detect_zones
 from app.logic.zone_taxonomy import normalize_zone
 
 
-def _blocks_from_geojson(
-    geojson: dict[str, Any],
-) -> tuple[list[dict[str, Any]], tuple[str, ...], int]:
-    """Keep only features whose ``properties.zone`` maps to a generated zone.
+_POLYGONAL = {"Polygon", "MultiPolygon"}
 
-    The raw ``zone`` name is normalized (granular residential subtypes -> residential,
-    mixed_use -> business); features that don't map to residential/business are
-    dropped. Kept features keep their raw name — the core normalizes them again
-    (and derives the per-block floor group from the subtype). Returns (kept
-    features, distinct in-scope canonical zones, dropped count).
+
+def _quoted_counts(counts: dict[str, int], limit: int = 10) -> str:
+    items = list(counts.items())
+    text = ", ".join(f"«{value}» — {count}" for value, count in items[:limit])
+    return text + (f" и ещё {len(items) - limit}" if len(items) > limit else "")
+
+
+def _type_counts(counts: dict[str, int]) -> str:
+    return ", ".join(
+        f"{ZONE_TYPE_LABELS.get(zone, zone)} ({zone}) — {count}"
+        for zone, count in sorted(counts.items(), key=lambda kv: -kv[1])
+    )
+
+
+def _load_error(code: str, detail: str, message: str) -> dict[str, Any]:
+    return {"type": "error", "stage": "load_blocks", "code": code, "detail": detail, "message": message}
+
+
+def _load_warning(code: str, detail: str, message: str) -> dict[str, Any]:
+    return {"type": "warning", "stage": "load_blocks", "code": code, "detail": detail, "message": message}
+
+
+_EXPECTED_ZONES_HINT = (
+    "Ожидается атрибут zone (или functional_zone_type_name) со значениями вида "
+    "residential / «Жилая зона», business / «Общественно-деловая зона», "
+    "mixed_use / «Многофункциональная зона»."
+)
+
+
+async def _blocks_from_upload(
+    geojson: dict[str, Any],
+    llm_client: VLLMChatClient | None,
+    model: str | None = None,
+) -> tuple[list[dict[str, Any]], tuple[str, ...], list[dict[str, Any]]]:
+    """Resolve the uploaded blocks' zone types and keep the generated ones.
+
+    Returns (kept features with a canonical Urban DB ``zone``, distinct in-scope
+    generation zones, events to stream). An empty ``kept`` always comes with a
+    ``load_blocks`` error carrying a user-facing ``message`` and a ``code``.
+    Kept features keep the granular type (``residential_lowrise``) — the core
+    normalizes it and derives the per-block floor group from the subtype.
     """
+    events: list[dict[str, Any]] = []
     features = geojson.get("features") or []
-    kept: list[dict[str, Any]] = []
-    zones: list[str] = []
-    for feature in features:
-        canonical = normalize_zone((feature.get("properties") or {}).get("zone"))
-        if canonical in GENERATED_ZONES:
-            kept.append(feature)
-            if canonical not in zones:
-                zones.append(canonical)
-    return kept, tuple(zones), len(features) - len(kept)
+    if not features:
+        events.append(_load_error("blocks_empty", "no features", "В загруженном файле зон нет ни одного объекта."))
+        return [], (), events
+
+    detection = await detect_zones(geojson, llm_client, model=model)
+    if detection.attribute is None:
+        fields = ", ".join(detection.attributes[:15]) or "нет текстовых атрибутов"
+        if detection.llm_error:
+            reason = (
+                "Автоматически определить атрибут не удалось: сервис распознавания "
+                "сейчас недоступен."
+            )
+        else:
+            reason = "Ни один атрибут не похож на тип функциональной зоны."
+        events.append(
+            _load_error(
+                "zone_attribute_not_found",
+                f"zone attribute not found; attributes: {detection.attributes}",
+                f"Не удалось понять, где в файле указан тип функциональной зоны. {reason} "
+                f"Атрибуты в файле: {fields}. {_EXPECTED_ZONES_HINT}",
+            )
+        )
+        return [], (), events
+
+    how = " (определён моделью)" if detection.attribute_by_llm else ""
+    events.append(
+        {"type": "status", "content": f"Тип зоны взят из атрибута «{detection.attribute}»{how}."}
+    )
+    if detection.llm_mapping:
+        pairs = ", ".join(f"«{raw}» → {zone}" for raw, zone in detection.llm_mapping.items())
+        events.append(
+            {"type": "status", "content": f"Модель распознала нестандартные значения: {pairs}."}
+        )
+    if detection.unrecognized:
+        count = sum(detection.unrecognized.values())
+        events.append(
+            _load_warning(
+                "zone_values_unrecognized",
+                f"{count} feature(s) with unrecognized zone type: {list(detection.unrecognized)}",
+                f"Не распознан тип зоны у {count} объект(ов), они пропущены: "
+                f"{_quoted_counts(detection.unrecognized)}.",
+            )
+        )
+    if detection.missing:
+        events.append(
+            _load_warning(
+                "zone_value_missing",
+                f"{detection.missing} feature(s) without a zone value",
+                f"У {detection.missing} объект(ов) не заполнен атрибут "
+                f"«{detection.attribute}», они пропущены.",
+            )
+        )
+
+    in_scope = [f for f in detection.features if normalize_zone(f["properties"]["zone"]) in GENERATED_ZONES]
+    kept = [f for f in in_scope if (f.get("geometry") or {}).get("type") in _POLYGONAL]
+    out_of_scope = {
+        zone: count
+        for zone, count in detection.type_counts.items()
+        if normalize_zone(zone) not in GENERATED_ZONES
+    }
+    if not in_scope:
+        found = _type_counts(detection.type_counts) or "ни одного распознанного типа"
+        events.append(
+            _load_error(
+                "no_generated_zones",
+                f"no residential/business features; types: {dict(detection.type_counts)}",
+                "В файле нет жилых или общественно-деловых (многофункциональных) зон — "
+                f"застройку генерировать негде. Найдено по атрибуту «{detection.attribute}»: "
+                f"{found}.",
+            )
+        )
+        return [], (), events
+    if out_of_scope:
+        events.append(
+            _load_warning(
+                "zones_out_of_scope",
+                f"{sum(out_of_scope.values())} feature(s) outside residential/business",
+                "Застройка генерируется только в жилых и общественно-деловых зонах; "
+                f"пропущены: {_type_counts(out_of_scope)}.",
+            )
+        )
+    non_polygonal = len(in_scope) - len(kept)
+    if not kept:
+        events.append(
+            _load_error(
+                "no_polygons",
+                "no Polygon/MultiPolygon residential/business features",
+                "Жилые и общественно-деловые зоны в файле заданы не полигонами "
+                "(нужны Polygon или MultiPolygon).",
+            )
+        )
+        return [], (), events
+    if non_polygonal:
+        events.append(
+            _load_warning(
+                "non_polygon_geometry",
+                f"{non_polygonal} non-polygon feature(s) dropped",
+                f"Пропущено {non_polygonal} объект(ов) с геометрией не Polygon/MultiPolygon.",
+            )
+        )
+    zones = tuple(dict.fromkeys(normalize_zone(f["properties"]["zone"]) for f in kept))
+    return kept, zones, events
 
 
 def _zones_from_layer(layer: dict[str, Any]) -> tuple[str, ...]:
@@ -100,6 +233,23 @@ def _zones_from_layer(layer: dict[str, Any]) -> tuple[str, ...]:
         if zone in GENERATED_ZONES and zone not in zones:
             zones.append(zone)
     return tuple(zones)
+
+
+def _zone_areas(features: list[dict[str, Any]]) -> dict[str, float]:
+    """Area (m²) of each generated zone type in a list of zone features."""
+    import geopandas as gpd  # heavy; only needed when a total is split
+
+    try:
+        gdf = gpd.GeoDataFrame.from_features(features, crs=4326)
+        gdf["zone"] = gdf["zone"].map(normalize_zone)
+        gdf = gdf[gdf["zone"].isin(GENERATED_ZONES) & gdf.geometry.notna()]
+        if gdf.empty:
+            return {}
+        areas = gdf.to_crs(gdf.estimate_utm_crs()).geometry.area
+        return {str(z): float(a) for z, a in areas.groupby(gdf["zone"]).sum().items()}
+    except Exception as exc:  # noqa: BLE001 - fall back to an equal split
+        logger.warning("zone areas for the residents split failed: {}", exc)
+        return {}
 
 
 def _existing_buildings_from_geojson(
@@ -221,27 +371,6 @@ def _request_metadata(
     return metadata
 
 
-def _summarize_buildings(features: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compact totals over generated building features, for grounding + the UI."""
-    total = len(features)
-    living_area = 0.0
-    residents = 0
-    by_zone: dict[str, int] = {}
-    for feature in features:
-        props = feature.get("properties") or {}
-        living_area += float(props.get("living_area") or 0.0)
-        residents += int(props.get("residents_number") or 0)
-        zone = props.get("zone")
-        if zone:
-            by_zone[zone] = by_zone.get(zone, 0) + 1
-    return {
-        "buildings": total,
-        "living_area_total": round(living_area, 1),
-        "residents_total": residents,
-        "buildings_by_zone": by_zone,
-    }
-
-
 def _merge_result(result: dict | None) -> tuple[dict, dict]:
     """Split a Genbuilder.run result into (merged FeatureCollection, summary)."""
     result = result if isinstance(result, dict) else {}
@@ -253,7 +382,7 @@ def _merge_result(result: dict | None) -> tuple[dict, dict]:
         "type": "FeatureCollection",
         "features": [*gen_features, *sel_features],
     }
-    return merged, _summarize_buildings(gen_features)
+    return merged, summarize_buildings(gen_features)
 
 
 async def stream_generation_chat(
@@ -362,20 +491,12 @@ async def stream_generation_chat(
     scenario_zones_layer: dict[str, Any] | None = None
     kept: list[dict[str, Any]] = []
     if blocks_geojson is not None:
-        kept, zones_in_scope, dropped = _blocks_from_geojson(blocks_geojson)
-        if dropped:
-            yield {
-                "type": "warning",
-                "stage": "load_blocks",
-                "detail": f"{dropped} feature(s) dropped",
-                "message": f"Отброшено объектов без зоны residential/business: {dropped}.",
-            }
+        kept, zones_in_scope, load_events = await _blocks_from_upload(
+            blocks_geojson, llm_client, model
+        )
+        for event in load_events:
+            yield event
         if not kept:
-            yield {
-                "type": "error",
-                "stage": "load_blocks",
-                "detail": "no residential/business features in uploaded file",
-            }
             yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
             return
         try:
@@ -384,7 +505,12 @@ async def stream_generation_chat(
             )
         except Exception as exc:  # noqa: BLE001 - invalid geometry -> surface to client
             logger.warning("invalid blocks file: {}", exc)
-            yield {"type": "error", "stage": "load_blocks", "detail": str(exc)}
+            yield _load_error(
+                "invalid_blocks",
+                str(exc),
+                "Загруженный файл зон не прошёл проверку: у части объектов некорректная "
+                "геометрия или координаты.",
+            )
             yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
             return
 
@@ -448,9 +574,39 @@ async def stream_generation_chat(
         la_per_person=la_per_person,
         model=model,
     )
+    # The extractor is the only way free text becomes targets — when the call
+    # itself failed there is nothing to ask for either, so say so instead of
+    # asking for the parameters the user has already given.
+    if extracted.error:
+        yield {
+            "type": "error",
+            "stage": "param_extraction",
+            "detail": extracted.error,
+            "message": "Языковая модель недоступна — не удалось разобрать "
+            "параметры генерации. Попробуйте позже.",
+        }
+        yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
+        return
     # Zones come from the territory source: the generated zones actually present
     # in a scenario or in an uploaded blocks file.
     extracted.functional_zone_types = list(zones_in_scope)
+
+    # "2000 жителей" without a zone is the demand for the whole territory, not
+    # for each zone: divide it between the zones by their area.
+    zone_areas: dict[str, float] = {}
+    if extracted.total_residents and len(zones_in_scope) > 1:
+        zone_areas = _zone_areas(
+            kept or (scenario_zones_layer or {}).get("features") or []
+        )
+    split = split_total_residents(extracted, zones_in_scope, zone_areas)
+    if len(split) > 1:
+        parts = ", ".join(f"{ZONE_LABELS.get(z, z)} — {n}" for z, n in split.items())
+        yield {
+            "type": "status",
+            "stage": "param_extraction",
+            "content": f"Общий спрос {extracted.total_residents} жителей распределён "
+            f"по зонам{' пропорционально площади' if zone_areas else ' поровну'}: {parts}.",
+        }
 
     # Pin the policy default floor group per zone unless the user set one
     # explicitly, so the result doesn't depend on the pipeline's fallbacks.

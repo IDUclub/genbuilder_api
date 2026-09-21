@@ -147,3 +147,61 @@ def test_non_object_json_raises(captured):
 def test_missing_base_url_raises():
     with pytest.raises(RuntimeError, match="LLM_API"):
         VLLMChatClient("", default_model="gpt-oss-20b")
+
+
+@pytest.fixture
+def unreachable(monkeypatch):
+    """Make every request fail the way an unreachable vLLM host does."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("All connection attempts failed", request=request)
+
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+
+def test_complete_json_wraps_transport_failure(unreachable):
+    async def run() -> None:
+        async with VLLMChatClient(
+            "http://vllm:8001", default_model="gpt-oss-20b"
+        ) as client:
+            await client.complete_json([{"role": "user", "content": "hi"}], schema=SCHEMA)
+
+    with pytest.raises(VLLMChatError) as exc:
+        asyncio.run(run())
+    assert exc.value.status == 0
+    assert "ConnectError" in str(exc.value)
+
+
+def test_stream_chat_wraps_transport_failure(unreachable):
+    async def run() -> list[str]:
+        async with VLLMChatClient(
+            "http://vllm:8001", default_model="gpt-oss-20b"
+        ) as client:
+            return [
+                delta
+                async for delta in client.stream_chat([{"role": "user", "content": "hi"}])
+            ]
+
+    with pytest.raises(VLLMChatError) as exc:
+        asyncio.run(run())
+    assert exc.value.status == 0
+
+
+def test_non_json_body_raises(captured):
+    _, responses = captured
+    responses["response"] = httpx.Response(200, text="<html>502 Bad Gateway</html>")
+
+    async def run() -> None:
+        async with VLLMChatClient(
+            "http://vllm:8001", default_model="gpt-oss-20b"
+        ) as client:
+            await client.complete_json([{"role": "user", "content": "hi"}], schema=SCHEMA)
+
+    with pytest.raises(VLLMChatError):
+        asyncio.run(run())

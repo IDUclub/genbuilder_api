@@ -29,6 +29,16 @@ def _keep_polygonal(geom: BaseGeometry | None) -> BaseGeometry | None:
     return None
 
 
+def _physical_object_id(feature_properties: dict[str, Any]) -> int | None:
+    raw = feature_properties.get("physical_object_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 class PhysicalObjectsService:
     """Select physical objects features by their ids from GeoJSON FeatureCollection."""
 
@@ -61,92 +71,10 @@ class PhysicalObjectsService:
 
         for feature in features:
             feature_properties = feature.get("properties") or {}
-            raw_physical_object_id = feature_properties.get("physical_object_id")
-            if raw_physical_object_id is None:
+            physical_object_id = _physical_object_id(feature_properties)
+            if physical_object_id is None or physical_object_id not in ids_set:
                 continue
-
-            try:
-                physical_object_id = int(raw_physical_object_id)
-            except (TypeError, ValueError):
-                continue
-
-            if physical_object_id not in ids_set:
-                continue
-
-            source_props = feature_properties.get("properties") or {}
-            building = feature_properties.get("building") or {}
-            physical_object_type = feature_properties.get("physical_object_type") or {}
-
-            physical_object_type_id = physical_object_type.get("physical_object_type_id")
-            physical_object_type_name = physical_object_type.get("name")
-
-            is_residential_physical_object = (
-                    physical_object_type_id == 4
-                    and physical_object_type_name == "Жилой дом"
-            )
-
-            if is_residential_physical_object:
-                try:
-                    living_area = float(source_props.get("living_area"))
-                except (TypeError, ValueError):
-                    living_area = 1.0
-
-                if living_area <= 0:
-                    living_area = 1.0
-            else:
-                living_area = 0.0
-
-            try:
-                building_area = float(source_props.get("building_area"))
-            except (TypeError, ValueError):
-                official_area = building.get("building_area_official")
-                try:
-                    building_area = float(official_area)
-                except (TypeError, ValueError):
-                    building_area = 0.0
-
-            try:
-                floors_count = float(
-                    source_props.get("floors_count", building.get("floors", 0.0))
-                )
-            except (TypeError, ValueError):
-                floors_count = 0.0
-
-            try:
-                residents_number = float(source_props.get("residents_number"))
-            except (TypeError, ValueError):
-                residents_number = 0.0
-
-            if not is_residential_physical_object:
-                residents_number = 0.0
-
-            service_value = source_props.get("service")
-            if not isinstance(service_value, list):
-                service_value = []
-
-            result_properties = {
-                "floors_count": floors_count,
-                "living_area": living_area,
-                "building_area": building_area,
-                "service": service_value,
-                "broke_restriction_zone": bool(
-                    source_props.get("broke_restriction_zone", False)
-                ),
-                "building_type": source_props.get("building_type"),
-                "zone": source_props.get("zone"),
-                "residents_number": residents_number,
-                "is_excluded": True,
-                "physical_object_id": physical_object_id,
-            }
-
-            selected.append(
-                {
-                    "type": "Feature",
-                    "id": feature.get("id"),
-                    "geometry": deepcopy(feature.get("geometry")),
-                    "properties": result_properties,
-                }
-            )
+            selected.append(self._normalize_physical_object(feature, physical_object_id))
 
         logger.info(
             "PhysicalObjectsService.select_features_by_ids: selected {} features by ids={}",
@@ -155,6 +83,129 @@ class PhysicalObjectsService:
         )
 
         return selected
+
+    def select_building_features(
+            self,
+            fc: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Return every existing *building* of a scenario, normalized like
+        :meth:`select_features_by_ids`.
+
+        UrbanDB physical objects also include roads, water bodies, etc. A
+        feature counts as a building when it carries a ``building`` record or
+        is a residential house (``physical_object_type_id == 4``), and has a
+        polygonal footprint (point-geometry buildings cannot be cut out of a
+        block).
+        """
+        if not fc:
+            return []
+
+        selected: list[dict[str, Any]] = []
+        skipped = 0
+
+        for feature in fc.get("features") or []:
+            feature_properties = feature.get("properties") or {}
+            physical_object_type = feature_properties.get("physical_object_type") or {}
+            is_building = bool(feature_properties.get("building")) or (
+                physical_object_type.get("physical_object_type_id") == 4
+            )
+            if not is_building:
+                continue
+
+            geometry = feature.get("geometry") or {}
+            physical_object_id = _physical_object_id(feature_properties)
+            if geometry.get("type") not in {"Polygon", "MultiPolygon"} or physical_object_id is None:
+                skipped += 1
+                continue
+
+            selected.append(self._normalize_physical_object(feature, physical_object_id))
+
+        logger.info(
+            "PhysicalObjectsService.select_building_features: selected {} building(s), "
+            "skipped {} without polygonal footprint or id",
+            len(selected),
+            skipped,
+        )
+
+        return selected
+
+    @staticmethod
+    def _normalize_physical_object(feature: dict[str, Any], physical_object_id: int) -> dict[str, Any]:
+        """Flatten a UrbanDB physical object feature to the generated_buildings schema."""
+        feature_properties = feature.get("properties") or {}
+        source_props = feature_properties.get("properties") or {}
+        building = feature_properties.get("building") or {}
+        physical_object_type = feature_properties.get("physical_object_type") or {}
+
+        physical_object_type_id = physical_object_type.get("physical_object_type_id")
+        physical_object_type_name = physical_object_type.get("name")
+
+        is_residential_physical_object = (
+                physical_object_type_id == 4
+                and physical_object_type_name == "Жилой дом"
+        )
+
+        if is_residential_physical_object:
+            try:
+                living_area = float(source_props.get("living_area"))
+            except (TypeError, ValueError):
+                living_area = 1.0
+
+            if living_area <= 0:
+                living_area = 1.0
+        else:
+            living_area = 0.0
+
+        try:
+            building_area = float(source_props.get("building_area"))
+        except (TypeError, ValueError):
+            official_area = building.get("building_area_official")
+            try:
+                building_area = float(official_area)
+            except (TypeError, ValueError):
+                building_area = 0.0
+
+        try:
+            floors_count = float(
+                source_props.get("floors_count", building.get("floors", 0.0))
+            )
+        except (TypeError, ValueError):
+            floors_count = 0.0
+
+        try:
+            residents_number = float(source_props.get("residents_number"))
+        except (TypeError, ValueError):
+            residents_number = 0.0
+
+        if not is_residential_physical_object:
+            residents_number = 0.0
+
+        service_value = source_props.get("service")
+        if not isinstance(service_value, list):
+            service_value = []
+
+        result_properties = {
+            "floors_count": floors_count,
+            "living_area": living_area,
+            "building_area": building_area,
+            "service": service_value,
+            "broke_restriction_zone": bool(
+                source_props.get("broke_restriction_zone", False)
+            ),
+            "building_type": source_props.get("building_type"),
+            "zone": source_props.get("zone"),
+            "residents_number": residents_number,
+            "is_excluded": True,
+            "physical_object_id": physical_object_id,
+        }
+
+        return {
+            "type": "Feature",
+            "id": feature.get("id"),
+            "geometry": deepcopy(feature.get("geometry")),
+            "properties": result_properties,
+        }
 
     def exclude(
         self,

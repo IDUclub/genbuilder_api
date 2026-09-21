@@ -51,7 +51,7 @@ class BuildingsGenerator:
             except (TypeError, ValueError):
                 continue
 
-            if L <= 0 or W <= 0:
+            if not (L > 0 and W > 0):  # also skips NaN (plot left empty)
                 continue
 
             angle = longest_edge_angle_mrr(poly, degrees=False)

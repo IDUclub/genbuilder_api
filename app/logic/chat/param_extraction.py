@@ -42,7 +42,7 @@ DEFAULT_FLOOR_GROUP_BY_ZONE: dict[str, str] = {
 }
 
 # Human-readable zone labels for clarification prompts.
-_ZONE_LABELS: dict[str, str] = {
+ZONE_LABELS: dict[str, str] = {
     "residential": "жилая",
     "business": "многофункциональная",
 }
@@ -54,7 +54,12 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "Заполняй только те значения, которые пользователь назвал явно; всё "
     "остальное оставляй null. Ничего не выдумывай. Числа — без единиц измерения. "
     "residents — число жителей, living_area — жилая площадь в м², "
-    "floors_avg — средняя этажность, density_scenario — один из: min, mean, max."
+    "floors_avg — средняя этажность, density_scenario — один из: min, mean, max. "
+    "Если пользователь назвал спрос без указания зоны (например «2000 жителей» "
+    "или «30 000 м² жилья»), это общее значение на всю территорию: запиши его в "
+    "total_residents или total_living_area и НЕ повторяй его в zones. В zones "
+    "указывай residents/living_area только для зон, которые пользователь назвал "
+    "явно."
 )
 
 
@@ -79,7 +84,9 @@ def build_extraction_schema() -> dict[str, Any]:
                     },
                     "required": ["zone"],
                 },
-            }
+            },
+            "total_residents": {"type": ["integer", "null"]},
+            "total_living_area": {"type": ["number", "null"]},
         },
         "required": ["zones"],
     }
@@ -106,11 +113,21 @@ class Missing:
 
 @dataclass
 class ExtractedTargets:
-    """Normalized generation targets plus the requested zone list."""
+    """Normalized generation targets plus the requested zone list.
+
+    ``error`` is set when the extraction call itself failed (the LLM is down or
+    answered with junk). It is not the same as "the user named no parameters":
+    nothing was parsed at all, so asking for the missing values again would only
+    loop — the caller reports the failure instead.
+    """
 
     targets_by_zone: dict[str, dict[str, Any]] = field(default_factory=dict)
     functional_zone_types: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    # Demand named without a zone ("2000 жителей") — for the whole territory,
+    # split between the zones in scope by ``split_total_residents``.
+    total_residents: int | None = None
 
 
 def _num(value: Any) -> float | None:
@@ -156,6 +173,16 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         if isinstance(dens, str) and dens.strip() in DENSITY_SCENARIOS:
             density_scenario[zone] = dens.strip()
 
+    total = _num(raw.get("total_residents"))
+    total_la = _num(raw.get("total_living_area"))
+    if total is None and total_la is not None and la_per_person > 0:
+        total = round(total_la / la_per_person)
+    total_residents = int(total) if total else None
+    if total_residents is not None:
+        # The model may still copy the total into every zone despite the
+        # prompt; such per-zone values are the same total, not a demand each.
+        residents = {z: r for z, r in residents.items() if r != total_residents}
+
     targets_by_zone: dict[str, dict[str, Any]] = {}
     if residents:
         targets_by_zone["residents"] = residents
@@ -168,7 +195,48 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         targets_by_zone=targets_by_zone,
         functional_zone_types=requested,
         raw=raw,
+        total_residents=total_residents,
     )
+
+
+def split_total_residents(
+    extracted: ExtractedTargets,
+    zones: Iterable[str],
+    weights: dict[str, float] | None = None,
+) -> dict[str, int]:
+    """Split the zone-less total between the in-scope zones without a demand.
+
+    Zones the user named explicitly keep their value and it is subtracted from
+    the total; the rest is divided by ``weights`` (zone areas) with the
+    largest-remainder method, or equally when no weights are known. Updates
+    ``extracted.targets_by_zone["residents"]`` in place and returns the added
+    per-zone values (empty when there is nothing to split).
+    """
+    total = extracted.total_residents
+    if not total:
+        return {}
+    residents = extracted.targets_by_zone.setdefault("residents", {})
+    open_zones = [
+        z for z in dict.fromkeys(zones) if z in GENERATED_ZONES and not residents.get(z)
+    ]
+    left = total - sum(residents.values())
+    if not open_zones or left <= 0:
+        if not residents:
+            extracted.targets_by_zone.pop("residents")
+        return {}
+
+    w = {z: float((weights or {}).get(z) or 0.0) for z in open_zones}
+    if sum(w.values()) <= 0:
+        w = dict.fromkeys(open_zones, 1.0)
+    w_total = sum(w.values())
+    share = {z: left * w[z] / w_total for z in open_zones}
+    split = {z: int(share[z]) for z in open_zones}
+    rest = left - sum(split.values())
+    for z in sorted(open_zones, key=lambda z: (share[z] - split[z], w[z]), reverse=True)[:rest]:
+        split[z] += 1
+    split = {z: n for z, n in split.items() if n > 0}
+    residents.update(split)
+    return split
 
 
 async def extract_generation_targets(
@@ -180,8 +248,8 @@ async def extract_generation_targets(
 ) -> ExtractedTargets:
     """Ask the LLM to extract targets from ``user_query`` (structured output).
 
-    On any LLM failure returns empty targets so the caller falls through to
-    clarification rather than crashing the stream.
+    Never raises: on an LLM failure it returns empty targets with ``error`` set,
+    so the caller decides what to do rather than the stream dying mid-flight.
     """
     messages = [
         {"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
@@ -193,7 +261,7 @@ async def extract_generation_targets(
         )
     except VLLMChatError as exc:
         logger.warning("param extraction failed: {}", exc)
-        return ExtractedTargets(raw={"error": str(exc)})
+        return ExtractedTargets(raw={"error": str(exc)}, error=str(exc))
     return normalize_targets(raw, la_per_person)
 
 
@@ -215,7 +283,7 @@ def validate_targets(
         if zone not in GENERATED_ZONES:
             continue
         if not residents.get(zone):
-            label = _ZONE_LABELS.get(zone, zone)
+            label = ZONE_LABELS.get(zone, zone)
             missing.append(
                 Missing(
                     zone=zone,

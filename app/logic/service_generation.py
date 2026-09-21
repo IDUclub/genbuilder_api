@@ -80,7 +80,8 @@ class ServiceGenerator:
     def summarize_service_generation(
         all_limits: Dict[Hashable, Dict[str, float]],
         service_buildings: gpd.GeoDataFrame,
-    ) -> Dict[str, float | int]:
+        failure_reasons: Optional[Dict[tuple[Hashable, str], str]] = None,
+    ) -> Dict[str, Any]:
         """Summarize requested targets and the capacity actually placed.
 
         A request is one positive ``(zone, service type)`` capacity target.  A
@@ -111,6 +112,11 @@ class ServiceGenerator:
         fulfilled = 0
         capacity_requested = 0.0
         capacity_unplaced = 0.0
+        unplaced_by_reason = {
+            "no_template": [],
+            "no_space": [],
+            "site_limit": [],
+        }
         for zone, service_name, target_capacity in targets:
             placed_capacity = placed_capacity_by_target.get(
                 (zone, str(service_name)), 0.0
@@ -119,6 +125,16 @@ class ServiceGenerator:
             capacity_unplaced += max(target_capacity - placed_capacity, 0.0)
             if placed_capacity >= target_capacity:
                 fulfilled += 1
+            else:
+                reason = (failure_reasons or {}).get(
+                    (zone, str(service_name)), "no_space"
+                )
+                if reason not in unplaced_by_reason:
+                    reason = "no_space"
+                unplaced_by_reason[reason].append(str(service_name))
+
+        for names in unplaced_by_reason.values():
+            names.sort()
 
         capacity_placed = 0.0
         if not service_buildings.empty and "capacity" in service_buildings.columns:
@@ -136,6 +152,10 @@ class ServiceGenerator:
             "capacity_requested": capacity_requested,
             "capacity_placed": capacity_placed,
             "capacity_unplaced": capacity_unplaced,
+            "unplaced_no_template": len(unplaced_by_reason["no_template"]),
+            "unplaced_no_space": len(unplaced_by_reason["no_space"]),
+            "unplaced_site_limit": len(unplaced_by_reason["site_limit"]),
+            "unplaced_by_reason": unplaced_by_reason,
         }
 
     def load_service_projects(self) -> gpd.GeoDataFrame:
@@ -167,7 +187,7 @@ class ServiceGenerator:
     @staticmethod
     def _get_block_free_area(
         block_geom: BaseGeometry,
-        plots_gdf: gpd.GeoDataFrame,
+        occupied_gdf: gpd.GeoDataFrame,
     ) -> BaseGeometry:
         if block_geom is None or block_geom.is_empty:
             return block_geom
@@ -177,11 +197,11 @@ class ServiceGenerator:
             return block_geom
         block_geom = block_geom_valid
 
-        if plots_gdf.empty:
+        if occupied_gdf.empty:
             return block_geom
 
         cleaned_geoms: List[BaseGeometry] = []
-        for g in plots_gdf.geometry:
+        for g in occupied_gdf.geometry:
             if g is None or g.is_empty:
                 continue
 
@@ -195,7 +215,7 @@ class ServiceGenerator:
             return block_geom
 
         try:
-            plots_union = unary_union(cleaned_geoms)
+            occupied_union = unary_union(cleaned_geoms)
         except GEOSException:
             union_geom = cleaned_geoms[0]
             for g in cleaned_geoms[1:]:
@@ -203,14 +223,14 @@ class ServiceGenerator:
                     union_geom = union_geom.union(g)
                 except GEOSException:
                     continue
-            plots_union = union_geom
+            occupied_union = union_geom
 
         try:
-            free_area = block_geom.difference(plots_union)
+            free_area = block_geom.difference(occupied_union)
         except GEOSException:
             block_fixed = make_valid(block_geom)
-            plots_fixed = make_valid(plots_union)
-            free_area = block_fixed.difference(plots_fixed)
+            occupied_fixed = make_valid(occupied_union)
+            free_area = block_fixed.difference(occupied_fixed)
 
         return free_area
 
@@ -233,7 +253,9 @@ class ServiceGenerator:
         preferred_angle: Optional[float] = None,
         existing_centroids: Optional[List[Point]] = None,
         min_dist_between_centers: Optional[float] = None,
+        rng: Optional[random.Random] = None,
     ) -> Optional[Polygon]:
+        rng = rng or random.Random()
         if poly.is_empty:
             return None
 
@@ -259,16 +281,16 @@ class ServiceGenerator:
             angle_candidates = [0.0, 90.0, 45.0, -45.0, 30.0, -30.0]
 
         for _ in range(max_attempts):
-            length = random.uniform(len_min, len_max)
-            width = random.uniform(wid_min, wid_max)
+            length = rng.uniform(len_min, len_max)
+            width = rng.uniform(wid_min, wid_max)
 
             rect = box(-length / 2.0, -width / 2.0, length / 2.0, width / 2.0)
 
-            angle = random.choice(angle_candidates)
+            angle = rng.choice(angle_candidates)
             rect_rot = rotate(rect, angle, origin=(0, 0), use_radians=False)
 
-            cx = random.uniform(minx, maxx)
-            cy = random.uniform(miny, maxy)
+            cx = rng.uniform(minx, maxx)
+            cy = rng.uniform(miny, maxy)
 
             rect_shifted = translate(rect_rot, xoff=cx, yoff=cy)
 
@@ -298,8 +320,12 @@ class ServiceGenerator:
         return translate(geom, xoff=-c.x, yoff=-c.y)
 
     def _place_building_in_plot(
-        self, building_template: BaseGeometry, plot_geom: BaseGeometry
+        self,
+        building_template: BaseGeometry,
+        plot_geom: BaseGeometry,
+        rng: Optional[random.Random] = None,
     ) -> Optional[BaseGeometry]:
+        rng = rng or random.Random()
         allowed_area = plot_geom.buffer(-self.generation_parameters.INNER_BORDER)
         if allowed_area.is_empty:
             return None
@@ -309,8 +335,8 @@ class ServiceGenerator:
             return None
 
         for _ in range(self.generation_parameters.max_service_attempts):
-            cx = random.uniform(minx, maxx)
-            cy = random.uniform(miny, maxy)
+            cx = rng.uniform(minx, maxx)
+            cy = rng.uniform(miny, maxy)
 
             if not allowed_area.contains(box(cx, cy, cx, cy)):
                 continue
@@ -339,12 +365,13 @@ class ServiceGenerator:
     def place_service_buildings(
         self,
         blocks: gpd.GeoDataFrame,
-        plots_gdf: gpd.GeoDataFrame,
+        occupied_buildings_gdf: gpd.GeoDataFrame,
         all_limits: Dict[Hashable, Dict[str, float]],
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
+        rng: Optional[random.Random] = None,
     ) -> gpd.GeoDataFrame:
-        
+        rng = rng or random.Random(self.generation_parameters.seed)
         projects_local = ensure_crs(projects_gdf, blocks_crs)
 
         normalized_buildings: Dict[Any, BaseGeometry] = {}
@@ -356,7 +383,7 @@ class ServiceGenerator:
         service_buildings_rows: List[Dict[str, Any]] = []
 
         zone_placed_capacity: Dict[Hashable, Dict[str, float]] = {}
-        zone_sites_count: Dict[Hashable, Dict[str, int]] = {}
+        site_limit_targets: set[tuple[Hashable, str]] = set()
 
         for block_row in blocks.itertuples():
             block_id = getattr(block_row, "src_index")
@@ -380,9 +407,15 @@ class ServiceGenerator:
 
             placed_plot_centers: List[Point] = []
 
-            plots_block = plots_gdf[plots_gdf["src_index"] == block_id]
+            occupied_block = occupied_buildings_gdf[
+                occupied_buildings_gdf["src_index"] == block_id
+            ]
 
-            free_area = self._get_block_free_area(block_geom, plots_block)
+            # Residential plots normally cover nearly all buildable land.  They
+            # are cadastral/algorithmic allocations, not occupied geometry; if
+            # they are subtracted here, service placement sees no usable area.
+            # Only generated building footprints are physical obstacles.
+            free_area = self._get_block_free_area(block_geom, occupied_block)
             if free_area.is_empty:
                 continue
 
@@ -392,10 +425,8 @@ class ServiceGenerator:
 
             if zone_id not in zone_placed_capacity:
                 zone_placed_capacity[zone_id] = {srv: 0.0 for srv in block_limits}
-                zone_sites_count[zone_id] = {srv: 0 for srv in block_limits}
 
             zone_caps = zone_placed_capacity[zone_id]
-            zone_sites = zone_sites_count[zone_id]
 
             for service_name, target_capacity in block_limits.items():
                 if target_capacity <= 0:
@@ -405,14 +436,6 @@ class ServiceGenerator:
                 if placed_so_far >= target_capacity:
                     continue
 
-                sites_so_far = int(zone_sites.get(service_name, 0))
-                if (
-                    self.generation_parameters.max_sites_per_service_per_block > 0
-                    and sites_so_far
-                    >= self.generation_parameters.max_sites_per_service_per_block
-                ):
-                    continue
-
                 service_projects = projects_local[
                     projects_local["service"] == service_name
                 ]
@@ -420,13 +443,13 @@ class ServiceGenerator:
                     continue
 
                 placed_capacity = placed_so_far
-                sites_count = sites_so_far
+                sites_in_block = 0
 
                 while (
                     placed_capacity < target_capacity
                     and (
                         self.generation_parameters.max_sites_per_service_per_block <= 0
-                        or sites_count
+                        or sites_in_block
                         < self.generation_parameters.max_sites_per_service_per_block
                     )
                     and not free_area.is_empty
@@ -465,6 +488,7 @@ class ServiceGenerator:
                             preferred_angle=block_angle,
                             existing_centroids=placed_plot_centers,
                             min_dist_between_centers=min_spacing,
+                            rng=rng,
                         )
 
                         if plot_geom is None:
@@ -480,6 +504,7 @@ class ServiceGenerator:
                         building_geom = self._place_building_in_plot(
                             building_template=building_oriented_main,
                             plot_geom=plot_geom,
+                            rng=rng,
                         )
 
                         if building_geom is None:
@@ -492,6 +517,7 @@ class ServiceGenerator:
                             building_geom = self._place_building_in_plot(
                                 building_template=building_oriented_orth,
                                 plot_geom=plot_geom,
+                                rng=rng,
                             )
 
                         if building_geom is None:
@@ -523,7 +549,7 @@ class ServiceGenerator:
                         service_buildings_rows.append(row_out)
 
                         placed_capacity += capacity
-                        sites_count += 1
+                        sites_in_block += 1
                         placed_in_iteration = True
 
                         free_area = free_area.difference(plot_geom)
@@ -535,10 +561,35 @@ class ServiceGenerator:
                         break
 
                 zone_caps[service_name] = placed_capacity
-                zone_sites[service_name] = sites_count
+                if (
+                    placed_capacity < target_capacity
+                    and self.generation_parameters.max_sites_per_service_per_block > 0
+                    and sites_in_block
+                    >= self.generation_parameters.max_sites_per_service_per_block
+                ):
+                    site_limit_targets.add((zone_id, str(service_name)))
+
+        available_service_names = set(projects_local["service"].dropna().astype(str))
+        failure_reasons: Dict[tuple[Hashable, str], str] = {}
+        for zone_id, block_limits in all_limits.items():
+            placed_for_zone = zone_placed_capacity.get(zone_id, {})
+            for service_name, target_capacity in block_limits.items():
+                if float(target_capacity) <= 0.0:
+                    continue
+                service_key = (zone_id, str(service_name))
+                if float(placed_for_zone.get(service_name, 0.0)) >= float(
+                    target_capacity
+                ):
+                    continue
+                if str(service_name) not in available_service_names:
+                    failure_reasons[service_key] = "no_template"
+                elif service_key in site_limit_targets:
+                    failure_reasons[service_key] = "site_limit"
+                else:
+                    failure_reasons[service_key] = "no_space"
 
         if not service_buildings_rows:
-            return gpd.GeoDataFrame(
+            result = gpd.GeoDataFrame(
                 columns=[
                     "service",
                     "capacity",
@@ -550,14 +601,14 @@ class ServiceGenerator:
                 geometry="geometry",
                 crs=blocks_crs,
             )
-
-        service_buildings_gdf = gpd.GeoDataFrame(
-            service_buildings_rows,
-            geometry="geometry",
-            crs=blocks_crs,
-        )
-
-        return service_buildings_gdf
+        else:
+            result = gpd.GeoDataFrame(
+                service_buildings_rows,
+                geometry="geometry",
+                crs=blocks_crs,
+            )
+        result.attrs["failure_reasons"] = failure_reasons
+        return result
 
     async def generate_services(
         self,
@@ -605,12 +656,16 @@ class ServiceGenerator:
         services_buildings_gdf = await asyncio.to_thread(
             self.place_service_buildings,
             blocks,
-            plots,
+            buildings,
             all_limits,
             projects_gdf,
             crs,
         )
         services_buildings_gdf.attrs["service_diagnostics"] = (
-            self.summarize_service_generation(all_limits, services_buildings_gdf)
+            self.summarize_service_generation(
+                all_limits,
+                services_buildings_gdf,
+                services_buildings_gdf.attrs.get("failure_reasons"),
+            )
         )
         return services_buildings_gdf

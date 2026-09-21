@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from loguru import logger
 from iduconfig import Config
 
+from app.exceptions.http_exception_wrapper import http_exception
 from app.logic.physical_objects_service import PhysicalObjectsService
 from app.schema.dto import BlockFeatureCollection
 from app.dependencies import UrbanDBAPI
@@ -63,6 +64,14 @@ class Genbuilder:
             "services_requested": 0,
             "services_placed": 0,
             "services_unplaced": 0,
+            "unplaced_no_template": 0,
+            "unplaced_no_space": 0,
+            "unplaced_site_limit": 0,
+            "unplaced_by_reason": {
+                "no_template": [],
+                "no_space": [],
+                "site_limit": [],
+            },
             "service_buildings_placed": 0,
             "capacity_requested": 0.0,
             "capacity_placed": 0.0,
@@ -301,12 +310,18 @@ class Genbuilder:
                     scenario_id=scenario_id,
                     token=token,
                 )
+            except HTTPException:
+                raise
             except Exception as e:
-                logger.warning(
-                    "Genbuilder.run: failed to load physical objects; skipping exclusion: "
-                    f"{e}"
-                )
-                fc = {}
+                # Fail loudly: silently generating on top of buildings the
+                # caller asked to exclude produces a plausible but wrong layout.
+                logger.exception("Genbuilder.run: failed to load physical objects for exclusion")
+                raise http_exception(
+                    502,
+                    f"Failed to load physical objects for scenario {scenario_id}",
+                    input_data={"physical_object_ids": sorted(ids_set)},
+                    detail=str(e),
+                ) from e
 
             by_ids = self.physical_objects_service.select_features_by_ids(fc, ids_set)
             if not by_ids:
@@ -632,23 +647,38 @@ class Genbuilder:
                                 status="completed",
                                 warning=None,
                             )
-                        elif service_diagnostics["service_buildings_placed"] > 0:
-                            service_diagnostics.update(
-                                status="partial",
-                                warning=(
+                        else:
+                            failure_summary = (
+                                "нет шаблона: "
+                                f"{service_diagnostics['unplaced_no_template']}; "
+                                "не хватило места: "
+                                f"{service_diagnostics['unplaced_no_space']}; "
+                                "достигнут лимит размещения: "
+                                f"{service_diagnostics['unplaced_site_limit']}"
+                            )
+                            if service_diagnostics["service_buildings_placed"] > 0:
+                                status = "partial"
+                                warning = (
                                     "не удалось полностью разместить "
                                     f"{service_diagnostics['services_unplaced']} из "
                                     f"{service_diagnostics['services_requested']} "
-                                    "требуемых типов сервисов"
-                                ),
-                            )
-                        else:
-                            service_diagnostics.update(
-                                status="not_placed",
-                                warning=(
+                                    "требуемых типов сервисов "
+                                    f"({failure_summary})"
+                                )
+                            else:
+                                status = "not_placed"
+                                warning = (
                                     "сервисы запрошены по нормативам, но ни один "
-                                    "сервис не удалось разместить в кварталах"
-                                ),
+                                    "сервис не удалось разместить в кварталах "
+                                    f"({failure_summary})"
+                                )
+                            service_diagnostics.update(
+                                status=status,
+                                warning=warning,
+                            )
+                            logger.warning(
+                                "Genbuilder.run: incomplete service placement: {}",
+                                warning,
                             )
                         logger.info(
                             "Genbuilder.run: residential services generated, "

@@ -22,6 +22,7 @@ from contextlib import AsyncExitStack
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from loguru import logger
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from app.dependencies import (
@@ -89,7 +90,10 @@ async def generate_chat_stream(
     source: Annotated[Optional[str], Form(description="Data source, e.g. OSM (with scenario_id)")] = None,
     blocks_file: Annotated[
         Optional[UploadFile],
-        File(description="Optional GeoJSON FeatureCollection of blocks; each feature needs properties.zone"),
+        File(
+            description="Optional GeoJSON FeatureCollection of functional zones; the zone type "
+            "attribute (zone / functional_zone_type_name / any other) is detected automatically"
+        ),
     ] = None,
     buildings_file: Annotated[
         Optional[UploadFile],
@@ -155,42 +159,71 @@ async def generate_chat_stream(
     )
 
     async def event_source():
-        async with AsyncExitStack() as stack:
-            llm = await stack.enter_async_context(build_vllm_chat_client(temperature))
-            storage = build_chat_storage_client()
-            if storage is not None:
-                await stack.enter_async_context(storage)
+        # The last chat id seen on the wire, so the safety net below can still
+        # tell the client which chat the failed turn belonged to.
+        stream_chat_id = chat_id
+        try:
+            async with AsyncExitStack() as stack:
+                llm = await stack.enter_async_context(build_vllm_chat_client(temperature))
+                storage = build_chat_storage_client()
+                if storage is not None:
+                    await stack.enter_async_context(storage)
 
-            async for event in stream_generation_chat(
-                builder=builder,
-                llm_client=llm,
-                chat_storage_client=storage,
-                token=user.token,
-                user_id=user.user_id,
-                user_query=user_query,
-                scenario_id=scenario_id,
-                year=year,
-                source=source,
-                la_per_person=CHAT_LA_PER_PERSON,
-                chat_id=chat_id,
-                project_id=project_id,
-                chat_title=user_query[:256],
-                functional_zone_types=zone_types,
-                blocks_geojson=blocks_geojson,
-                existing_buildings_geojson=buildings_geojson,
-                existing_buildings_declined=skip_existing_buildings,
-                territory_id=territory_id,
-                model=model,
-                temperature=temperature,
-                zones_service=zones_service,
-                urban_api=urban_db_api,
-                object_storage=optional_object_storage(),
-                public_base_url=public_base_url(),
-            ):
-                event_type = event.pop("type", "message")
-                yield ServerSentEvent(
-                    event=event_type,
-                    data=json.dumps(event, ensure_ascii=False),
-                )
+                async for event in stream_generation_chat(
+                    builder=builder,
+                    llm_client=llm,
+                    chat_storage_client=storage,
+                    token=user.token,
+                    user_id=user.user_id,
+                    user_query=user_query,
+                    scenario_id=scenario_id,
+                    year=year,
+                    source=source,
+                    la_per_person=CHAT_LA_PER_PERSON,
+                    chat_id=chat_id,
+                    project_id=project_id,
+                    chat_title=user_query[:256],
+                    functional_zone_types=zone_types,
+                    blocks_geojson=blocks_geojson,
+                    existing_buildings_geojson=buildings_geojson,
+                    existing_buildings_declined=skip_existing_buildings,
+                    territory_id=territory_id,
+                    model=model,
+                    temperature=temperature,
+                    zones_service=zones_service,
+                    urban_api=urban_db_api,
+                    object_storage=optional_object_storage(),
+                    public_base_url=public_base_url(),
+                ):
+                    event_type = event.pop("type", "message")
+                    if event.get("chat_id"):
+                        stream_chat_id = event["chat_id"]
+                    yield ServerSentEvent(
+                        event=event_type,
+                        data=json.dumps(event, ensure_ascii=False),
+                    )
+        except Exception as exc:  # noqa: BLE001 - a dead stream tells the client nothing
+            # Anything unhandled here would otherwise close the response with no
+            # terminal event at all, and the frontend can only report that the
+            # stream ended without a result. Say what happened instead.
+            logger.exception("generation chat stream failed")
+            yield ServerSentEvent(
+                event="error",
+                data=json.dumps(
+                    {
+                        "stage": "stream",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                        "message": "Внутренняя ошибка сервиса — генерация прервана.",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            yield ServerSentEvent(
+                event="done",
+                data=json.dumps(
+                    {"chat_id": stream_chat_id, "assistant_message_id": None},
+                    ensure_ascii=False,
+                ),
+            )
 
     return EventSourceResponse(event_source())
