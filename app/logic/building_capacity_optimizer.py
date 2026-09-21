@@ -116,6 +116,20 @@ class CapacityOptimizer:
             "far_target": float(far_target),
         }
 
+    def usable_per_building_for_row(self, row: pd.Series, far: str, mode: str) -> float:
+        """Living area of one building of the block's base type (0 if unknown)."""
+        building_type = infer_building_type(row, mode=mode)
+        params = self.building_generation_parameters.params_by_type.get(building_type)
+        if params is None:
+            return 0.0
+        L_idx, W_idx, H_idx, _ = self.pick_indices(far, params)
+        return usable_per_building(
+            float(params.building_length_range[L_idx]),
+            float(params.building_width_range[W_idx]),
+            float(params.building_height[H_idx]),
+            params.la_coef,
+        )
+
     def compute_block(
         self,
         row: pd.Series,

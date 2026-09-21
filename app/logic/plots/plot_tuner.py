@@ -318,6 +318,13 @@ class PlotTuner:
                     }
                 ]
 
+            if target_col == "la_target" and options[0]["living"] > 0:
+                # A living-area target is met with whole buildings: let the search
+                # leave a plot empty instead of forcing a building on every plot.
+                options.append(
+                    {"L": 0.0, "W": 0.0, "H": 0.0, "living": 0.0, "footprint": 0.0}
+                )
+
             self.options_per_plot[idx] = options
 
         self.current_choice = {}
