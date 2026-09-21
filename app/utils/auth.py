@@ -74,25 +74,19 @@ def _jwks_client() -> PyJWKClient:
     return PyJWKClient(f"{_realm_base()}/protocol/openid-connect/certs")
 
 
-def _valid_audiences() -> list[str]:
-    raw = os.getenv("AUTH_VALID_AUDIENCES") or ""
-    return [a.strip() for a in raw.split(",") if a.strip()]
-
-
 def _decode_verified(token: str) -> dict[str, Any]:
     """Verify signature/expiry/issuer against Keycloak and return the claims.
 
+    The ``aud`` claim is not checked: any token issued by our realm is accepted.
     Runs blocking JWKS/urllib work; call via ``asyncio.to_thread``.
     """
     signing_key = _jwks_client().get_signing_key_from_jwt(token).key
-    audiences = _valid_audiences()
     return jwt.decode(
         token,
         signing_key,
         algorithms=["RS256"],
         issuer=_realm_base(),
-        audience=audiences or None,
-        options={"verify_aud": bool(audiences)},
+        options={"verify_aud": False},
     )
 
 

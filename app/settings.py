@@ -42,7 +42,6 @@ class Settings(BaseModel):
     keycloak_scope: str = Field(default="", alias="KEYCLOAK_SCOPE")
 
     auth_verify: bool = Field(default=True, alias="AUTH_VERIFY")
-    auth_valid_audiences: str = Field(default="", alias="AUTH_VALID_AUDIENCES")
 
     a2a_public_url: str = Field(
         default="http://localhost:8000", alias="A2A_PUBLIC_URL"
