@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Union, Annotated
 from geojson_pydantic import Feature, FeatureCollection, Polygon, MultiPolygon
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
+from app.logic.zone_taxonomy import zone_from_properties
 from app.schema._blocks_example import blocks as EXAMPLE_BLOCKS
 
 
@@ -20,6 +21,15 @@ class BlockProperties(BaseModel):
     )
 
     zone: Annotated[str, Field(description="Zone label (required)")]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _zone_from_export_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            zone = zone_from_properties(data)
+            if zone is not None and zone != data.get("zone"):
+                data = {**data, "zone": zone}
+        return data
 
     @field_validator("zone")
     @classmethod

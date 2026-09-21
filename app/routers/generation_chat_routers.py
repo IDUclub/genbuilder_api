@@ -90,7 +90,10 @@ async def generate_chat_stream(
     source: Annotated[Optional[str], Form(description="Data source, e.g. OSM (with scenario_id)")] = None,
     blocks_file: Annotated[
         Optional[UploadFile],
-        File(description="Optional GeoJSON FeatureCollection of blocks; each feature needs properties.zone"),
+        File(
+            description="Optional GeoJSON FeatureCollection of functional zones; the zone type "
+            "attribute (zone / functional_zone_type_name / any other) is detected automatically"
+        ),
     ] = None,
     buildings_file: Annotated[
         Optional[UploadFile],

@@ -44,6 +44,27 @@ def normalize_zone(name: object) -> str:
     return _ZONE_ALIASES.get(key, key)
 
 
+def zone_from_properties(props: object) -> str | None:
+    """Raw zone name of a block feature, tolerant to Urban DB / Prostor exports.
+
+    ``zone`` wins; otherwise falls back to ``functional_zone_type_name`` (flat
+    Prostor export) or ``functional_zone_type.name`` (raw Urban API feature).
+    """
+    if not isinstance(props, dict):
+        return None
+    zone_type = props.get("functional_zone_type")
+    candidates = (
+        props.get("zone"),
+        props.get("functional_zone_type_name"),
+        zone_type.get("name") if isinstance(zone_type, dict) else None,
+    )
+    for value in candidates:
+        s = str(value or "").strip()
+        if s and s.lower() not in {"none", "nan"}:
+            return s
+    return None
+
+
 def subtype_floor_group(name: object) -> str | None:
     """Floor group implied by a residential subtype, or None if not a subtype."""
     return RESIDENTIAL_SUBTYPE_FLOOR_GROUP.get(str(name or "").strip().lower())
