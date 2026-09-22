@@ -2,6 +2,7 @@ import asyncio
 
 import geopandas as gpd
 import pandas as pd
+import pytest
 from shapely.geometry import box
 
 from app.logic.generation_params import GenParams, ParamsProvider
@@ -137,6 +138,28 @@ def test_diagnostics_distinguish_missing_template():
     assert diagnostics["unplaced_no_space"] == 0
     assert diagnostics["unplaced_site_limit"] == 0
     assert diagnostics["unplaced_by_reason"]["no_template"] == ["Библиотека"]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_building_follows_its_plot_axis_when_the_plot_deviates_from_the_block(seed):
+    generator = _generator(seed=seed, max_sites_per_service_per_block=1)
+    projects = _projects("Школа", plot_size=0.0)
+    projects[["plot_length_min", "plot_length_max"]] = 76.0
+    projects[["plot_width_min", "plot_width_max"]] = 28.0
+    projects.geometry = [box(-30, -6, 30, 6)]
+    generator.load_service_projects = lambda: projects
+
+    result = asyncio.run(
+        generator.generate_services(
+            _blocks(300.0),
+            _plots(300.0),
+            _residential_buildings(),
+            _normatives("Школа", 100.0),
+            CRS,
+        )
+    )
+
+    assert len(result) == 1
 
 
 def test_diagnostics_distinguish_insufficient_space():

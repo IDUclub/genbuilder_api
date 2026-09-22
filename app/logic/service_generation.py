@@ -319,6 +319,22 @@ class ServiceGenerator:
         c = geom.centroid
         return translate(geom, xoff=-c.x, yoff=-c.y)
 
+    @classmethod
+    def _local_footprints(
+        cls, projects_gdf: gpd.GeoDataFrame
+    ) -> Dict[Any, BaseGeometry]:
+        """Template footprints centred at the origin, each measured in its own UTM zone.
+
+        Reprojecting a footprint into the UTM zone of a distant scenario rotates it by
+        the meridian convergence, so it no longer matches the axis of its plot.
+        """
+        footprints: Dict[Any, BaseGeometry] = {}
+        for type_id, geom in zip(projects_gdf["type_id"], projects_gdf.geometry):
+            footprint = gpd.GeoSeries([geom], crs=projects_gdf.crs)
+            local = footprint.to_crs(footprint.estimate_utm_crs()).iloc[0]
+            footprints[type_id] = cls._normalize_building_geometry(local)
+        return footprints
+
     def _place_building_in_plot(
         self,
         building_template: BaseGeometry,
@@ -373,12 +389,7 @@ class ServiceGenerator:
     ) -> gpd.GeoDataFrame:
         rng = rng or random.Random(self.generation_parameters.seed)
         projects_local = ensure_crs(projects_gdf, blocks_crs)
-
-        normalized_buildings: Dict[Any, BaseGeometry] = {}
-        for row in projects_local.itertuples():
-            type_id = getattr(row, "type_id")
-            geom = getattr(row, "geometry")
-            normalized_buildings[type_id] = self._normalize_building_geometry(geom)
+        normalized_buildings = self._local_footprints(projects_local)
 
         service_buildings_rows: List[Dict[str, Any]] = []
 
@@ -494,9 +505,10 @@ class ServiceGenerator:
                         if plot_geom is None:
                             continue
 
+                        plot_angle = self._compute_main_axis_angle(plot_geom)
                         building_oriented_main = rotate(
                             building_template_norm,
-                            block_angle,
+                            plot_angle,
                             origin=(0, 0),
                             use_radians=False,
                         )
@@ -510,7 +522,7 @@ class ServiceGenerator:
                         if building_geom is None:
                             building_oriented_orth = rotate(
                                 building_template_norm,
-                                block_angle + 90.0,
+                                plot_angle + 90.0,
                                 origin=(0, 0),
                                 use_radians=False,
                             )
