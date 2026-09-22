@@ -164,6 +164,7 @@ class ServiceGenerator:
 
         expected_cols = [
             "service",
+            "service_type_id",
             "type_id",
             "capacity",
             "floors_count",
@@ -183,6 +184,25 @@ class ServiceGenerator:
 
         projects_gdf = projects_gdf[expected_cols]
         return projects_gdf
+
+    @staticmethod
+    def match_projects_to_normatives(
+        projects_gdf: gpd.GeoDataFrame,
+        service_normatives: pd.DataFrame,
+    ) -> gpd.GeoDataFrame:
+        """Keep templates of the normative service types, named as the normatives name them.
+
+        Templates are matched by ``service_type_id``, so a service type renamed in
+        Urban API keeps its templates.
+        """
+        names_by_type_id = dict(
+            zip(service_normatives["service_id"], service_normatives["service_name"])
+        )
+        matched = projects_gdf[
+            projects_gdf["service_type_id"].isin(names_by_type_id)
+        ].copy()
+        matched["service"] = matched["service_type_id"].map(names_by_type_id)
+        return matched
 
     @staticmethod
     def _get_block_free_area(
@@ -658,6 +678,9 @@ class ServiceGenerator:
         blocks.rename(columns={"index": "src_index"}, inplace=True)
 
         projects_gdf = await asyncio.to_thread(self.load_service_projects)
+        projects_gdf = self.match_projects_to_normatives(
+            projects_gdf, service_normatives
+        )
         all_limits = await asyncio.to_thread(
             self.compute_service_limits_for_blocks,
             blocks,
