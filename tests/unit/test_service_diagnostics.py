@@ -42,11 +42,15 @@ def test_service_summary_counts_fulfilled_and_unfulfilled_targets():
         "capacity_requested": 150.0,
         "capacity_placed": 120.0,
         "capacity_unplaced": 30.0,
+        "unplaced_type_not_supported": 0,
         "unplaced_no_template": 0,
+        "unplaced_demand_below_template": 0,
         "unplaced_no_space": 1,
         "unplaced_site_limit": 0,
         "unplaced_by_reason": {
+            "type_not_supported": [],
             "no_template": [],
+            "demand_below_template": [],
             "no_space": ["Детский сад"],
             "site_limit": [],
         },
@@ -95,6 +99,8 @@ def test_openapi_exposes_strict_territory_contract_and_diagnostics():
     assert "territory_id" in territory_request["properties"]
     assert "service_diagnostics" in generation_response["properties"]
     diagnostics = schema["components"]["schemas"]["ServiceGenerationDiagnostics"]
+    assert "unplaced_type_not_supported" in diagnostics["properties"]
     assert "unplaced_no_template" in diagnostics["properties"]
+    assert "unplaced_demand_below_template" in diagnostics["properties"]
     assert "unplaced_no_space" in diagnostics["properties"]
     assert "unplaced_site_limit" in diagnostics["properties"]

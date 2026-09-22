@@ -11,6 +11,7 @@ from app.logic.service_generation import ServiceGenerator
 
 CRS = 32636
 SCHOOL_ID = 22
+PHARMACY_ID = 34
 LIBRARY_ID = 91
 
 
@@ -141,8 +142,8 @@ def test_service_placement_uses_building_footprints_not_residential_plots():
 def test_diagnostics_distinguish_missing_template():
     result = _generate(
         _generator(),
-        service_name="Библиотека",
-        service_id=LIBRARY_ID,
+        service_name="Аптека",
+        service_id=PHARMACY_ID,
     )
 
     diagnostics = result.attrs["service_diagnostics"]
@@ -150,7 +151,60 @@ def test_diagnostics_distinguish_missing_template():
     assert diagnostics["unplaced_no_template"] == 1
     assert diagnostics["unplaced_no_space"] == 0
     assert diagnostics["unplaced_site_limit"] == 0
-    assert diagnostics["unplaced_by_reason"]["no_template"] == ["Библиотека"]
+    assert diagnostics["unplaced_by_reason"]["no_template"] == ["Аптека"]
+
+
+def test_diagnostics_separate_service_types_that_are_out_of_scope():
+    result = _generate(
+        _generator(),
+        service_name="Библиотека",
+        service_id=LIBRARY_ID,
+    )
+
+    diagnostics = result.attrs["service_diagnostics"]
+    assert result.empty
+    assert diagnostics["unplaced_no_template"] == 0
+    assert diagnostics["unplaced_type_not_supported"] == 1
+    assert diagnostics["unplaced_by_reason"]["type_not_supported"] == ["Библиотека"]
+
+
+def test_demand_smaller_than_half_a_template_is_left_to_the_existing_network():
+    result = _generate(
+        _generator(),
+        normative_capacity=40.0,
+        project_capacity=100.0,
+    )
+
+    diagnostics = result.attrs["service_diagnostics"]
+    assert result.empty
+    assert diagnostics["unplaced_demand_below_template"] == 1
+    assert diagnostics["unplaced_no_space"] == 0
+    assert diagnostics["unplaced_by_reason"]["demand_below_template"] == ["Школа"]
+
+
+def test_a_remainder_too_small_for_another_building_counts_as_fulfilled():
+    result = _generate(
+        _generator(),
+        normative_capacity=130.0,
+        project_capacity=100.0,
+    )
+
+    diagnostics = result.attrs["service_diagnostics"]
+    assert len(result) == 1
+    assert diagnostics["services_placed"] == 1
+    assert diagnostics["unplaced_demand_below_template"] == 0
+    assert diagnostics["capacity_unplaced"] == 30.0
+
+
+def test_demand_of_half_a_template_is_still_placed():
+    result = _generate(
+        _generator(),
+        normative_capacity=50.0,
+        project_capacity=100.0,
+    )
+
+    assert len(result) == 1
+    assert result.attrs["service_diagnostics"]["services_placed"] == 1
 
 
 def test_templates_are_matched_by_service_type_id_not_by_name():
