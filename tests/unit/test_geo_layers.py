@@ -8,6 +8,7 @@ from app.logic.geo_layers import (
     SLOT_BLOCKS_INPUT,
     SLOT_BUILDINGS,
     SLOT_EXISTING_BUILDINGS,
+    SLOT_ZONES,
     build_stored_layer,
     build_zones_layer,
     geo_layer_to_file_part,
@@ -58,7 +59,25 @@ def test_object_key_requires_a_result_id():
 
 
 def test_file_slots_are_the_declared_whitelist():
-    assert FILE_SLOTS == (SLOT_BUILDINGS, SLOT_BLOCKS_INPUT, SLOT_EXISTING_BUILDINGS)
+    assert FILE_SLOTS == (
+        SLOT_BUILDINGS,
+        SLOT_BLOCKS_INPUT,
+        SLOT_EXISTING_BUILDINGS,
+        SLOT_ZONES,
+    )
+
+
+def test_stored_zones_share_the_name_of_the_live_zones_layer():
+    """Project-less mode stores the zones itself; the map still sees one zones layer."""
+    layer = build_stored_layer(
+        slot=SLOT_ZONES, result_id=RESULT_ID, public_base_url=PUBLIC
+    )
+
+    assert layer["name"] == "functional_zones"
+    assert layer["title"] == "Функциональные зоны"
+    assert layer["role"] == "input"
+    assert layer["url"] == f"{PUBLIC}/files/zones/{RESULT_ID}"
+    assert object_key(RESULT_ID, SLOT_ZONES) == f"{RESULT_ID}/zones.geojson"
 
 
 def test_build_stored_layer_points_at_the_file_endpoint():
