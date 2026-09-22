@@ -10,7 +10,7 @@ from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-PropertyKind = Literal["number", "integer", "boolean", "enum", "array"]
+PropertyKind = Literal["number", "integer", "boolean", "enum", "string", "array"]
 
 
 class PropertyLabel(BaseModel):
@@ -41,7 +41,8 @@ _PROPERTIES: Dict[str, PropertyLabel] = {
     "residents_number": PropertyLabel(label="Число жителей", kind="number", unit="чел."),
     "building_type": PropertyLabel(label="Тип застройки", kind="enum"),
     "zone": PropertyLabel(label="Функциональная зона", kind="enum"),
-    "service": PropertyLabel(label="Сервисы", kind="array"),
+    "service": PropertyLabel(label="Сервис", kind="string"),
+    "capacity": PropertyLabel(label="Мощность сервиса", kind="number", unit="мест"),
     "broke_restriction_zone": PropertyLabel(
         label="Нарушение нормативных отступов", kind="boolean"
     ),

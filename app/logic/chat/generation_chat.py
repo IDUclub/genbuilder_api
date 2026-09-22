@@ -64,6 +64,7 @@ from app.logic.geo_layers import (
     SLOT_BLOCKS_INPUT,
     SLOT_BUILDINGS,
     SLOT_EXISTING_BUILDINGS,
+    SLOT_ZONES,
     build_stored_layer,
     build_zones_layer,
     geo_layer_to_file_part,
@@ -669,12 +670,22 @@ async def stream_generation_chat(
     # territory while buildings are still being computed. An uploaded file wins
     # over the scenario: the backdrop must match what actually went in.
     file_layers: list[dict[str, Any]] = []
+    # One id for every artefact of this run, so all its links resolve together.
+    result_id = uuid4().hex
     if blocks_geojson is not None:
-        yield {
-            "type": "zones",
-            "source": "blocks_file",
-            "content": {"type": "FeatureCollection", "features": kept},
-        }
+        file_zones = {"type": "FeatureCollection", "features": kept}
+        yield {"type": "zones", "source": "blocks_file", "content": file_zones}
+        # No scenario to query live, so the zones are stored like our own
+        # artefacts; otherwise the layer would vanish from the chat history.
+        if object_storage is not None:
+            async for event in _store_layers(
+                object_storage,
+                result_id,
+                [(SLOT_ZONES, file_zones)],
+                public_base_url,
+                file_layers,
+            ):
+                yield event
     elif scenario_zones_layer is not None:
         # The same layer determined ``zones_in_scope`` before clarification.
         yield {"type": "zones", "source": "scenario", "content": scenario_zones_layer}
@@ -760,32 +771,15 @@ async def stream_generation_chat(
     # so the client sees the buildings without waiting on the write, and
     # best-effort: a storage failure is a warning, never the end of the stream.
     if object_storage is not None:
-        result_id = uuid4().hex
         payloads = [(SLOT_BUILDINGS, merged)]
         if blocks_geojson is not None:
             payloads.append((SLOT_BLOCKS_INPUT, blocks_geojson))
         if existing_buildings is not None:
             payloads.append((SLOT_EXISTING_BUILDINGS, existing_buildings))
-        for slot, payload in payloads:
-            try:
-                await asyncio.to_thread(
-                    object_storage.put_json, payload, object_key(result_id, slot)
-                )
-            except (ObjectStorageError, OSError) as exc:
-                logger.warning("storing layer {} failed: {}", slot, exc)
-                yield {
-                    "type": "warning",
-                    "stage": "store_layer",
-                    "detail": str(exc),
-                    "message": f"Слой «{slot}» не сохранён — ссылка на него не "
-                    "появится в истории чата.",
-                }
-                continue
-            descriptor = build_stored_layer(
-                slot=slot, result_id=result_id, public_base_url=public_base_url
-            )
-            file_layers.append(descriptor)
-            yield {"type": "file", **descriptor}
+        async for event in _store_layers(
+            object_storage, result_id, payloads, public_base_url, file_layers
+        ):
+            yield event
 
     # 6. Stream a natural-language summary grounded on the result (best-effort).
     summary_messages = [
@@ -825,6 +819,41 @@ async def stream_generation_chat(
         file_parts=[geo_layer_to_file_part(layer) for layer in file_layers],
     )
     yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
+
+
+async def _store_layers(
+    object_storage: Any,
+    result_id: str,
+    payloads: list[tuple[str, Any]],
+    public_base_url: str | None,
+    file_layers: list[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Write each payload to its slot and yield its ``file`` event.
+
+    Best-effort: a failed write becomes a ``store_layer`` warning and the slot
+    is skipped. Stored descriptors are appended to ``file_layers`` so they
+    reach the chat history.
+    """
+    for slot, payload in payloads:
+        try:
+            await asyncio.to_thread(
+                object_storage.put_json, payload, object_key(result_id, slot)
+            )
+        except (ObjectStorageError, OSError) as exc:
+            logger.warning("storing layer {} failed: {}", slot, exc)
+            yield {
+                "type": "warning",
+                "stage": "store_layer",
+                "detail": str(exc),
+                "message": f"Слой «{slot}» не сохранён — ссылка на него не "
+                "появится в истории чата.",
+            }
+            continue
+        descriptor = build_stored_layer(
+            slot=slot, result_id=result_id, public_base_url=public_base_url
+        )
+        file_layers.append(descriptor)
+        yield {"type": "file", **descriptor}
 
 
 async def _persist_assistant(

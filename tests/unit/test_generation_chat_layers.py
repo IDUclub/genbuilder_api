@@ -11,6 +11,7 @@ from app.logic.chat.param_extraction import ExtractedTargets
 from app.logic.geo_layers import (
     SLOT_BLOCKS_INPUT,
     SLOT_EXISTING_BUILDINGS,
+    SLOT_ZONES,
     object_key,
 )
 
@@ -296,9 +297,73 @@ def test_blocks_file_mode_never_links_the_scenario_zones(tmp_path):
         object_storage=LocalStorage(str(tmp_path)),
     )
 
-    names = [descriptor["name"] for descriptor in _of_type(events, "file")]
-    assert "functional_zones" not in names
+    urls = [descriptor["url"] for descriptor in _of_type(events, "file")]
+    assert not any("/layers/functional_zones" in url for url in urls)
     assert zones.calls == []
+
+
+def _blocks_file_run(tmp_path, **overrides):
+    storage = overrides.pop("object_storage", LocalStorage(str(tmp_path)))
+    uploaded = {
+        "type": "FeatureCollection",
+        "features": [_block("residential", 30.0), _block("recreation", 30.5)],
+    }
+    events = _collect(
+        scenario_id=None,
+        year=None,
+        source=None,
+        blocks_geojson=uploaded,
+        existing_buildings_declined=True,
+        object_storage=storage,
+        **overrides,
+    )
+    return events, storage
+
+
+def _zones_descriptor(events):
+    return [d for d in _of_type(events, "file") if d["name"] == "functional_zones"][0]
+
+
+def test_blocks_file_mode_links_the_zones_before_generation(tmp_path):
+    """Without a project the zones layer comes from the file, so it is stored and linked."""
+    events, _ = _blocks_file_run(tmp_path)
+
+    descriptor = _zones_descriptor(events)
+    assert descriptor["url"] == f"{PUBLIC_BASE_URL}/files/zones/{_result_id(descriptor)}"
+    assert events.index(descriptor) < _types(events).index("progress")
+
+
+def test_blocks_file_mode_stores_the_filtered_zones(tmp_path):
+    events, storage = _blocks_file_run(tmp_path)
+
+    key = object_key(_result_id(_zones_descriptor(events)), SLOT_ZONES)
+    stored = json.loads(b"".join(storage.open_stream(key)).decode("utf-8"))
+    assert stored == _of_type(events, "zones")[0]["content"]
+    assert [f["properties"]["zone"] for f in stored["features"]] == ["residential"]
+
+
+def test_blocks_file_mode_keeps_the_zones_link_in_history(tmp_path):
+    storage_client = _FakeChatStorage()
+
+    events, _ = _blocks_file_run(
+        tmp_path, chat_storage_client=storage_client, user_id="user-1"
+    )
+
+    assistant = _assistant_message(storage_client)
+    urls = [part["payload"]["url"] for part in assistant["parts"][1:]]
+    assert _zones_descriptor(events)["url"] in urls
+
+
+def test_blocks_file_zones_storage_failure_warns_and_generation_runs(tmp_path):
+    events, _ = _blocks_file_run(
+        tmp_path, object_storage=_BrokenStorage(str(tmp_path))
+    )
+
+    warnings = [e for e in _of_type(events, "warning") if e["stage"] == "store_layer"]
+    assert warnings
+    assert _of_type(events, "file") == []
+    assert _of_type(events, "result")
+    assert _types(events)[-1] == "done"
 
 
 def test_uploaded_blocks_are_stored_exactly_as_uploaded(tmp_path):
