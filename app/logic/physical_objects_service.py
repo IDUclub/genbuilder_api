@@ -39,6 +39,23 @@ def _physical_object_id(feature_properties: dict[str, Any]) -> int | None:
         return None
 
 
+def _service_and_capacity(props: dict[str, Any]) -> tuple[str | None, float | None]:
+    """Flat `service` name + `capacity`; also accepts the legacy `[{name: capacity}]` form."""
+    service = props.get("service")
+    capacity = props.get("capacity")
+    if isinstance(service, list):
+        entry = next((item for item in service if isinstance(item, dict) and item), None)
+        if entry is None:
+            return None, None
+        service, capacity = next(iter(entry.items()))
+    if not isinstance(service, str) or not service:
+        return None, None
+    try:
+        return service, float(capacity)
+    except (TypeError, ValueError):
+        return service, None
+
+
 class PhysicalObjectsService:
     """Select physical objects features by their ids from GeoJSON FeatureCollection."""
 
@@ -181,15 +198,14 @@ class PhysicalObjectsService:
         if not is_residential_physical_object:
             residents_number = 0.0
 
-        service_value = source_props.get("service")
-        if not isinstance(service_value, list):
-            service_value = []
+        service_name, service_capacity = _service_and_capacity(source_props)
 
         result_properties = {
             "floors_count": floors_count,
             "living_area": living_area,
             "building_area": building_area,
-            "service": service_value,
+            "service": service_name,
+            "capacity": service_capacity,
             "broke_restriction_zone": bool(
                 source_props.get("broke_restriction_zone", False)
             ),
@@ -394,9 +410,7 @@ class PhysicalObjectsService:
             if not isinstance(source_props, dict):
                 source_props = {}
 
-            service_value = source_props.get("service")
-            if not isinstance(service_value, list):
-                service_value = []
+            service_name, service_capacity = _service_and_capacity(source_props)
 
             raw_physical_object_id = source_props.get("physical_object_id")
             try:
@@ -410,7 +424,8 @@ class PhysicalObjectsService:
                 ),
                 "living_area": _number(source_props.get("living_area")),
                 "building_area": _number(source_props.get("building_area")),
-                "service": service_value,
+                "service": service_name,
+                "capacity": service_capacity,
                 "broke_restriction_zone": bool(
                     source_props.get("broke_restriction_zone", False)
                 ),

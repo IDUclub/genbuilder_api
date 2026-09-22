@@ -422,7 +422,7 @@ class BuildingFeatureCollection(BaseModel):
             "List of building features. "
             "`properties` should at least contain "
             "`floors_count`, `living_area`, `functional_area`, `building_area`, "
-            "`zone`; `service` is optional (else - empty list or null)."
+            "`zone`; `service` (name) and `capacity` are optional (else null)."
         ),
     )
     service_diagnostics: Optional[ServiceGenerationDiagnostics] = Field(
@@ -447,7 +447,8 @@ class BuildingFeatureCollection(BaseModel):
                                 "functional_area": 0.0,
                                 "building_area": 74453.31,
                                 "floors_count": 7,
-                                "service": [{"Школа": 350}],
+                                "service": "Школа",
+                                "capacity": 350,
                                 "zone": "residential",
                             },
                             "geometry": {

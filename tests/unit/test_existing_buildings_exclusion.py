@@ -51,7 +51,24 @@ def test_properties_are_optional(service):
     assert props["is_excluded"] is True
     assert props["living_area"] == 0.0
     assert props["physical_object_id"] is None
-    assert props["service"] == []
+    assert props["service"] is None
+    assert props["capacity"] is None
+
+
+@pytest.mark.parametrize(
+    "properties",
+    [
+        {"service": "Детский сад", "capacity": 140},
+        {"service": [{"Детский сад": 140}]},  # legacy list-of-dict form
+    ],
+)
+def test_service_is_split_into_name_and_capacity(service, properties):
+    fc = {"type": "FeatureCollection", "features": [_feature(SQUARE, **properties)]}
+
+    props = service.normalize_uploaded_features(fc)[0]["properties"]
+
+    assert props["service"] == "Детский сад"
+    assert props["capacity"] == 140.0
 
 
 def test_non_polygonal_features_are_skipped(service):

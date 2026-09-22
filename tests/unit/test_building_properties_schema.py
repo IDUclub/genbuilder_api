@@ -9,6 +9,7 @@ GENERATED_BUILDING_PROPERTIES = {
     "living_area",
     "building_area",
     "service",
+    "capacity",
     "broke_restriction_zone",
     "building_type",
     "zone",

@@ -551,7 +551,7 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 - `buildings_file` — GeoJSON `FeatureCollection`, фичи `Polygon`/`MultiPolygon`;
 - `properties` **необязательны**: для исключения достаточно геометрии. Если они
   есть, из них берутся `floors_count`, `living_area`, `building_area`,
-  `residents_number`, `building_type`, `zone`, `service` — с ними здание
+  `residents_number`, `building_type`, `zone`, `service`, `capacity` — с ними здание
   отрисуется как обычный объект;
 - неполигональные фичи отбрасываются: придёт `warning` со
   `stage: "load_existing_buildings"` и числом отброшенных. Если полигонов нет
@@ -584,8 +584,9 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 3. иначе сервисы не ставятся: генерация идёт дальше, а в потоке приходит
    `warning` со `stage: "service_normatives"`.
 
-Здание с сервисами отличается непустым `properties.service`
-(`[{ "<название сервиса>": <мощность> }]`).
+Здание-сервис отличается непустым `properties.service` — это строка с названием
+сервиса (`"Детский сад"`), по ней удобно красить слой. Мощность лежит отдельно в
+`properties.capacity` (число). У обычных зданий оба поля `null`.
 
 То же в классическом режиме — поле `territory_id` в теле `POST /generate/by_territory`.
 
@@ -810,7 +811,7 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 
 ### 7.1. Состав `properties`
 
-У каждой сгенерированной постройки в `properties` приходит восемь полей:
+У каждой сгенерированной постройки в `properties` приходит девять полей:
 
 | Поле | Тип | Смысл |
 |---|---|---|
@@ -820,14 +821,15 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 | `residents_number` | number | Расчётное число жителей |
 | `building_type` | enum | Тип застройки (`private`, `low`, `medium`, `high`, …) |
 | `zone` | enum | Функциональная зона блока (нормализованная) |
-| `service` | array | Сервисы в здании (может быть пустым) |
+| `service` | string \| null | Название сервиса в здании (`null`, если здание не сервис) |
+| `capacity` | number \| null | Мощность сервиса (`null`, если здание не сервис) |
 | `broke_restriction_zone` | boolean | Нарушены нормативные отступы |
 
 ### 7.2. Как отличить исключённые объекты
 
 Если в `/generate/by_scenario` или `/generate/by_blocks` передан
 `physical_object_id[]`, в ту же коллекцию попадают **существующие** объекты,
-исключённые из генерации. У них те же восемь полей плюс два дополнительных:
+исключённые из генерации. У них те же девять полей плюс два дополнительных:
 
 | Поле | Тип | Смысл |
 |---|---|---|
@@ -861,7 +863,7 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 }
 ```
 
-- `kind` — как рендерить значение: `number`, `integer`, `boolean`, `enum`, `array`.
+- `kind` — как рендерить значение: `number`, `integer`, `boolean`, `enum`, `string`, `array`.
 - `unit` — единица измерения либо `null`.
 - `excluded_only` — поле есть только у исключённых объектов.
 - `values` — словари подписей для полей с `kind: "enum"`.
