@@ -283,6 +283,7 @@ class Genbuilder:
                     "functional_area",
                     "building_area",
                     "service",
+                    "capacity",
                     "zone",
                     "geometry",
                 ],
@@ -792,6 +793,7 @@ class Genbuilder:
                     "functional_area",
                     "building_area",
                     "service",
+                    "capacity",
                     "zone",
                     "geometry",
                 ],
@@ -827,18 +829,15 @@ class Genbuilder:
         floors = buildings_all["floors_count"]
         buildings_all["building_area"] = footprint_area * floors
 
-        if "service" in buildings_all.columns and "capacity" in buildings_all.columns:
-            buildings_all["service"] = [
-                [{service: capacity}]
-                if (pd.notna(service) and pd.notna(capacity))
-                else []
-                for service, capacity in zip(
-                    buildings_all["service"], buildings_all["capacity"]
-                )
-            ]
-        else:
-            if "service" not in buildings_all.columns:
-                buildings_all["service"] = [[] for _ in range(len(buildings_all))]
+        # Service name and capacity are separate flat attributes so the map can
+        # style service buildings by `service` directly.
+        if "service" not in buildings_all.columns:
+            buildings_all["service"] = None
+        if "capacity" not in buildings_all.columns:
+            buildings_all["capacity"] = None
+        has_service = buildings_all["service"].notna() & buildings_all["capacity"].notna()
+        buildings_all["service"] = buildings_all["service"].where(has_service, None)
+        buildings_all["capacity"] = buildings_all["capacity"].where(has_service, None)
         buildings_all = check_buildings_setbacks(buildings_all)
         buildings_all['building_area'] = buildings_all['building_area'].round(0)
         buildings_all = buildings_all[
@@ -847,6 +846,7 @@ class Genbuilder:
                 "living_area",
                 "building_area",
                 "service",
+                "capacity",
                 "broke_restriction_zone",
                 "building_type",
                 "geometry",

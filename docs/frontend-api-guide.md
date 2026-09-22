@@ -50,7 +50,7 @@
 | Эндпоинт | Зачем | Раздел |
 |---|---|---|
 | `GET /layers/functional_zones` | Живой GeoJSON зон сценария по ссылке из события `file` | [5.3](#53-get-layersfunctional_zones) |
-| `GET /files/{slot}/{result_id}` | Забрать сохранённый слой: `buildings`, `blocks_input`, `existing_buildings` (30 дней) | [5.4](#54-get-filesslotresult_id) |
+| `GET /files/{slot}/{result_id}` | Забрать сохранённый слой: `buildings`, `blocks_input`, `existing_buildings`, `zones` (30 дней) | [5.4](#54-get-filesslotresult_id) |
 | `GET /generate/properties_schema` | Русские подписи свойств зданий и значений enum-полей; константа, кэшируется | [7.3](#73-get-generateproperties_schema) |
 
 Оба геослойных эндпоинта требуют `Authorization`, поэтому `<a href>` и
@@ -360,7 +360,7 @@ chat_created → status → zones → file(functional_zones) → progress
 отвечен — приложен `buildings_file` либо `skip_existing_buildings=true`):
 
 ```
-chat_created → status → zones → progress
+chat_created → status → zones → file(functional_zones) → progress
              → result → file(buildings) → file(blocks_input)
              → file(existing_buildings)? → token* → done
 ```
@@ -429,16 +429,22 @@ data: {"chat_id": "9f3a…", "assistant_message_id": "b71c…"}
   `type` из конверта и делает его именем SSE-события; в `data` остаётся всё
   остальное. Диспатчить нужно по `event`.
 - **Два события `file` с разной природой.** Различай по `name` (или `role`):
-  `functional_zones` — живой запрос, работает всегда; `buildings` — файл из
-  хранилища, живёт 30 дней. Форма одинаковая, взаимозаменяемыми они не являются.
+  `functional_zones` по сценарию — живой запрос, работает всегда; `buildings` —
+  файл из хранилища, живёт 30 дней. Форма одинаковая, взаимозаменяемыми они не
+  являются. Надёжнее смотреть на `url`: `/layers/…` — живой, `/files/…` — из
+  хранилища.
 - **Между `zones` и `result` проходит всё время генерации** — в этом и смысл
   раннего `zones`.
 - **`token` дробится произвольно**, как отдал LLM; склеивать на стороне клиента.
 - **`done` — терминатор, а не носитель результата.** Полезная нагрузка пришла
   раньше; из него берут только `chat_id` и `assistant_message_id`.
 
-В режиме `blocks_file` первого `file` (`functional_zones`) не будет, зато после
-`file(buildings)` придёт второй — `blocks_input`.
+В режиме `blocks_file` первый `file` (`functional_zones`) тоже приходит до
+`progress`, но ведёт не на `/layers/functional_zones`, а на сохранённый файл
+`/files/zones/{result_id}` — сценария, к которому можно сходить живьём, тут нет.
+Внутри — ровно то, что пришло в `zones`. После `file(buildings)` придёт ещё
+`blocks_input` (и `existing_buildings`, если файл зданий был). У всех `file` одного
+прогона общий `result_id`.
 
 Ошибка в потоке выглядит так и приходит **вместо** `result`:
 
@@ -551,7 +557,7 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 - `buildings_file` — GeoJSON `FeatureCollection`, фичи `Polygon`/`MultiPolygon`;
 - `properties` **необязательны**: для исключения достаточно геометрии. Если они
   есть, из них берутся `floors_count`, `living_area`, `building_area`,
-  `residents_number`, `building_type`, `zone`, `service` — с ними здание
+  `residents_number`, `building_type`, `zone`, `service`, `capacity` — с ними здание
   отрисуется как обычный объект;
 - неполигональные фичи отбрасываются: придёт `warning` со
   `stage: "load_existing_buildings"` и числом отброшенных. Если полигонов нет
@@ -584,8 +590,9 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 3. иначе сервисы не ставятся: генерация идёт дальше, а в потоке приходит
    `warning` со `stage: "service_normatives"`.
 
-Здание с сервисами отличается непустым `properties.service`
-(`[{ "<название сервиса>": <мощность> }]`).
+Здание-сервис отличается непустым `properties.service` — это строка с названием
+сервиса (`"Детский сад"`), по ней удобно красить слой. Мощность лежит отдельно в
+`properties.capacity` (число). У обычных зданий оба поля `null`.
 
 То же в классическом режиме — поле `territory_id` в теле `POST /generate/by_territory`.
 
@@ -605,7 +612,8 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 | `buildings` | наш результат генерации | `/files/buildings/{result_id}` | 30 дней |
 | `blocks_input` | файл пользователя, как загружен | `/files/blocks_input/{result_id}` | 30 дней |
 | `existing_buildings` | полигоны из файла существующих зданий | `/files/existing_buildings/{result_id}` | 30 дней |
-| `functional_zones` | живой запрос в UrbanDB | `/layers/functional_zones?…` | бессрочно |
+| `functional_zones` | живой запрос в UrbanDB (режим сценария) | `/layers/functional_zones?…` | бессрочно |
+| `functional_zones` | зоны из файла кварталов (режим `blocks_file`) | `/files/zones/{result_id}` | 30 дней |
 
 ### 5.1. Событие `zones` — подложка
 
@@ -682,7 +690,7 @@ Query: `scenario_id`, `year`, `source`, `functional_zone_types[]` (повтор�
 ### 5.4. `GET /files/{slot}/{result_id}`
 
 Наши собственные артефакты из объектного хранилища. `slot` — `buildings`,
-`blocks_input` или `existing_buildings`.
+`blocks_input`, `existing_buildings` или `zones`.
 
 → `application/geo+json`, тело стримится чанками, `Content-Disposition:
 attachment`.
@@ -690,11 +698,12 @@ attachment`.
 Требует токен. Ответы: `404` — неизвестный слот, битый `result_id` **или**
 истёкший объект.
 
-> **30 дней.** Слои `buildings`, `blocks_input` и `existing_buildings` удаляются из хранилища по
+> **30 дней.** Слои `buildings`, `blocks_input`, `existing_buildings` и `zones` удаляются из хранилища по
 > lifecycle-правилу через 30 дней. Открытие старого чата — штатная ситуация, в
 > которой ссылка отдаст `404`: показывай слой как недоступный и **не роняй**
-> просмотр истории. Ссылка на `functional_zones` при этом продолжает работать —
-> она не про хранилище.
+> просмотр истории. Ссылка на `functional_zones` по сценарию при этом продолжает
+> работать — она не про хранилище (в режиме `blocks_file` зоны лежат в хранилище
+> и истекают вместе с остальным).
 
 ### 5.5. Как скачать слой файлом
 
@@ -810,7 +819,7 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 
 ### 7.1. Состав `properties`
 
-У каждой сгенерированной постройки в `properties` приходит восемь полей:
+У каждой сгенерированной постройки в `properties` приходит девять полей:
 
 | Поле | Тип | Смысл |
 |---|---|---|
@@ -820,14 +829,15 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 | `residents_number` | number | Расчётное число жителей |
 | `building_type` | enum | Тип застройки (`private`, `low`, `medium`, `high`, …) |
 | `zone` | enum | Функциональная зона блока (нормализованная) |
-| `service` | array | Сервисы в здании (может быть пустым) |
+| `service` | string \| null | Название сервиса в здании (`null`, если здание не сервис) |
+| `capacity` | number \| null | Мощность сервиса (`null`, если здание не сервис) |
 | `broke_restriction_zone` | boolean | Нарушены нормативные отступы |
 
 ### 7.2. Как отличить исключённые объекты
 
 Если в `/generate/by_scenario` или `/generate/by_blocks` передан
 `physical_object_id[]`, в ту же коллекцию попадают **существующие** объекты,
-исключённые из генерации. У них те же восемь полей плюс два дополнительных:
+исключённые из генерации. У них те же девять полей плюс два дополнительных:
 
 | Поле | Тип | Смысл |
 |---|---|---|
@@ -861,7 +871,7 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 }
 ```
 
-- `kind` — как рендерить значение: `number`, `integer`, `boolean`, `enum`, `array`.
+- `kind` — как рендерить значение: `number`, `integer`, `boolean`, `enum`, `string`, `array`.
 - `unit` — единица измерения либо `null`.
 - `excluded_only` — поле есть только у исключённых объектов.
 - `values` — словари подписей для полей с `kind: "enum"`.
