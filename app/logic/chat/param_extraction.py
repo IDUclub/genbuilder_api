@@ -54,12 +54,17 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "Заполняй только те значения, которые пользователь назвал явно; всё "
     "остальное оставляй null. Ничего не выдумывай. Числа — без единиц измерения. "
     "residents — число жителей, living_area — жилая площадь в м², "
-    "floors_avg — средняя этажность, density_scenario — один из: min, mean, max. "
+    "floors_avg — средняя этажность, buildings_count — явно указанное число "
+    "зданий, density_scenario — один из: min, mean, max. "
     "Если пользователь назвал спрос без указания зоны (например «2000 жителей» "
     "или «30 000 м² жилья»), это общее значение на всю территорию: запиши его в "
     "total_residents или total_living_area и НЕ повторяй его в zones. В zones "
     "указывай residents/living_area только для зон, которые пользователь назвал "
-    "явно."
+    "явно. "
+    "Также извлеки стиль фасадов, только если пользователь явно его указал. "
+    "facade_style_name_ru — короткое название стиля на русском, "
+    "facade_style_prompt — короткое описание этого стиля на английском для "
+    "генерации архитектурной текстуры. Если стиль не указан, оставь оба поля null."
 )
 
 
@@ -68,6 +73,8 @@ def build_extraction_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
+            "facade_style_name_ru": {"type": ["string", "null"]},
+            "facade_style_prompt": {"type": ["string", "null"]},
             "zones": {
                 "type": "array",
                 "items": {
@@ -77,6 +84,10 @@ def build_extraction_schema() -> dict[str, Any]:
                         "residents": {"type": ["integer", "null"]},
                         "living_area": {"type": ["number", "null"]},
                         "floors_avg": {"type": ["number", "null"]},
+                        "buildings_count": {
+                            "type": ["integer", "null"],
+                            "minimum": 1,
+                        },
                         "density_scenario": {
                             "type": ["string", "null"],
                             "enum": [*DENSITY_SCENARIOS, None],
@@ -88,7 +99,10 @@ def build_extraction_schema() -> dict[str, Any]:
             "total_residents": {"type": ["integer", "null"]},
             "total_living_area": {"type": ["number", "null"]},
         },
-        "required": ["zones"],
+        # Guided decoding must emit the nullable style keys.  When optional,
+        # some models omit them even after recognizing a style in the text,
+        # making an explicit style indistinguishable from no style at all.
+        "required": ["zones", "facade_style_name_ru", "facade_style_prompt"],
     }
 
 
@@ -123,6 +137,8 @@ class ExtractedTargets:
 
     targets_by_zone: dict[str, dict[str, Any]] = field(default_factory=dict)
     functional_zone_types: list[str] = field(default_factory=list)
+    facade_style_name_ru: str | None = None
+    facade_style_prompt: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     # Demand named without a zone ("2000 жителей") — for the whole territory,
@@ -140,6 +156,13 @@ def _num(value: Any) -> float | None:
     return num if num > 0 else None
 
 
+def _text(value: Any, *, max_length: int = 4000) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value[:max_length] if value else None
+
+
 def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTargets:
     """Turn raw LLM output into ``targets_by_zone`` + the requested zone list.
 
@@ -148,6 +171,7 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
     """
     residents: dict[str, int] = {}
     floors_avg: dict[str, float] = {}
+    buildings_count: dict[str, int] = {}
     density_scenario: dict[str, str] = {}
     requested: list[str] = []
 
@@ -169,6 +193,10 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         if floors is not None:
             floors_avg[zone] = floors
 
+        count = _num(item.get("buildings_count"))
+        if count is not None:
+            buildings_count[zone] = max(1, int(round(count)))
+
         dens = item.get("density_scenario")
         if isinstance(dens, str) and dens.strip() in DENSITY_SCENARIOS:
             density_scenario[zone] = dens.strip()
@@ -188,12 +216,16 @@ def normalize_targets(raw: dict[str, Any], la_per_person: float) -> ExtractedTar
         targets_by_zone["residents"] = residents
     if floors_avg:
         targets_by_zone["floors_avg"] = floors_avg
+    if buildings_count:
+        targets_by_zone["buildings_count"] = buildings_count
     if density_scenario:
         targets_by_zone["density_scenario"] = density_scenario
 
     return ExtractedTargets(
         targets_by_zone=targets_by_zone,
         functional_zone_types=requested,
+        facade_style_name_ru=_text(raw.get("facade_style_name_ru")),
+        facade_style_prompt=_text(raw.get("facade_style_prompt")),
         raw=raw,
         total_residents=total_residents,
     )
