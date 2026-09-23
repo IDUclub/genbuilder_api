@@ -650,8 +650,12 @@ class Genbuilder:
                             )
                         else:
                             failure_summary = (
+                                "тип не поддерживается: "
+                                f"{service_diagnostics['unplaced_type_not_supported']}; "
                                 "нет шаблона: "
                                 f"{service_diagnostics['unplaced_no_template']}; "
+                                "спрос меньше здания: "
+                                f"{service_diagnostics['unplaced_demand_below_template']}; "
                                 "не хватило места: "
                                 f"{service_diagnostics['unplaced_no_space']}; "
                                 "достигнут лимит размещения: "
