@@ -280,6 +280,29 @@ _SUMMARY_SYSTEM_PROMPT = (
 )
 
 
+_REPORTED_NOTICES_KEY = "reported_notices"
+
+
+def _reported_notices(messages: list[dict[str, Any]]) -> frozenset[str]:
+    """Notices already shown in this chat, recorded on its latest assistant turn."""
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        notices = (message.get("metadata") or {}).get(_REPORTED_NOTICES_KEY)
+        if not isinstance(notices, list):
+            return frozenset()
+        return frozenset(n for n in notices if isinstance(n, str))
+    return frozenset()
+
+
+def _notice_text(event: dict[str, Any]) -> str | None:
+    """Text of an informational event; errors are never treated as notices."""
+    if event.get("type") not in ("status", "warning"):
+        return None
+    text = event.get("message") or event.get("content")
+    return text if isinstance(text, str) else None
+
+
 def _history_user_text(messages: list[dict[str, Any]], max_messages: int = 10) -> str:
     """Concatenate recent user-turn text from ChatStorage messages.
 
@@ -324,13 +347,24 @@ async def _region_for_services(
     project_id: int | str | None,
     urban_api: Any | None,
     token: str | None,
+    default_territory_id: int | None = None,
 ) -> tuple[int | None, dict[str, Any] | None]:
-    """Region whose normatives place services in the blocks-file mode, or a warning why there is none.
+    """Region whose normatives place services in the blocks-file mode, plus an event to report.
 
     An explicit ``territory_id`` wins; otherwise the region of ``project_id`` is looked up.
+    Without both, ``default_territory_id`` is used and announced by a status event.
     """
     if territory_id is not None:
         return territory_id, None
+    if project_id is None and default_territory_id is not None:
+        return default_territory_id, {
+            "type": "status",
+            "stage": "service_normatives",
+            "content": (
+                "Регион не указан — сервисы (школы, детские сады и т. п.) расставлены "
+                f"по нормативам региона по умолчанию (territory_id={default_territory_id})."
+            ),
+        }
     if project_id is None or urban_api is None:
         return None, _services_warning(
             "neither territory_id nor project_id is set",
@@ -406,6 +440,7 @@ async def stream_generation_chat(
     existing_buildings_geojson: dict[str, Any] | None = None,
     existing_buildings_declined: bool = False,
     territory_id: int | None = None,
+    default_territory_id: int | None = None,
     generation_parameters: dict[str, Any] | None = None,
     model: str | None = None,
     temperature: float | None = None,
@@ -429,10 +464,12 @@ async def stream_generation_chat(
 
     # 0. Load prior turns (existing chat) so short follow-ups keep context.
     prior_text = ""
+    already_reported: frozenset[str] = frozenset()
     if persist and chat_id:
         try:
             existing = await chat_storage_client.get_chat(user_id, chat_id)
             prior_text = _history_user_text(existing.get("messages") or [])
+            already_reported = _reported_notices(existing.get("messages") or [])
         except ChatStorageError as exc:
             logger.warning("chat_storage get_chat (history) failed: {}", exc)
             yield {
@@ -484,6 +521,19 @@ async def stream_generation_chat(
                 "message": f"Сообщение не сохранено в историю{_storage_hint(exc)}.",
             }
 
+    # Informational notices repeat on every turn of a clarification dialog
+    # because the file and the request are resent; show each text only once
+    # per chat and record what was shown on the assistant turn.
+    reported: list[str] = []
+
+    def first_report(event: dict[str, Any]) -> bool:
+        text = _notice_text(event)
+        if text is None:
+            return True
+        if text not in reported:
+            reported.append(text)
+        return text not in already_reported
+
     # 2.5 Resolve the territory source. A user-uploaded blocks file overrides the
     # scenario; derive the zones in scope from the actual territory so a missing
     # business zone never results in a business-demand clarification.
@@ -496,7 +546,8 @@ async def stream_generation_chat(
             blocks_geojson, llm_client, model
         )
         for event in load_events:
-            yield event
+            if first_report(event):
+                yield event
         if not kept:
             yield {"type": "done", "chat_id": chat_id, "assistant_message_id": None}
             return
@@ -602,12 +653,14 @@ async def stream_generation_chat(
     split = split_total_residents(extracted, zones_in_scope, zone_areas)
     if len(split) > 1:
         parts = ", ".join(f"{ZONE_LABELS.get(z, z)} — {n}" for z, n in split.items())
-        yield {
+        split_event = {
             "type": "status",
             "stage": "param_extraction",
             "content": f"Общий спрос {extracted.total_residents} жителей распределён "
             f"по зонам{' пропорционально площади' if zone_areas else ' поровну'}: {parts}.",
         }
+        if first_report(split_event):
+            yield split_event
 
     # Pin the policy default floor group per zone unless the user set one
     # explicitly, so the result doesn't depend on the pipeline's fallbacks.
@@ -654,7 +707,12 @@ async def stream_generation_chat(
             ],
         }
         assistant_message_id = await _persist_assistant(
-            chat_storage_client, persist, user_id, chat_id, content, metadata
+            chat_storage_client,
+            persist,
+            user_id,
+            chat_id,
+            content,
+            {**metadata, _REPORTED_NOTICES_KEY: reported},
         )
         yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
         return
@@ -729,11 +787,11 @@ async def stream_generation_chat(
 
     region_id: int | None = None
     if blocks_geojson is not None and scenario_id is None:
-        region_id, services_warning = await _region_for_services(
-            territory_id, project_id, urban_api, token
+        region_id, region_event = await _region_for_services(
+            territory_id, project_id, urban_api, token, default_territory_id
         )
-        if services_warning is not None:
-            yield services_warning
+        if region_event is not None:
+            yield region_event
 
     yield {"type": "progress", "stage": "generation", "content": "Генерация зданий…"}
     try:
@@ -815,7 +873,7 @@ async def stream_generation_chat(
         user_id,
         chat_id,
         answer_text or "Генерация застройки завершена.",
-        metadata,
+        {**metadata, _REPORTED_NOTICES_KEY: reported},
         file_parts=[geo_layer_to_file_part(layer) for layer in file_layers],
     )
     yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
