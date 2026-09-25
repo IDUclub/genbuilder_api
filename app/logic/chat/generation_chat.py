@@ -324,13 +324,24 @@ async def _region_for_services(
     project_id: int | str | None,
     urban_api: Any | None,
     token: str | None,
+    default_territory_id: int | None = None,
 ) -> tuple[int | None, dict[str, Any] | None]:
-    """Region whose normatives place services in the blocks-file mode, or a warning why there is none.
+    """Region whose normatives place services in the blocks-file mode, plus an event to report.
 
     An explicit ``territory_id`` wins; otherwise the region of ``project_id`` is looked up.
+    Without both, ``default_territory_id`` is used and announced by a status event.
     """
     if territory_id is not None:
         return territory_id, None
+    if project_id is None and default_territory_id is not None:
+        return default_territory_id, {
+            "type": "status",
+            "stage": "service_normatives",
+            "content": (
+                "Регион не указан — сервисы (школы, детские сады и т. п.) расставлены "
+                f"по нормативам региона по умолчанию (territory_id={default_territory_id})."
+            ),
+        }
     if project_id is None or urban_api is None:
         return None, _services_warning(
             "neither territory_id nor project_id is set",
@@ -406,6 +417,7 @@ async def stream_generation_chat(
     existing_buildings_geojson: dict[str, Any] | None = None,
     existing_buildings_declined: bool = False,
     territory_id: int | None = None,
+    default_territory_id: int | None = None,
     generation_parameters: dict[str, Any] | None = None,
     model: str | None = None,
     temperature: float | None = None,
@@ -729,11 +741,11 @@ async def stream_generation_chat(
 
     region_id: int | None = None
     if blocks_geojson is not None and scenario_id is None:
-        region_id, services_warning = await _region_for_services(
-            territory_id, project_id, urban_api, token
+        region_id, region_event = await _region_for_services(
+            territory_id, project_id, urban_api, token, default_territory_id
         )
-        if services_warning is not None:
-            yield services_warning
+        if region_event is not None:
+            yield region_event
 
     yield {"type": "progress", "stage": "generation", "content": "Генерация зданий…"}
     try:
