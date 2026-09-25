@@ -761,3 +761,101 @@ def test_scenario_mode_takes_the_region_from_the_scenario():
     assert urban_api.calls == []
     assert builder.calls[0]["territory_id"] is None
     assert _services_warnings(events) == []
+
+
+class _HistoryChatStorage(_FakeChatStorage):
+    """Chat storage that returns what was added, like the real ChatStorage."""
+
+    async def get_chat(self, user_id, chat_id):
+        return {
+            "messages": [
+                {"role": m["role"], "content": m.get("content"), "metadata": m.get("metadata")}
+                for m in self.messages
+            ]
+        }
+
+
+def _zone_notices(events):
+    return [
+        e["content"]
+        for e in _of_type(events, "status")
+        if str(e.get("content", "")).startswith("Тип зоны взят")
+    ]
+
+
+def _dialog_turn(storage, **overrides) -> list[dict]:
+    return _collect(
+        **_project_less(chat_storage_client=storage, user_id="user-1", **overrides)
+    )
+
+
+def test_file_notices_are_not_repeated_on_the_next_turn_of_a_chat():
+    storage = _HistoryChatStorage()
+
+    first = _dialog_turn(storage)
+    second = _dialog_turn(storage, chat_id="chat-1", existing_buildings_declined=True)
+
+    assert _zone_notices(first) == ["Тип зоны взят из атрибута «zone»."]
+    assert _zone_notices(second) == []
+    assert _of_type(second, "result")
+
+
+def test_the_residents_split_is_not_repeated_on_the_next_turn_of_a_chat(monkeypatch):
+    async def _extract(llm_client, *, user_query, la_per_person, model=None):
+        return ExtractedTargets(total_residents=2000)
+
+    monkeypatch.setattr(generation_chat, "extract_generation_targets", _extract)
+    storage = _HistoryChatStorage()
+    blocks = {
+        "type": "FeatureCollection",
+        "features": [_block("residential", 30.0), _block("mixed_use", 30.02)],
+    }
+
+    def split_notices(events):
+        return [
+            e for e in _of_type(events, "status") if "распределён" in str(e.get("content"))
+        ]
+
+    first = _dialog_turn(storage, blocks_geojson=blocks)
+    second = _dialog_turn(
+        storage, blocks_geojson=blocks, chat_id="chat-1", existing_buildings_declined=True
+    )
+
+    assert len(split_notices(first)) == 1
+    assert split_notices(second) == []
+
+
+def test_a_changed_notice_is_shown_again():
+    storage = _HistoryChatStorage()
+    renamed = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                **_block("residential", 30.0),
+                "properties": {"functional_zone_type_name": "residential"},
+            }
+        ],
+    }
+
+    _dialog_turn(storage)
+    second = _dialog_turn(
+        storage, blocks_geojson=renamed, chat_id="chat-1", existing_buildings_declined=True
+    )
+
+    assert _zone_notices(second) == ["Тип зоны взят из атрибута «functional_zone_type_name»."]
+
+
+def test_the_shown_notices_are_recorded_on_the_assistant_turn():
+    storage = _HistoryChatStorage()
+
+    _dialog_turn(storage)
+
+    assistant = [m for m in storage.messages if m["role"] == "assistant"][-1]
+    assert "Тип зоны взят из атрибута «zone»." in assistant["metadata"]["reported_notices"]
+
+
+def test_notices_are_shown_on_every_turn_without_chat_history():
+    first = _collect(**_project_less())
+    second = _collect(**_project_less(chat_id="chat-1", existing_buildings_declined=True))
+
+    assert _zone_notices(first) == _zone_notices(second) == ["Тип зоны взят из атрибута «zone»."]
