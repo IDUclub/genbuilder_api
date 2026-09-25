@@ -690,6 +690,70 @@ def test_file_mode_without_a_region_warns_that_services_are_skipped():
     assert _of_type(events, "result")
 
 
+def test_file_mode_without_a_region_uses_the_default_region():
+    builder = _FakeBuilder()
+
+    events = _collect(
+        **_project_less(builder=builder, existing_buildings_declined=True, default_territory_id=1)
+    )
+
+    assert builder.calls[0]["territory_id"] == 1
+    assert _services_warnings(events) == []
+    notices = [e for e in _of_type(events, "status") if e.get("stage") == "service_normatives"]
+    assert len(notices) == 1
+    assert "territory_id=1" in notices[0]["content"]
+
+
+def test_an_explicit_region_wins_over_the_default_region():
+    builder = _FakeBuilder()
+
+    _collect(
+        **_project_less(
+            builder=builder,
+            existing_buildings_declined=True,
+            territory_id=47,
+            default_territory_id=1,
+        )
+    )
+
+    assert builder.calls[0]["territory_id"] == 47
+
+
+def test_the_project_region_wins_over_the_default_region():
+    builder = _FakeBuilder()
+    urban_api = _FakeUrbanApi(region=47)
+
+    _collect(
+        **_project_less(
+            builder=builder,
+            existing_buildings_declined=True,
+            project_id=120,
+            urban_api=urban_api,
+            default_territory_id=1,
+        )
+    )
+
+    assert builder.calls[0]["territory_id"] == 47
+
+
+def test_a_failed_project_lookup_does_not_fall_back_to_the_default_region():
+    builder = _FakeBuilder()
+    urban_api = _FakeUrbanApi(exc=HTTPException(status_code=404, detail="no project"))
+
+    events = _collect(
+        **_project_less(
+            builder=builder,
+            existing_buildings_declined=True,
+            project_id=120,
+            urban_api=urban_api,
+            default_territory_id=1,
+        )
+    )
+
+    assert builder.calls[0]["territory_id"] is None
+    assert len(_services_warnings(events)) == 1
+
+
 def test_a_failed_project_lookup_warns_and_generation_still_runs():
     builder = _FakeBuilder()
     urban_api = _FakeUrbanApi(exc=HTTPException(status_code=404, detail="no project"))

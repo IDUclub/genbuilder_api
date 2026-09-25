@@ -30,6 +30,7 @@ from app.dependencies import (
     build_vllm_chat_client,
     builder,
     chat_llm_configured,
+    default_services_territory_id,
     zones_service,
 )
 from app.logic.chat.generation_chat import stream_generation_chat
@@ -139,6 +140,7 @@ class GenBuilderAgentExecutor(AgentExecutor):
                     existing_buildings_declined=bool(
                         payload.get("skip_existing_buildings")
                     ),
+                    default_territory_id=default_services_territory_id(),
                     generation_parameters=payload.get("generation_parameters"),
                     model=payload.get("model"),
                     temperature=payload.get("temperature"),

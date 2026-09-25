@@ -79,6 +79,7 @@ re-checked on every fetch.
 | `FILESERVER_REGION` | no | `us-east-1` | Sent explicitly so the client never calls `GetBucketLocation`, a right the scoped credentials do not have |
 | `OUTPUTS_DIR` | no | `outputs` | Local fallback directory, used only when no `FILESERVER_*` variable is set |
 | `PUBLIC_BASE_URL` | no | — | Absolute base for the links written into chat history, for example `http://10.32.1.46:8200`. Without it links are relative, which breaks history read from another origin |
+| `DEFAULT_SERVICES_TERRITORY_ID` | no | `1` | UrbanDB region whose service normatives place services in the project-less chat mode when the request has neither `territory_id` nor `project_id`. `1` is Leningrad Oblast; an empty value disables the fallback |
 
 \* All four are required together. A partial set is refused at startup of the
 storage backend rather than silently degraded to local disk — otherwise
