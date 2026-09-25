@@ -31,6 +31,7 @@ from app.dependencies import (
     build_vllm_chat_client,
     builder,
     chat_llm_configured,
+    default_services_territory_id,
     facade_jobs_configured,
     optional_object_storage,
     public_base_url,
@@ -143,6 +144,7 @@ async def generate_chat_stream(
         blocks_file=blocks_file,
         buildings_file=buildings_file,
         skip_existing_buildings=skip_existing_buildings,
+        territory_id=territory_id,
         facade_style=None,
         functional_zone_types=functional_zone_types,
         chat_id=chat_id,
@@ -185,6 +187,16 @@ async def generate_chat_stream_3d(
             )
         ),
     ] = False,
+    territory_id: Annotated[
+        Optional[int],
+        Form(
+            ge=1,
+            description=(
+                "Region (UrbanDB territory id) whose service normatives place services "
+                "in the blocks_file mode; without it the region of project_id is used"
+            ),
+        ),
+    ] = None,
     facade_style: Annotated[
         Optional[str],
         Form(
@@ -213,6 +225,7 @@ async def generate_chat_stream_3d(
         blocks_file=blocks_file,
         buildings_file=buildings_file,
         skip_existing_buildings=skip_existing_buildings,
+        territory_id=territory_id,
         facade_style=facade_style,
         functional_zone_types=functional_zone_types,
         chat_id=chat_id,
@@ -233,6 +246,7 @@ async def _generate_chat_stream_response(
     blocks_file: UploadFile | None,
     buildings_file: UploadFile | None,
     skip_existing_buildings: bool,
+    territory_id: int | None,
     facade_style: str | None,
     functional_zone_types: str | None,
     chat_id: str | None,
@@ -306,6 +320,7 @@ async def _generate_chat_stream_response(
                     existing_buildings_geojson=buildings_geojson,
                     existing_buildings_declined=skip_existing_buildings,
                     territory_id=territory_id,
+                    default_territory_id=default_services_territory_id(),
                     facade_style=facade_style,
                     enable_facade_styles=queue_facades,
                     model=model,

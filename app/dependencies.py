@@ -104,6 +104,32 @@ def public_base_url() -> str | None:
     return _optional_env("PUBLIC_BASE_URL")
 
 
+LENINGRAD_OBLAST_TERRITORY_ID = 1
+
+
+def default_services_territory_id() -> int | None:
+    """Region whose normatives place services when a project-less request names none.
+
+    Defaults to Leningrad Oblast; an empty ``DEFAULT_SERVICES_TERRITORY_ID``
+    disables the fallback.
+    """
+    raw = os.getenv("DEFAULT_SERVICES_TERRITORY_ID")
+    if raw is None:
+        return LENINGRAD_OBLAST_TERRITORY_ID
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        territory_id = int(raw)
+    except ValueError:
+        logger.error("DEFAULT_SERVICES_TERRITORY_ID is not an integer: {!r}", raw)
+        return None
+    if territory_id < 1:
+        logger.error("DEFAULT_SERVICES_TERRITORY_ID must be positive: {}", territory_id)
+        return None
+    return territory_id
+
+
 def optional_object_storage() -> ObjectStorage | None:
     """Object storage for the chat stream, or ``None`` when it is unusable.
 
