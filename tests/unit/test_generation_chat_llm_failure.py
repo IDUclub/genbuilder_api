@@ -12,6 +12,7 @@ import json
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sse_starlette.sse import AppStatus
 
 from app.logic.chat import generation_chat
 from app.logic.chat.generation_chat import stream_generation_chat
@@ -84,6 +85,8 @@ def _sse_events(text: str) -> list[str]:
 
 
 def _chat_client(monkeypatch, stream):
+    # sse_starlette keeps a process-wide exit event bound to the first event loop.
+    monkeypatch.setattr(AppStatus, "should_exit_event", None)
     monkeypatch.setattr(generation_chat_routers, "stream_generation_chat", stream)
     monkeypatch.setattr(generation_chat_routers, "chat_llm_configured", lambda: True)
     monkeypatch.setattr(
@@ -134,3 +137,24 @@ def test_unexpected_failure_still_terminates_the_stream(monkeypatch):
     assert "RuntimeError: boom" == payloads[1]["detail"]
     # The chat was created before the failure — the client needs its id back.
     assert payloads[2]["chat_id"] == "chat-42"
+
+
+@pytest.mark.parametrize("path", ["/generate/chat/stream", "/generate/chat/stream/3d"])
+def test_territory_id_reaches_the_chat_stream(monkeypatch, path):
+    received: list[dict] = []
+
+    async def _stream(**kwargs):
+        received.append(kwargs)
+        yield {"type": "done", "chat_id": None, "assistant_message_id": None}
+
+    client = _chat_client(monkeypatch, _stream)
+    monkeypatch.setattr(generation_chat_routers, "facade_jobs_configured", lambda: True)
+
+    response = client.post(
+        path,
+        data={"user_query": "5000", "territory_id": 47},
+        files={"blocks_file": ("blocks.geojson", b'{"type": "FeatureCollection", "features": []}')},
+    )
+
+    assert response.status_code == 200
+    assert received[0]["territory_id"] == 47
