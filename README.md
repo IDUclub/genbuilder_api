@@ -1,6 +1,26 @@
 # GenBuilder API
 API for GenBuilder. Can generate images with buildings and other objects for city blocks, vectorize and normalize them.
 
+## 3D facade jobs
+
+The asynchronous 3D endpoints require a separate `facade-jobs` deployment:
+
+| Environment variable | Required | Default | Purpose |
+|---|---:|---:|---|
+| `FACADE_JOBS_API` | yes | — | Internal base URL used by GenBuilder, for example `http://facade-jobs:8000` |
+| `FACADE_JOBS_PUBLIC_API` | no | `FACADE_JOBS_API` | Public base URL used in the returned `status_url` |
+| `FACADE_JOBS_TIMEOUT_SECONDS` | no | `30` | Timeout for queue submission; this does not cover facade generation time |
+
+See [the frontend API guide](docs/frontend-api-guide.md#3d-фасады) and
+[the integration plan](docs/facades-3d-integration-plan.md) for the endpoint and
+service contracts.
+
+All `/generate/3d/*` endpoints accept an optional Russian preset name or English
+prompt in the `facade_style` query parameter. `/generate/chat/stream/3d`
+accepts the same value as a multipart field and can also extract arbitrary
+Russian descriptions from `user_query`. Omitting the style keeps the
+`facade-jobs` per-zone defaults.
+
 ## Configuration
 
 The deployment workflow can build `.env.development` directly from GitHub
