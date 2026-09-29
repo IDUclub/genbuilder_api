@@ -10,6 +10,7 @@ from app.schema.dto import (
     ScenarioBody,
     TerritoryRequest,
     BuildingFeatureCollection,
+    FacadeJobAccepted,
     FunctionalZonesRequest,
 )
 from app.utils import auth
@@ -122,6 +123,141 @@ async def generate_by_functional_zones(
         token=token,
         body=body,
         preserve_existing_buildings=preserve_existing_buildings,
+    )
+
+
+@generation_router.post(
+    "/generate/3d/by_scenario",
+    summary="Generate buildings and queue a 3D facade job",
+    response_model=FacadeJobAccepted,
+    status_code=202,
+)
+async def generate_3d_by_scenario(
+    scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+    year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+    source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+    functional_zone_types: Annotated[
+        List[str],
+        Query(
+            ...,
+            description="Target functional zone types",
+            examples=[["residential", "business", "industrial"]],
+        ),
+    ],
+    physical_object_id: Annotated[
+        Optional[List[int]],
+        Query(
+            description="Physical object id(s) to exclude from generation territory.",
+            examples=[[2058130, 2058131]],
+        ),
+    ] = None,
+    facade_style: Annotated[
+        Optional[str],
+        Query(
+            max_length=4000,
+            description=(
+                "Optional Russian preset name or English facade prompt. Omit it "
+                "to use facade-jobs defaults for each functional zone."
+            ),
+            examples=["кирпичный"],
+        ),
+    ] = None,
+    user: auth.AuthUser = Depends(auth.get_current_user),
+    body: ScenarioBody = Body(default_factory=ScenarioBody),
+) -> dict[str, str]:
+    return await orchestration.generate_3d_by_scenario(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        functional_zone_types=functional_zone_types,
+        physical_object_id=physical_object_id,
+        token=user.token,
+        requested_by=user.user_id,
+        facade_style=facade_style,
+        targets_by_zone=body.targets_by_zone,
+        generation_parameters=body.generation_parameters,
+    )
+
+
+@generation_router.post(
+    "/generate/3d/by_territory",
+    summary="Generate buildings for territories and queue a 3D facade job",
+    response_model=FacadeJobAccepted,
+    status_code=202,
+)
+async def generate_3d_by_territory(
+    payload: TerritoryRequest = Body(..., description="Body for request"),
+    facade_style: Annotated[
+        Optional[str],
+        Query(
+            max_length=4000,
+            description=(
+                "Optional Russian preset name or English facade prompt. Omit it "
+                "to use facade-jobs defaults for each functional zone."
+            ),
+            examples=["скандинавский"],
+        ),
+    ] = None,
+) -> dict[str, str]:
+    # The original /generate/by_territory endpoint is intentionally anonymous;
+    # mirror that contract and let facade-jobs place it in the anonymous quota.
+    return await orchestration.generate_3d_by_territory(
+        payload,
+        facade_style=facade_style,
+    )
+
+
+@generation_router.post(
+    "/generate/3d/by_blocks",
+    summary="Generate buildings for blocks and queue a 3D facade job",
+    response_model=FacadeJobAccepted,
+    status_code=202,
+)
+async def generate_3d_by_blocks(
+    scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
+    year: Annotated[int, Query(..., description="Data year", examples=[2024])],
+    source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
+    functional_zone_types: Annotated[
+        List[str],
+        Query(
+            ...,
+            description="Target functional zone types",
+            examples=[["residential", "business", "industrial"]],
+        ),
+    ],
+    physical_object_id: Annotated[
+        Optional[List[int]],
+        Query(
+            description="Physical object id(s) to exclude from generation territory.",
+            examples=[[2058130, 2058131]],
+        ),
+    ] = None,
+    facade_style: Annotated[
+        Optional[str],
+        Query(
+            max_length=4000,
+            description=(
+                "Optional Russian preset name or English facade prompt. Omit it "
+                "to use facade-jobs defaults for each functional zone."
+            ),
+            examples=["Современный"],
+        ),
+    ] = None,
+    user: auth.AuthUser = Depends(auth.get_current_user),
+    body: FunctionalZonesRequest = Body(
+        ..., description="Per-zone targets and generation parameters"
+    ),
+) -> dict[str, str]:
+    return await orchestration.generate_3d_by_blocks(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        functional_zone_types=functional_zone_types,
+        physical_object_id=physical_object_id,
+        token=user.token,
+        requested_by=user.user_id,
+        facade_style=facade_style,
+        body=body,
     )
 
 
