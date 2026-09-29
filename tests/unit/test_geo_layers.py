@@ -2,7 +2,6 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from app.common.urls import durable_url
 from app.logic.geo_layers import (
     FILE_SLOTS,
     SLOT_BLOCKS_INPUT,
@@ -15,30 +14,7 @@ from app.logic.geo_layers import (
     object_key,
 )
 
-PUBLIC = "http://10.32.1.46:8200"
 RESULT_ID = "a1b2c3d4e5f6"
-
-
-def test_durable_url_prefers_the_configured_public_base():
-    assert (
-        durable_url("/files/buildings/x", PUBLIC, "http://internal:8000/")
-        == "http://10.32.1.46:8200/files/buildings/x"
-    )
-
-
-def test_durable_url_falls_back_to_the_request_base():
-    assert (
-        durable_url("/files/buildings/x", None, "http://internal:8000/")
-        == "http://internal:8000/files/buildings/x"
-    )
-
-
-def test_durable_url_is_relative_without_any_base():
-    assert durable_url("/files/buildings/x", None) == "/files/buildings/x"
-
-
-def test_durable_url_does_not_double_the_slash():
-    assert durable_url("/a", "http://host:8200/") == "http://host:8200/a"
 
 
 def test_object_key_is_derived_from_result_id_and_slot():
@@ -69,32 +45,26 @@ def test_file_slots_are_the_declared_whitelist():
 
 def test_stored_zones_share_the_name_of_the_live_zones_layer():
     """Project-less mode stores the zones itself; the map still sees one zones layer."""
-    layer = build_stored_layer(
-        slot=SLOT_ZONES, result_id=RESULT_ID, public_base_url=PUBLIC
-    )
+    layer = build_stored_layer(slot=SLOT_ZONES, result_id=RESULT_ID)
 
     assert layer["name"] == "functional_zones"
     assert layer["title"] == "Функциональные зоны"
     assert layer["role"] == "input"
-    assert layer["url"] == f"{PUBLIC}/files/zones/{RESULT_ID}"
+    assert layer["url"] == f"/files/zones/{RESULT_ID}"
     assert object_key(RESULT_ID, SLOT_ZONES) == f"{RESULT_ID}/zones.geojson"
 
 
 def test_build_stored_layer_points_at_the_file_endpoint():
-    layer = build_stored_layer(
-        slot=SLOT_BUILDINGS, result_id=RESULT_ID, public_base_url=PUBLIC
-    )
+    layer = build_stored_layer(slot=SLOT_BUILDINGS, result_id=RESULT_ID)
 
-    assert layer["url"] == f"{PUBLIC}/files/buildings/{RESULT_ID}"
+    assert layer["url"] == f"/files/buildings/{RESULT_ID}"
     assert layer["role"] == "result"
     assert layer["download_url"] is None
     assert layer["mime_type"] == "application/geo+json"
 
 
 def test_build_stored_layer_marks_the_uploaded_blocks_as_input():
-    layer = build_stored_layer(
-        slot=SLOT_BLOCKS_INPUT, result_id=RESULT_ID, public_base_url=PUBLIC
-    )
+    layer = build_stored_layer(slot=SLOT_BLOCKS_INPUT, result_id=RESULT_ID)
 
     assert layer["role"] == "input"
     assert layer["filename"] == "blocks_input.geojson"
@@ -106,10 +76,10 @@ def test_build_zones_layer_encodes_scenario_coordinates():
         year=2024,
         source="OSM",
         functional_zone_types=["residential", "business"],
-        public_base_url=PUBLIC,
     )
 
     parsed = urlparse(layer["url"])
+    assert not parsed.scheme and not parsed.netloc
     assert parsed.path == "/layers/functional_zones"
     assert parse_qs(parsed.query) == {
         "scenario_id": ["198"],
@@ -125,7 +95,6 @@ def test_build_zones_layer_never_offers_a_direct_download():
         year=2024,
         source="OSM",
         functional_zone_types=["residential"],
-        public_base_url=PUBLIC,
     )
 
     assert layer["download_url"] is None
@@ -133,9 +102,7 @@ def test_build_zones_layer_never_offers_a_direct_download():
 
 
 def test_file_part_keeps_the_durable_url():
-    layer = build_stored_layer(
-        slot=SLOT_BUILDINGS, result_id=RESULT_ID, public_base_url=PUBLIC
-    )
+    layer = build_stored_layer(slot=SLOT_BUILDINGS, result_id=RESULT_ID)
 
     part = geo_layer_to_file_part(layer)
 
@@ -146,9 +113,7 @@ def test_file_part_keeps_the_durable_url():
 
 def test_file_part_never_persists_an_ephemeral_download_url():
     """The invariant the whole design rests on: history holds durable links only."""
-    layer = build_stored_layer(
-        slot=SLOT_BUILDINGS, result_id=RESULT_ID, public_base_url=PUBLIC
-    )
+    layer = build_stored_layer(slot=SLOT_BUILDINGS, result_id=RESULT_ID)
     layer["download_url"] = "http://10.32.1.42:9000/genbuilder/x?X-Amz-Signature=deadbeef"
 
     part = geo_layer_to_file_part(layer)

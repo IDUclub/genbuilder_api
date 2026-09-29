@@ -46,7 +46,6 @@ class Settings(BaseModel):
     a2a_public_url: str = Field(
         default="http://localhost:8000", alias="A2A_PUBLIC_URL"
     )
-    public_base_url: str = Field(default="", alias="PUBLIC_BASE_URL")
 
     fileserver_endpoint: str = Field(default="", alias="FILESERVER_ENDPOINT")
     fileserver_access_key: str = Field(default="", alias="FILESERVER_ACCESS_KEY")
