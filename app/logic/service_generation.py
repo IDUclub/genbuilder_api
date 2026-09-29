@@ -85,10 +85,9 @@ class ServiceGenerator:
         """Summarize requested targets and the capacity actually placed.
 
         A request is one positive ``(zone, service type)`` capacity target.  A
-        request is considered placed when generated buildings cover its full target
-        capacity, or when what is left of it is too small for another building of
-        that type and buildings were placed; partial placements remain visible
-        through the capacity and service-building counters.
+        request is considered placed only when generated buildings cover its
+        full target capacity; partial placements remain visible through the
+        capacity and service-building counters.
         """
         targets = [
             (zone, service_name, float(target_capacity))
@@ -113,10 +112,8 @@ class ServiceGenerator:
         fulfilled = 0
         capacity_requested = 0.0
         capacity_unplaced = 0.0
-        unplaced_by_reason: Dict[str, List[str]] = {
-            "type_not_supported": [],
+        unplaced_by_reason = {
             "no_template": [],
-            "demand_below_template": [],
             "no_space": [],
             "site_limit": [],
         }
@@ -126,15 +123,14 @@ class ServiceGenerator:
             )
             capacity_requested += target_capacity
             capacity_unplaced += max(target_capacity - placed_capacity, 0.0)
-            reason = (failure_reasons or {}).get((zone, str(service_name)), "no_space")
-            if reason not in unplaced_by_reason:
-                reason = "no_space"
-            remainder_is_negligible = (
-                reason == "demand_below_template" and placed_capacity > 0.0
-            )
-            if placed_capacity >= target_capacity or remainder_is_negligible:
+            if placed_capacity >= target_capacity:
                 fulfilled += 1
             else:
+                reason = (failure_reasons or {}).get(
+                    (zone, str(service_name)), "no_space"
+                )
+                if reason not in unplaced_by_reason:
+                    reason = "no_space"
                 unplaced_by_reason[reason].append(str(service_name))
 
         for names in unplaced_by_reason.values():
@@ -156,13 +152,7 @@ class ServiceGenerator:
             "capacity_requested": capacity_requested,
             "capacity_placed": capacity_placed,
             "capacity_unplaced": capacity_unplaced,
-            "unplaced_type_not_supported": len(
-                unplaced_by_reason["type_not_supported"]
-            ),
             "unplaced_no_template": len(unplaced_by_reason["no_template"]),
-            "unplaced_demand_below_template": len(
-                unplaced_by_reason["demand_below_template"]
-            ),
             "unplaced_no_space": len(unplaced_by_reason["no_space"]),
             "unplaced_site_limit": len(unplaced_by_reason["site_limit"]),
             "unplaced_by_reason": unplaced_by_reason,
@@ -174,7 +164,6 @@ class ServiceGenerator:
 
         expected_cols = [
             "service",
-            "service_type_id",
             "type_id",
             "capacity",
             "floors_count",
@@ -194,25 +183,6 @@ class ServiceGenerator:
 
         projects_gdf = projects_gdf[expected_cols]
         return projects_gdf
-
-    @staticmethod
-    def match_projects_to_normatives(
-        projects_gdf: gpd.GeoDataFrame,
-        service_normatives: pd.DataFrame,
-    ) -> gpd.GeoDataFrame:
-        """Keep templates of the normative service types, named as the normatives name them.
-
-        Templates are matched by ``service_type_id``, so a service type renamed in
-        Urban API keeps its templates.
-        """
-        names_by_type_id = dict(
-            zip(service_normatives["service_id"], service_normatives["service_name"])
-        )
-        matched = projects_gdf[
-            projects_gdf["service_type_id"].isin(names_by_type_id)
-        ].copy()
-        matched["service"] = matched["service_type_id"].map(names_by_type_id)
-        return matched
 
     @staticmethod
     def _get_block_free_area(
@@ -349,22 +319,6 @@ class ServiceGenerator:
         c = geom.centroid
         return translate(geom, xoff=-c.x, yoff=-c.y)
 
-    @classmethod
-    def _local_footprints(
-        cls, projects_gdf: gpd.GeoDataFrame
-    ) -> Dict[Any, BaseGeometry]:
-        """Template footprints centred at the origin, each measured in its own UTM zone.
-
-        Reprojecting a footprint into the UTM zone of a distant scenario rotates it by
-        the meridian convergence, so it no longer matches the axis of its plot.
-        """
-        footprints: Dict[Any, BaseGeometry] = {}
-        for type_id, geom in zip(projects_gdf["type_id"], projects_gdf.geometry):
-            footprint = gpd.GeoSeries([geom], crs=projects_gdf.crs)
-            local = footprint.to_crs(footprint.estimate_utm_crs()).iloc[0]
-            footprints[type_id] = cls._normalize_building_geometry(local)
-        return footprints
-
     def _place_building_in_plot(
         self,
         building_template: BaseGeometry,
@@ -415,18 +369,21 @@ class ServiceGenerator:
         all_limits: Dict[Hashable, Dict[str, float]],
         projects_gdf: gpd.GeoDataFrame,
         blocks_crs: int | str = 32636,
-        service_type_ids: Optional[Dict[str, int]] = None,
         rng: Optional[random.Random] = None,
     ) -> gpd.GeoDataFrame:
         rng = rng or random.Random(self.generation_parameters.seed)
         projects_local = ensure_crs(projects_gdf, blocks_crs)
-        normalized_buildings = self._local_footprints(projects_local)
+
+        normalized_buildings: Dict[Any, BaseGeometry] = {}
+        for row in projects_local.itertuples():
+            type_id = getattr(row, "type_id")
+            geom = getattr(row, "geometry")
+            normalized_buildings[type_id] = self._normalize_building_geometry(geom)
 
         service_buildings_rows: List[Dict[str, Any]] = []
 
         zone_placed_capacity: Dict[Hashable, Dict[str, float]] = {}
         site_limit_targets: set[tuple[Hashable, str]] = set()
-        small_demand_targets: set[tuple[Hashable, str]] = set()
 
         for block_row in blocks.itertuples():
             block_id = getattr(block_row, "src_index")
@@ -485,11 +442,6 @@ class ServiceGenerator:
                 if service_projects.empty:
                     continue
 
-                # The existing city network serves a demand too small for a whole building.
-                min_demand = float(service_projects["capacity"].min()) * (
-                    self.generation_parameters.min_service_demand_share
-                )
-
                 placed_capacity = placed_so_far
                 sites_in_block = 0
 
@@ -503,9 +455,6 @@ class ServiceGenerator:
                     and not free_area.is_empty
                 ):
                     remaining_capacity = target_capacity - placed_capacity
-                    if remaining_capacity < min_demand:
-                        small_demand_targets.add((zone_id, str(service_name)))
-                        break
 
                     project_candidates = self._select_project_for_remaining(
                         service_projects,
@@ -545,10 +494,9 @@ class ServiceGenerator:
                         if plot_geom is None:
                             continue
 
-                        plot_angle = self._compute_main_axis_angle(plot_geom)
                         building_oriented_main = rotate(
                             building_template_norm,
-                            plot_angle,
+                            block_angle,
                             origin=(0, 0),
                             use_radians=False,
                         )
@@ -562,7 +510,7 @@ class ServiceGenerator:
                         if building_geom is None:
                             building_oriented_orth = rotate(
                                 building_template_norm,
-                                plot_angle + 90.0,
+                                block_angle + 90.0,
                                 origin=(0, 0),
                                 use_radians=False,
                             )
@@ -622,8 +570,6 @@ class ServiceGenerator:
                     site_limit_targets.add((zone_id, str(service_name)))
 
         available_service_names = set(projects_local["service"].dropna().astype(str))
-        supported_type_ids = set(self.generation_parameters.supported_service_type_ids)
-        service_type_ids = service_type_ids or {}
         failure_reasons: Dict[tuple[Hashable, str], str] = {}
         for zone_id, block_limits in all_limits.items():
             placed_for_zone = zone_placed_capacity.get(zone_id, {})
@@ -636,13 +582,7 @@ class ServiceGenerator:
                 ):
                     continue
                 if str(service_name) not in available_service_names:
-                    failure_reasons[service_key] = (
-                        "no_template"
-                        if service_type_ids.get(str(service_name)) in supported_type_ids
-                        else "type_not_supported"
-                    )
-                elif service_key in small_demand_targets:
-                    failure_reasons[service_key] = "demand_below_template"
+                    failure_reasons[service_key] = "no_template"
                 elif service_key in site_limit_targets:
                     failure_reasons[service_key] = "site_limit"
                 else:
@@ -706,16 +646,6 @@ class ServiceGenerator:
         blocks.rename(columns={"index": "src_index"}, inplace=True)
 
         projects_gdf = await asyncio.to_thread(self.load_service_projects)
-        projects_gdf = self.match_projects_to_normatives(
-            projects_gdf, service_normatives
-        )
-        service_type_ids = {
-            str(service_name): int(service_type_id)
-            for service_type_id, service_name in zip(
-                service_normatives["service_id"], service_normatives["service_name"]
-            )
-            if pd.notna(service_type_id)
-        }
         all_limits = await asyncio.to_thread(
             self.compute_service_limits_for_blocks,
             blocks,
@@ -730,7 +660,6 @@ class ServiceGenerator:
             all_limits,
             projects_gdf,
             crs,
-            service_type_ids,
         )
         services_buildings_gdf.attrs["service_diagnostics"] = (
             self.summarize_service_generation(

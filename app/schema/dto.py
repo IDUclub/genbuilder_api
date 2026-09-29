@@ -357,20 +357,10 @@ class ServiceGenerationDiagnostics(BaseModel):
         ge=0,
         description="Number of service-capacity targets that were not fully satisfied.",
     )
-    unplaced_type_not_supported: int = Field(
-        default=0,
-        ge=0,
-        description="Unfulfilled service targets of types GenBuilder does not place at all.",
-    )
     unplaced_no_template: int = Field(
         default=0,
         ge=0,
-        description="Unfulfilled service targets of supported types that have no building template yet.",
-    )
-    unplaced_demand_below_template: int = Field(
-        default=0,
-        ge=0,
-        description="Unfulfilled service targets whose demand is too small for a whole building.",
+        description="Unfulfilled service targets for which no building template exists.",
     )
     unplaced_no_space: int = Field(
         default=0,
@@ -384,9 +374,7 @@ class ServiceGenerationDiagnostics(BaseModel):
     )
     unplaced_by_reason: Dict[str, list[str]] = Field(
         default_factory=lambda: {
-            "type_not_supported": [],
             "no_template": [],
-            "demand_below_template": [],
             "no_space": [],
             "site_limit": [],
         },
@@ -481,20 +469,6 @@ class BuildingFeatureCollection(BaseModel):
             ]
         }
     }
-
-
-class FacadeJobAccepted(BaseModel):
-    """Handle returned after asynchronous 3D facade generation is queued."""
-
-    job_id: str = Field(..., description="Facade generation job identifier")
-    status_url: str = Field(..., description="URL to poll for job status and result")
-    facade_style: str = Field(
-        ...,
-        description=(
-            "Applied Russian preset name or the original free-text style label"
-        ),
-        examples=["Кирпичный"],
-    )
 
 
 class FunctionalZoneGenerationConfig(BaseModel):
@@ -642,5 +616,4 @@ __all__ = [
     "FunctionalZonesRequest",
     "ExistingBuildingFeature",
     "ExistingBuildingsFeatureCollection",
-    "FacadeJobAccepted",
 ]
