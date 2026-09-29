@@ -93,7 +93,6 @@ def _chat_client(monkeypatch, stream):
         generation_chat_routers, "build_chat_storage_client", lambda: None
     )
     monkeypatch.setattr(generation_chat_routers, "optional_object_storage", lambda: None)
-    monkeypatch.setattr(generation_chat_routers, "public_base_url", lambda: None)
 
     class _DummyLLM:
         async def __aenter__(self):

@@ -64,7 +64,6 @@ def _scenario_args(**overrides):
 def storage(monkeypatch, tmp_path):
     local = LocalStorage(str(tmp_path))
     monkeypatch.setattr(tools, "optional_object_storage", lambda: local)
-    monkeypatch.setattr(tools, "public_base_url", lambda: None)
     return local
 
 

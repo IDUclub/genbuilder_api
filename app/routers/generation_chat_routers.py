@@ -34,7 +34,6 @@ from app.dependencies import (
     default_services_territory_id,
     facade_jobs_configured,
     optional_object_storage,
-    public_base_url,
     urban_db_api,
     zones_service,
 )
@@ -328,7 +327,6 @@ async def _generate_chat_stream_response(
                     zones_service=zones_service,
                     urban_api=urban_db_api,
                     object_storage=optional_object_storage(),
-                    public_base_url=public_base_url(),
                 ):
                     if queue_facades and event.get("type") == "result":
                         content = event.get("content")

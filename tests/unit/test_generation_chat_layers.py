@@ -15,7 +15,6 @@ from app.logic.geo_layers import (
     object_key,
 )
 
-PUBLIC_BASE_URL = "http://10.32.1.46:8200"
 ANSWER = "Сгенерировано 1 здание."
 
 ZONES_LAYER = {
@@ -149,7 +148,6 @@ def _collect(**overrides) -> list[dict]:
         year=2024,
         source="OSM",
         la_per_person=30.0,
-        public_base_url=PUBLIC_BASE_URL,
     )
     defaults.update(overrides)
 
@@ -264,7 +262,7 @@ def test_zones_descriptor_is_a_live_query_not_a_stored_object():
 
     descriptor = _of_type(events, "file")[0]
     assert descriptor["name"] == "functional_zones"
-    assert descriptor["url"].startswith(f"{PUBLIC_BASE_URL}/layers/functional_zones?")
+    assert descriptor["url"].startswith("/layers/functional_zones?")
     assert "scenario_id=198" in descriptor["url"]
     assert "functional_zone_types=residential" in descriptor["url"]
     assert descriptor["download_url"] is None
@@ -278,7 +276,7 @@ def test_buildings_are_stored_and_linked_after_the_result(tmp_path):
     types = _types(events)
     assert types.index("result") < types.index("file")
     descriptor = _of_type(events, "file")[0]
-    assert descriptor["url"] == f"{PUBLIC_BASE_URL}/files/buildings/{_result_id(descriptor)}"
+    assert descriptor["url"] == f"/files/buildings/{_result_id(descriptor)}"
 
     raw = b"".join(storage.open_stream(object_key(_result_id(descriptor), "buildings")))
     assert json.loads(raw.decode("utf-8")) == _of_type(events, "result")[0]["content"]
@@ -358,7 +356,7 @@ def test_blocks_file_mode_links_the_zones_before_generation(tmp_path):
     events, _ = _blocks_file_run(tmp_path)
 
     descriptor = _zones_descriptor(events)
-    assert descriptor["url"] == f"{PUBLIC_BASE_URL}/files/zones/{_result_id(descriptor)}"
+    assert descriptor["url"] == f"/files/zones/{_result_id(descriptor)}"
     assert events.index(descriptor) < _types(events).index("progress")
 
 
