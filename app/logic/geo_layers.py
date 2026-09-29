@@ -13,13 +13,15 @@ the layer itself. Two kinds exist, and the difference is deliberate:
 
 ``download_url`` is always ``None``: object storage sits on a private network,
 so bytes are streamed through the API rather than handed out as presigned URLs.
+
+``url`` is always a path relative to this service. The frontend prepends the
+base address it knows for ``source_service``: a host baked into chat history
+would be an internal address the browser behind the external proxy can't reach.
 """
 from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlencode
-
-from app.common.urls import durable_url
 
 SOURCE_SERVICE = "genbuilder"
 MIME_TYPE = "application/geo+json"
@@ -61,8 +63,6 @@ def build_stored_layer(
     *,
     slot: str,
     result_id: str,
-    public_base_url: str | None = None,
-    request_base_url: str | None = None,
 ) -> dict[str, Any]:
     """Descriptor for a layer served from object storage."""
     name, title, role = _SLOT_SPECS[slot]
@@ -70,9 +70,7 @@ def build_stored_layer(
         "name": name,
         "title": title,
         "role": role,
-        "url": durable_url(
-            f"/files/{slot}/{result_id}", public_base_url, request_base_url
-        ),
+        "url": f"/files/{slot}/{result_id}",
         "download_url": None,
         "filename": f"{slot}.geojson",
         "mime_type": MIME_TYPE,
@@ -86,8 +84,6 @@ def build_zones_layer(
     year: int,
     source: str,
     functional_zone_types: list[str] | tuple[str, ...],
-    public_base_url: str | None = None,
-    request_base_url: str | None = None,
 ) -> dict[str, Any]:
     """Descriptor for the functional zones layer, as a live query.
 
@@ -107,9 +103,7 @@ def build_zones_layer(
         "name": ZONES_LAYER_NAME,
         "title": "Функциональные зоны",
         "role": "input",
-        "url": durable_url(
-            f"{ZONES_LAYER_PATH}?{query}", public_base_url, request_base_url
-        ),
+        "url": f"{ZONES_LAYER_PATH}?{query}",
         "download_url": None,
         "filename": "functional_zones.geojson",
         "mime_type": MIME_TYPE,

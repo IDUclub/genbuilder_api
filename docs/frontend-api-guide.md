@@ -402,7 +402,7 @@ event: zones
 data: {"source": "scenario", "content": {"type": "FeatureCollection", "features": [ /* полигоны зон */ ]}}
 
 event: file
-data: {"name": "functional_zones", "title": "Функциональные зоны", "role": "input", "url": "http://10.32.1.46:8200/layers/functional_zones?scenario_id=198&year=2024&source=OSM&functional_zone_types=residential&functional_zone_types=business", "download_url": null, "filename": "functional_zones.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
+data: {"name": "functional_zones", "title": "Функциональные зоны", "role": "input", "url": "/layers/functional_zones?scenario_id=198&year=2024&source=OSM&functional_zone_types=residential&functional_zone_types=business", "download_url": null, "filename": "functional_zones.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
 
 event: progress
 data: {"stage": "generation", "content": "Генерация зданий…"}
@@ -411,7 +411,7 @@ event: result
 data: {"content": {"type": "FeatureCollection", "features": [ /* здания */ ]}, "summary": {"buildings": 128, "living_area_total": 350000.0, "residents_total": 5000, "buildings_by_zone": {"residential": 96, "business": 32}}}
 
 event: file
-data: {"name": "buildings", "title": "Сгенерированная застройка", "role": "result", "url": "http://10.32.1.46:8200/files/buildings/9fb46d53957b4e459a77dbe018dc96d2", "download_url": null, "filename": "buildings.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
+data: {"name": "buildings", "title": "Сгенерированная застройка", "role": "result", "url": "/files/buildings/9fb46d53957b4e459a77dbe018dc96d2", "download_url": null, "filename": "buildings.geojson", "mime_type": "application/geo+json", "source_service": "genbuilder"}
 
 event: token
 data: {"content": "Сгенерирована застройка "}
@@ -642,7 +642,7 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
   "name": "buildings",
   "title": "Сгенерированная застройка",
   "role": "result",
-  "url": "http://10.32.1.46:8200/files/buildings/6f1c…e2",
+  "url": "/files/buildings/6f1c…e2",
   "download_url": null,
   "filename": "buildings.geojson",
   "mime_type": "application/geo+json",
@@ -653,7 +653,10 @@ data: {"chat_id": "9f3a…", "assistant_message_id": null}
 - `role` — `result` для сгенерированного, `input` для исходных данных;
 - `download_url` **всегда `null`**: объектное хранилище живёт в приватной сети,
   браузер туда не ходит, весь трафик идёт через GenBuilder по `url`;
-- `url` абсолютный, если на сервере задан `PUBLIC_BASE_URL`, иначе относительный.
+- `url` — всегда относительный путь внутри GenBuilder (`/files/...`, `/layers/...`), без хоста.
+  Фронт сам подставляет базовый адрес сервиса по `source_service`; у старых записей истории
+  с абсолютной ссылкой (`http://10.32.1.46:8200/...`) нужно отрезать origin и так же
+  подставить свою базу — внутренний адрес снаружи не открывается.
 
 Та же нагрузка (без `download_url` и `role`) сохраняется в историю чата как
 часть сообщения ассистента:

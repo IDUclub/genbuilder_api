@@ -36,7 +36,7 @@ from pydantic import ValidationError
 
 from mcp import ErrorData, McpError
 
-from app.dependencies import optional_object_storage, params_provider, public_base_url
+from app.dependencies import optional_object_storage, params_provider
 from app.infrastructure.object_storage import ObjectStorageError
 from app.logic import generation_orchestration as orchestration
 from app.logic.generation_orchestration import ProgressCallback
@@ -196,9 +196,7 @@ async def _generation_result(
 
     if stored:
         result["result_id"] = generation_id
-        result["layer"] = build_stored_layer(
-            slot=SLOT_BUILDINGS, result_id=generation_id, public_base_url=public_base_url()
-        )
+        result["layer"] = build_stored_layer(slot=SLOT_BUILDINGS, result_id=generation_id)
     if include_geometry or not stored:
         result["type"] = fc.get("type", "FeatureCollection")
         result["features"] = fc.get("features") or []

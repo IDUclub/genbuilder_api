@@ -94,15 +94,6 @@ def _optional_env(key: str) -> str | None:
     return value or None
 
 
-def public_base_url() -> str | None:
-    """Absolute base for links that are persisted into chat history.
-
-    Without it links are relative, which is fine for a live stream but useless
-    once the history is read back from another origin.
-    """
-    return _optional_env("PUBLIC_BASE_URL")
-
-
 LENINGRAD_OBLAST_TERRITORY_ID = 1
 
 

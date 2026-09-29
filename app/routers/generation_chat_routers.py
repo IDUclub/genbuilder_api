@@ -33,7 +33,6 @@ from app.dependencies import (
     chat_llm_configured,
     default_services_territory_id,
     optional_object_storage,
-    public_base_url,
     urban_db_api,
     zones_service,
 )
@@ -195,7 +194,6 @@ async def generate_chat_stream(
                     zones_service=zones_service,
                     urban_api=urban_db_api,
                     object_storage=optional_object_storage(),
-                    public_base_url=public_base_url(),
                 ):
                     event_type = event.pop("type", "message")
                     if event.get("chat_id"):

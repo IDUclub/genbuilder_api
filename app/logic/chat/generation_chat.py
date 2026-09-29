@@ -448,7 +448,6 @@ async def stream_generation_chat(
     zones_service: Any | None = None,
     urban_api: Any | None = None,
     object_storage: ObjectStorage | None = None,
-    public_base_url: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     persist = chat_storage_client is not None and bool(user_id)
     metadata = _request_metadata(
@@ -740,7 +739,6 @@ async def stream_generation_chat(
                 object_storage,
                 result_id,
                 [(SLOT_ZONES, file_zones)],
-                public_base_url,
                 file_layers,
             ):
                 yield event
@@ -752,7 +750,6 @@ async def stream_generation_chat(
             year=year,
             source=source,
             functional_zone_types=list(extracted.functional_zone_types),
-            public_base_url=public_base_url,
         )
         file_layers.append(descriptor)
         yield {"type": "file", **descriptor}
@@ -780,7 +777,6 @@ async def stream_generation_chat(
                 year=year,
                 source=source,
                 functional_zone_types=list(extracted.functional_zone_types),
-                public_base_url=public_base_url,
             )
             file_layers.append(descriptor)
             yield {"type": "file", **descriptor}
@@ -835,7 +831,7 @@ async def stream_generation_chat(
         if existing_buildings is not None:
             payloads.append((SLOT_EXISTING_BUILDINGS, existing_buildings))
         async for event in _store_layers(
-            object_storage, result_id, payloads, public_base_url, file_layers
+            object_storage, result_id, payloads, file_layers
         ):
             yield event
 
@@ -883,7 +879,6 @@ async def _store_layers(
     object_storage: Any,
     result_id: str,
     payloads: list[tuple[str, Any]],
-    public_base_url: str | None,
     file_layers: list[dict[str, Any]],
 ) -> AsyncIterator[dict[str, Any]]:
     """Write each payload to its slot and yield its ``file`` event.
@@ -907,9 +902,7 @@ async def _store_layers(
                 "появится в истории чата.",
             }
             continue
-        descriptor = build_stored_layer(
-            slot=slot, result_id=result_id, public_base_url=public_base_url
-        )
+        descriptor = build_stored_layer(slot=slot, result_id=result_id)
         file_layers.append(descriptor)
         yield {"type": "file", **descriptor}
 
