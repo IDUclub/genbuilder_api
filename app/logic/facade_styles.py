@@ -36,67 +36,82 @@ class FacadeStyle:
     name_ru: str
     prompt: str | None
     source: Literal["default", "preset", "free_text"]
+    style_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class _Preset:
+class FacadeStylePreset:
+    """A named style; ``style_id`` addresses its facade library sections."""
+
+    style_id: str
     name_ru: str
     prompt: str
     aliases: tuple[str, ...]
 
 
-_PRESETS: tuple[_Preset, ...] = (
-    _Preset(
+FACADE_STYLE_PRESETS: tuple[FacadeStylePreset, ...] = (
+    FacadeStylePreset(
+        "contemporary",
         "Современный",
         "contemporary architecture, clean lines, modern facade materials",
         ("современный", "современная", "contemporary", "modern"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "classic",
         "Классический",
         "classical architecture, symmetrical facade, restrained ornament",
         ("классический", "классика", "classic", "classical"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "neoclassic",
         "Неоклассический",
         "neoclassical architecture, symmetrical facade, elegant stone details",
         ("неоклассический", "неоклассика", "neoclassic", "neoclassical"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "art-nouveau",
         "Модерн",
         "Art Nouveau architecture, organic curves, decorative facade details",
         ("модерн", "ар нуво", "ар-нуво", "art nouveau"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "brick",
         "Кирпичный",
         "exposed brick facade, detailed brickwork",
         ("кирпичный", "кирпич", "brick", "brickwork"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "glass",
         "Стеклянный",
         "glass curtain wall facade, reflective glazing",
         ("стеклянный", "стекло", "glass", "glass facade"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "industrial",
         "Индустриальный",
         "industrial architecture, metal wall panels, exposed structure",
         ("индустриальный", "промышленный", "industrial"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "minimalist",
         "Минималистичный",
         "minimalist architecture, simple geometry, restrained material palette",
         ("минималистичный", "минимализм", "minimal", "minimalist"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "scandinavian",
         "Скандинавский",
         "Scandinavian architecture, light wood, pale colors, simple details",
         ("скандинавский", "сканди", "scandinavian", "nordic"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "loft",
         "Лофт",
         "loft style, dark metal, exposed brick, large industrial windows",
         ("лофт", "loft"),
     ),
-    _Preset(
+    FacadeStylePreset(
+        "timber",
         "Деревянный",
         "natural timber cladding, warm wood facade",
         ("деревянный", "дерево", "wood", "wooden", "timber"),
@@ -110,9 +125,26 @@ def _normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", normalized)
 
 
-_PRESET_BY_ALIAS: dict[str, _Preset] = {
-    _normalize_name(alias): preset for preset in _PRESETS for alias in preset.aliases
+_PRESET_BY_ALIAS: dict[str, FacadeStylePreset] = {
+    _normalize_name(alias): preset
+    for preset in FACADE_STYLE_PRESETS
+    for alias in (preset.style_id, *preset.aliases)
 }
+PRESETS_BY_ID: dict[str, FacadeStylePreset] = {
+    preset.style_id: preset for preset in FACADE_STYLE_PRESETS
+}
+
+ZONE_DEFAULT_STYLE_IDS: dict[str, str] = {
+    "residential": "contemporary",
+    "business": "glass",
+    "industrial": "industrial",
+    "recreation": "timber",
+    "agriculture": "timber",
+    "special": "neoclassic",
+    "transport": "minimalist",
+}
+_FALLBACK_ZONE_STYLE_ID = "contemporary"
+LIBRARY_BASE_ZONE = "residential"
 _DEFAULT_ALIASES = {
     "default",
     "auto",
@@ -149,6 +181,7 @@ def resolve_facade_style(
             name_ru=preset.name_ru,
             prompt=preset.prompt,
             source="preset",
+            style_id=preset.style_id,
         )
 
     return FacadeStyle(
@@ -166,6 +199,19 @@ def build_style_by_zone(
     if style.prompt is None:
         return {}
 
+    zones = _present_zones(buildings)
+    return {
+        zone: {
+            "prompt": (
+                f"{_ZONE_BASE_PROMPTS.get(zone, _DEFAULT_ZONE_PROMPT)}, "
+                f"{style.prompt}"
+            )[:4000]
+        }
+        for zone in sorted(zones)
+    }
+
+
+def _present_zones(buildings: dict[str, Any]) -> set[str]:
     zones: set[str] = set()
     for feature in buildings.get("features") or []:
         if not isinstance(feature, dict):
@@ -178,25 +224,49 @@ def build_style_by_zone(
 
     if not zones:
         zones.add("unknown")
+    return zones
 
+
+def library_style_by_zone(
+    buildings: dict[str, Any],
+    style: FacadeStyle,
+) -> dict[str, str] | None:
+    """Map each present zone to a facade library ``style_id``.
+
+    An omitted style picks the zone's default preset. Free text has no library
+    sections, so it yields ``None``.
+    """
+    if style.source == "free_text":
+        return None
+    zones = _present_zones(buildings)
+    if style.style_id is not None:
+        return {zone: style.style_id for zone in sorted(zones)}
     return {
-        zone: {
-            "prompt": (
-                f"{_ZONE_BASE_PROMPTS.get(zone, _DEFAULT_ZONE_PROMPT)}, "
-                f"{style.prompt}"
-            )[:4000]
-        }
+        zone: ZONE_DEFAULT_STYLE_IDS.get(zone, _FALLBACK_ZONE_STYLE_ID)
         for zone in sorted(zones)
     }
 
 
-FACADE_STYLE_NAMES_RU: tuple[str, ...] = tuple(preset.name_ru for preset in _PRESETS)
+def library_prompt(preset: FacadeStylePreset) -> str:
+    """Prompt used to generate a preset's library sections."""
+    return f"{_ZONE_BASE_PROMPTS[LIBRARY_BASE_ZONE]}, {preset.prompt}"
+
+
+FACADE_STYLE_NAMES_RU: tuple[str, ...] = tuple(
+    preset.name_ru for preset in FACADE_STYLE_PRESETS
+)
 
 
 __all__ = [
     "DEFAULT_FACADE_STYLE_NAME_RU",
     "FACADE_STYLE_NAMES_RU",
+    "FACADE_STYLE_PRESETS",
+    "PRESETS_BY_ID",
+    "ZONE_DEFAULT_STYLE_IDS",
     "FacadeStyle",
+    "FacadeStylePreset",
     "build_style_by_zone",
+    "library_prompt",
+    "library_style_by_zone",
     "resolve_facade_style",
 ]

@@ -18,8 +18,43 @@ service contracts.
 All `/generate/3d/*` endpoints accept an optional Russian preset name or English
 prompt in the `facade_style` query parameter. `/generate/chat/stream/3d`
 accepts the same value as a multipart field and can also extract arbitrary
-Russian descriptions from `user_query`. Omitting the style keeps the
-`facade-jobs` per-zone defaults.
+Russian descriptions from `user_query`. Omitting the style picks the default
+preset of each functional zone.
+
+### Facade library
+
+Built-in styles can also be assembled synchronously from pre-generated facade
+sections stored in MinIO under `FACADE_LIBRARY_PREFIX` (the same layout that
+`facade-jobs` uses). The `facade_source` query parameter of `/generate/3d/*`
+selects `gpu` (queue a job, `202`), `library` (assemble now, `200`, nearest
+floor count on a miss) or `library_then_gpu` (library when every wall is
+cached, otherwise a job). Library scenes are served by
+`GET /facade-scenes/{result_id}.glb`; style previews by `GET /facade-styles` and
+`GET /facade-styles/{style_id}/preview.glb`.
+
+| Environment variable | Default | Purpose |
+|---|---:|---|
+| `FACADE_SOURCE_DEFAULT` | `gpu` | Source used when `facade_source` is omitted |
+| `FACADE_LIBRARY_PREFIX` | `facade-library/v1` | Object prefix of the library manifest, sections and previews |
+| `FACADE_LIBRARY_PPM` | `32` | Texture resolution of the sections to use |
+| `FACADE_LIBRARY_MAX_WIDTH_SCALE` | `2.5` | Largest horizontal stretch of a section |
+| `FACADE_LIBRARY_MAX_WALLS` | `5000` | Larger scenes go to `facade-jobs` (or `413` without it) |
+| `FACADE_LIBRARY_MANIFEST_TTL_SECONDS` | `300` | How long the manifest and preview index are cached |
+
+The library and the previews are filled by
+[`scripts/build_facade_library.py`](scripts/build_facade_library.py) from a
+machine that reaches both MinIO and the Facades-3D GPU host (VPN). It reads the
+`FILESERVER_*` variables and ignores the local HTTP proxy:
+
+```bash
+python scripts/build_facade_library.py check
+python scripts/build_facade_library.py prewarm --dry-run
+python scripts/build_facade_library.py prewarm --styles brick glass
+python scripts/build_facade_library.py previews
+```
+
+`prewarm` skips sections that already exist (`--force` regenerates them) and
+rewrites the manifest after every section, so it can be interrupted and resumed.
 
 ## Configuration
 

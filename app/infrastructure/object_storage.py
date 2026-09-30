@@ -31,10 +31,15 @@ _MINIO_SCHEME = "minio://"
 _CHUNK_SIZE = 64 * 1024
 _CONTENT_TYPE = "application/geo+json"
 DEFAULT_REGION = "us-east-1"
+_MISSING_CODES = frozenset({"NoSuchKey", "NoSuchObject", "NoSuchBucket"})
 
 
 class ObjectStorageError(RuntimeError):
     """A stored object could not be written or read."""
+
+
+class ObjectNotFoundError(ObjectStorageError):
+    """The requested object does not exist."""
 
 
 class ObjectStorage(ABC):
@@ -47,6 +52,18 @@ class ObjectStorage(ABC):
     @abstractmethod
     def put_json(self, payload: dict[str, Any], object_key: str) -> str:
         """Store ``payload`` as UTF-8 JSON. Returns the canonical stored path."""
+
+    @abstractmethod
+    def put_bytes(self, data: bytes, object_key: str, content_type: str) -> str:
+        """Store raw bytes. Returns the canonical stored path."""
+
+    @abstractmethod
+    def get_bytes(self, object_key: str) -> bytes:
+        """Read a whole object; raises :class:`ObjectNotFoundError` when absent."""
+
+    @abstractmethod
+    def delete(self, object_key: str) -> None:
+        """Remove the object; a missing object is not an error."""
 
     @abstractmethod
     def exists(self, object_key: str) -> bool:
@@ -86,6 +103,21 @@ class LocalStorage(ObjectStorage):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(_encode(payload))
         return str(path)
+
+    def put_bytes(self, data: bytes, object_key: str, content_type: str) -> str:
+        path = self._resolve(object_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return str(path)
+
+    def get_bytes(self, object_key: str) -> bytes:
+        path = self._resolve(object_key)
+        if not path.is_file():
+            raise ObjectNotFoundError(f"Object not found: {object_key}")
+        return path.read_bytes()
+
+    def delete(self, object_key: str) -> None:
+        self._resolve(object_key).unlink(missing_ok=True)
 
     def exists(self, object_key: str) -> bool:
         return self._resolve(object_key).is_file()
@@ -155,13 +187,46 @@ class MinioStorage(ObjectStorage):
             )
         return f"{_MINIO_SCHEME}{object_key}"
 
+    def put_bytes(self, data: bytes, object_key: str, content_type: str) -> str:
+        with _translated_errors(f"store {object_key}"):
+            self._client.put_object(
+                self._bucket,
+                object_key,
+                io.BytesIO(data),
+                len(data),
+                content_type=content_type,
+            )
+        return f"{_MINIO_SCHEME}{object_key}"
+
+    def get_bytes(self, object_key: str) -> bytes:
+        from minio.error import S3Error
+
+        try:
+            response = self._client.get_object(self._bucket, object_key)
+        except S3Error as exc:
+            if exc.code in _MISSING_CODES:
+                raise ObjectNotFoundError(f"Object not found: {object_key}") from exc
+            raise ObjectStorageError(f"Object storage failed to read {object_key}: {exc}") from exc
+        except Exception as exc:
+            raise ObjectStorageError(f"Object storage failed to read {object_key}: {exc}") from exc
+        try:
+            with _translated_errors(f"read {object_key}"):
+                return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+
+    def delete(self, object_key: str) -> None:
+        with _translated_errors(f"delete {object_key}"):
+            self._client.remove_object(self._bucket, object_key)
+
     def exists(self, object_key: str) -> bool:
         from minio.error import S3Error
 
         try:
             self._client.stat_object(self._bucket, object_key)
         except S3Error as exc:
-            if exc.code in ("NoSuchKey", "NoSuchBucket"):
+            if exc.code in _MISSING_CODES:
                 return False
             raise ObjectStorageError(f"Object storage failed to stat {object_key}: {exc}") from exc
         except Exception as exc:
