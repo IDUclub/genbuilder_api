@@ -12,11 +12,12 @@ import trimesh
 
 from app.logic.facade_library.assembly import (
     BuildingFaces,
+    SceneNode,
     building_faces,
     export_glb,
-    place_wall,
     roof_mesh,
     wall_size,
+    wall_transform,
 )
 from app.logic.facade_library.catalog import (
     FacadeTemplateLibrary,
@@ -140,20 +141,36 @@ def _plan(
 
 
 def _render(plan: _ScenePlan, meshes: Mapping[str, trimesh.Trimesh]) -> bytes:
-    walls_by_building: dict[str, list[trimesh.Trimesh]] = {}
+    """Each building is a node whose wall children instance shared section meshes."""
+    section_names = {key: f"section_{index}" for index, key in enumerate(meshes)}
+    geometries = {section_names[key]: mesh for key, mesh in meshes.items()}
+    walls_by_building: dict[str, list[_PlacedWall]] = {}
     for wall in plan.walls:
-        walls_by_building.setdefault(wall.building, []).append(
-            place_wall(meshes[wall.template.cache_key], wall.points)
-        )
-    nodes: list[tuple[str, trimesh.Trimesh]] = []
+        walls_by_building.setdefault(wall.building, []).append(wall)
+
+    nodes: list[SceneNode] = []
     for building in plan.buildings:
-        parts = walls_by_building.get(building.name)
-        if parts:
-            nodes.append((building.name, trimesh.util.concatenate(parts)))
+        walls = walls_by_building.get(building.name, [])
+        if not walls and not building.roofs:
+            continue
+        nodes.append(SceneNode(building.name))
+        for index, wall in enumerate(walls):
+            key = wall.template.cache_key
+            nodes.append(
+                SceneNode(
+                    f"{building.name}__wall_{index}",
+                    geometry=section_names[key],
+                    matrix=wall_transform(meshes[key], wall.points),
+                    parent=building.name,
+                )
+            )
         if building.roofs:
-            roofs = [roof_mesh(points) for points in building.roofs]
-            nodes.append((f"{building.name}__roof", trimesh.util.concatenate(roofs)))
-    return export_glb(nodes)
+            roof_name = f"{building.name}__roof"
+            geometries[roof_name] = trimesh.util.concatenate(
+                [roof_mesh(points) for points in building.roofs]
+            )
+            nodes.append(SceneNode(roof_name, geometry=roof_name, parent=building.name))
+    return export_glb(geometries, nodes)
 
 
 async def build_library_scene(

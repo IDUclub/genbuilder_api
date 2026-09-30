@@ -1,5 +1,7 @@
 import asyncio
 import io
+import json
+import struct
 
 import numpy as np
 import pytest
@@ -17,7 +19,14 @@ from facade_library_support import (
 )
 
 from app.infrastructure.object_storage import LocalStorage
-from app.logic.facade_library.assembly import building_faces, load_template_mesh
+from app.logic.facade_library.assembly import (
+    FacadeAssemblyError,
+    SceneNode,
+    building_faces,
+    export_glb,
+    load_template_mesh,
+    wall_transform,
+)
 from app.logic.facade_library.catalog import (
     FacadeLibraryUnavailable,
     FacadeTemplateMiss,
@@ -48,6 +57,11 @@ def _load_scene(payload: bytes) -> trimesh.Scene:
     loaded = trimesh.load(io.BytesIO(payload), file_type="glb", force="scene")
     assert isinstance(loaded, trimesh.Scene)
     return loaded
+
+
+def _gltf_json(payload: bytes) -> dict:
+    json_length = struct.unpack_from("<I", payload, 12)[0]
+    return json.loads(payload[20 : 20 + json_length])
 
 
 def test_resolve_picks_the_closest_width_within_the_same_floor_group():
@@ -254,15 +268,66 @@ def test_scene_textures_each_zone_with_its_style(tmp_path):
     )
 
     loaded = _load_scene(scene.glb)
-    assert {"gb_1", "gb_1__roof", "gb_2", "gb_2__roof"} <= set(
+    assert {"gb_1__wall_0", "gb_1__roof", "gb_2__wall_0", "gb_2__roof"} <= set(
         loaded.graph.nodes_geometry
     )
+    assert loaded.graph.transforms.parents["gb_1__wall_0"] == "gb_1"
     assert scene.buildings == 2
     assert scene.template_count == 2
     assert scene.nearest_substitutions == 0
     assert scene.wall_instances >= 8
     assert scene.origin_lon == pytest.approx(LON, abs=0.001)
     assert scene.origin_lat == pytest.approx(LAT, abs=0.001)
+
+
+def test_scene_stores_each_section_once_however_many_walls_use_it(tmp_path):
+    _, library = _seeded(tmp_path)
+    buildings = collection(
+        *(
+            rect_feature(
+                str(index), zone="residential", floors=6, offset_m=index * 40.0
+            )
+            for index in range(3)
+        )
+    )
+
+    scene = _build(library, buildings, {"residential": "contemporary"})
+
+    gltf = _gltf_json(scene.glb)
+    section_meshes = [m for m in gltf["meshes"] if m["name"].startswith("section_")]
+    wall_nodes = [n for n in gltf["nodes"] if "__wall_" in n["name"]]
+    assert len(section_meshes) == scene.template_count == 1
+    assert len(wall_nodes) == scene.wall_instances > 3
+
+
+def test_instanced_wall_matches_a_transformed_copy_of_the_section():
+    template = load_template_mesh(wall_glb(12.0, 9.0), "test")
+    points = np.array([[0, 0, 0], [8, 0, -6], [8, 9, -6], [0, 9, 0]], dtype=float)
+    matrix = wall_transform(template, points)
+    expected = template.copy()
+    expected.apply_transform(matrix)
+
+    payload = export_glb(
+        {"section": template},
+        [
+            SceneNode("building"),
+            SceneNode(
+                "building__wall_0", geometry="section", matrix=matrix, parent="building"
+            ),
+        ],
+    )
+
+    assert np.allclose(_load_scene(payload).bounds, expected.bounds, atol=1e-4)
+
+
+def test_export_refuses_a_child_listed_before_its_parent():
+    template = load_template_mesh(wall_glb(12.0, 9.0), "test")
+
+    with pytest.raises(FacadeAssemblyError):
+        export_glb(
+            {"section": template},
+            [SceneNode("wall", geometry="section", parent="building")],
+        )
 
 
 def test_scene_miss_is_raised_when_nearest_is_off(tmp_path):
@@ -346,6 +411,9 @@ def test_preview_glb_is_a_box_of_the_requested_height():
     )
 
     loaded = _load_scene(payload)
-    assert {"preview_brick", "preview_brick__roof"} <= set(loaded.graph.nodes_geometry)
+    assert {"preview_brick__wall_0", "preview_brick__roof"} <= set(
+        loaded.graph.nodes_geometry
+    )
+    assert len(_gltf_json(payload)["meshes"]) == 2
     assert loaded.extents[1] == pytest.approx(18.0, abs=0.5)
     assert len(preview_etag(payload)) == 16

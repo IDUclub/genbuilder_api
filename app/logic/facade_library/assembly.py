@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -217,15 +218,15 @@ def load_template_mesh(payload: bytes, label: str) -> trimesh.Trimesh:
     return mesh
 
 
-def place_wall(template: trimesh.Trimesh, points: np.ndarray) -> trimesh.Trimesh:
-    wall = template.copy()
+def wall_transform(template: trimesh.Trimesh, points: np.ndarray) -> np.ndarray:
+    """Matrix that stretches a centred template onto one wall quad."""
     width, height = wall_size(points)
     normal = face_normal(points)
     angle = np.arctan2(-normal[0], -normal[2])
-    size_x, size_y, _ = wall.bounding_box.extents
+    size_x, size_y, _ = template.extents
     if size_x <= 0 or size_y <= 0:
         raise FacadeAssemblyError("template has a zero-size X or Y extent")
-    transform = trimesh.transformations.compose_matrix(
+    return trimesh.transformations.compose_matrix(
         angles=[0, angle, 0],
         translate=points.mean(axis=0),
         scale=[
@@ -234,16 +235,42 @@ def place_wall(template: trimesh.Trimesh, points: np.ndarray) -> trimesh.Trimesh
             _DEPTH_SCALE_REFERENCE / max(size_x, size_y),
         ],
     )
-    wall.apply_transform(transform)
-    return wall
 
 
-def export_glb(nodes: list[tuple[str, trimesh.Trimesh]]) -> bytes:
-    """Export named meshes as one binary glTF scene."""
+@dataclass(frozen=True)
+class SceneNode:
+    """A glTF node; nodes naming the same ``geometry`` share one stored mesh."""
+
+    name: str
+    geometry: str | None = None
+    matrix: np.ndarray = field(default_factory=lambda: np.eye(4))
+    parent: str | None = None
+
+
+def export_glb(
+    geometries: Mapping[str, trimesh.Trimesh], nodes: Sequence[SceneNode]
+) -> bytes:
+    """Export a binary glTF scene storing each geometry once.
+
+    Parents must precede their children in ``nodes``.
+    """
     scene = trimesh.Scene()
-    for name, mesh in nodes:
-        scene.add_geometry(mesh, node_name=name, geom_name=name)
-    if not scene.geometry:
+    for name, mesh in geometries.items():
+        scene.geometry[name] = mesh
+    known_nodes = {scene.graph.base_frame}
+    for node in nodes:
+        parent = node.parent or scene.graph.base_frame
+        if parent not in known_nodes:
+            raise FacadeAssemblyError(f"node {node.name} precedes its parent {parent}")
+        if node.geometry is not None and node.geometry not in geometries:
+            raise FacadeAssemblyError(f"node {node.name} has unknown geometry")
+        # trimesh expects the key to be absent, not None, on grouping nodes.
+        geometry = {} if node.geometry is None else {"geometry": node.geometry}
+        scene.graph.update(
+            frame_from=parent, frame_to=node.name, matrix=node.matrix, **geometry
+        )
+        known_nodes.add(node.name)
+    if not scene.graph.nodes_geometry:
         raise FacadeAssemblyError("facade scene has no geometry")
     payload = scene.export(file_type="glb")
     if not isinstance(payload, bytes) or not payload.startswith(b"glTF"):
@@ -255,12 +282,13 @@ __all__ = [
     "DEFAULT_MAX_WALL_ASPECT_RATIO",
     "BuildingFaces",
     "FacadeAssemblyError",
+    "SceneNode",
     "building_faces",
     "export_glb",
     "face_normal",
     "load_template_mesh",
-    "place_wall",
     "roof_mesh",
     "split_wall",
     "wall_size",
+    "wall_transform",
 ]

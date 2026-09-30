@@ -7,7 +7,12 @@ import hashlib
 import numpy as np
 import trimesh
 
-from app.logic.facade_library.assembly import export_glb, place_wall, roof_mesh
+from app.logic.facade_library.assembly import (
+    SceneNode,
+    export_glb,
+    roof_mesh,
+    wall_transform,
+)
 
 PREVIEW_WIDTH_M = 12.0
 _ETAG_LENGTH = 16
@@ -36,17 +41,22 @@ def build_preview_glb(
     name: str,
 ) -> bytes:
     walls, roof = box_faces(width_m=width_m, height_m=height_m)
-    return export_glb(
-        [
-            (
-                name,
-                trimesh.util.concatenate(
-                    [place_wall(template, wall) for wall in walls]
-                ),
-            ),
-            (f"{name}__roof", roof_mesh(roof)),
-        ]
-    )
+    section = f"{name}__section"
+    roof_name = f"{name}__roof"
+    nodes = [
+        SceneNode(name),
+        *(
+            SceneNode(
+                f"{name}__wall_{index}",
+                geometry=section,
+                matrix=wall_transform(template, wall),
+                parent=name,
+            )
+            for index, wall in enumerate(walls)
+        ),
+        SceneNode(roof_name, geometry=roof_name, parent=name),
+    ]
+    return export_glb({section: template, roof_name: roof_mesh(roof)}, nodes)
 
 
 def preview_etag(payload: bytes) -> str:
