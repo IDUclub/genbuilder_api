@@ -1,5 +1,5 @@
-from typing import Annotated, List, Optional
-from fastapi import APIRouter, Body, Query, Depends
+from typing import Annotated, Any, List, Optional
+from fastapi import APIRouter, Body, Query, Depends, Response
 
 from app.logic import generation_orchestration as orchestration
 from app.schema.building_properties import (
@@ -11,11 +11,35 @@ from app.schema.dto import (
     TerritoryRequest,
     BuildingFeatureCollection,
     FacadeJobAccepted,
+    FacadeSceneReady,
+    FacadeSceneResult,
     FunctionalZonesRequest,
 )
 from app.utils import auth
 
 generation_router = APIRouter()
+
+_FACADE_SOURCE_DESCRIPTION = (
+    "Where facades come from. `gpu` queues a facade-jobs job (202). `library` "
+    "assembles the scene from cached facade sections right away (200), using the "
+    "nearest section of the same style on a miss. `library_then_gpu` answers from "
+    "the library when every wall is cached and queues a job otherwise. Omit it to "
+    "use the server default (FACADE_SOURCE_DEFAULT)."
+)
+_FACADE_3D_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {"model": FacadeSceneReady, "description": "Scene assembled from the library"},
+    202: {"model": FacadeJobAccepted, "description": "Facade job queued in facade-jobs"},
+}
+
+FacadeSourceQuery = Annotated[
+    Optional[orchestration.FacadeSource],
+    Query(description=_FACADE_SOURCE_DESCRIPTION, examples=["library"]),
+]
+
+
+def _facade_status(result: dict[str, Any], response: Response) -> dict[str, Any]:
+    response.status_code = 200 if result.get("status") == "ready" else 202
+    return result
 
 
 @generation_router.get(
@@ -129,10 +153,12 @@ async def generate_by_functional_zones(
 @generation_router.post(
     "/generate/3d/by_scenario",
     summary="Generate buildings and queue a 3D facade job",
-    response_model=FacadeJobAccepted,
+    response_model=FacadeSceneResult,
     status_code=202,
+    responses=_FACADE_3D_RESPONSES,
 )
 async def generate_3d_by_scenario(
+    response: Response,
     scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
     year: Annotated[int, Query(..., description="Data year", examples=[2024])],
     source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
@@ -157,15 +183,16 @@ async def generate_3d_by_scenario(
             max_length=4000,
             description=(
                 "Optional Russian preset name or English facade prompt. Omit it "
-                "to use facade-jobs defaults for each functional zone."
+                "to use the default preset of each functional zone."
             ),
             examples=["кирпичный"],
         ),
     ] = None,
+    facade_source: FacadeSourceQuery = None,
     user: auth.AuthUser = Depends(auth.get_current_user),
     body: ScenarioBody = Body(default_factory=ScenarioBody),
-) -> dict[str, str]:
-    return await orchestration.generate_3d_by_scenario(
+) -> dict[str, Any]:
+    result = await orchestration.generate_3d_by_scenario(
         scenario_id=scenario_id,
         year=year,
         source=source,
@@ -176,16 +203,20 @@ async def generate_3d_by_scenario(
         facade_style=facade_style,
         targets_by_zone=body.targets_by_zone,
         generation_parameters=body.generation_parameters,
+        facade_source=facade_source,
     )
+    return _facade_status(result, response)
 
 
 @generation_router.post(
     "/generate/3d/by_territory",
     summary="Generate buildings for territories and queue a 3D facade job",
-    response_model=FacadeJobAccepted,
+    response_model=FacadeSceneResult,
     status_code=202,
+    responses=_FACADE_3D_RESPONSES,
 )
 async def generate_3d_by_territory(
+    response: Response,
     payload: TerritoryRequest = Body(..., description="Body for request"),
     facade_style: Annotated[
         Optional[str],
@@ -193,27 +224,32 @@ async def generate_3d_by_territory(
             max_length=4000,
             description=(
                 "Optional Russian preset name or English facade prompt. Omit it "
-                "to use facade-jobs defaults for each functional zone."
+                "to use the default preset of each functional zone."
             ),
             examples=["скандинавский"],
         ),
     ] = None,
-) -> dict[str, str]:
+    facade_source: FacadeSourceQuery = None,
+) -> dict[str, Any]:
     # The original /generate/by_territory endpoint is intentionally anonymous;
     # mirror that contract and let facade-jobs place it in the anonymous quota.
-    return await orchestration.generate_3d_by_territory(
+    result = await orchestration.generate_3d_by_territory(
         payload,
         facade_style=facade_style,
+        facade_source=facade_source,
     )
+    return _facade_status(result, response)
 
 
 @generation_router.post(
     "/generate/3d/by_blocks",
     summary="Generate buildings for blocks and queue a 3D facade job",
-    response_model=FacadeJobAccepted,
+    response_model=FacadeSceneResult,
     status_code=202,
+    responses=_FACADE_3D_RESPONSES,
 )
 async def generate_3d_by_blocks(
+    response: Response,
     scenario_id: Annotated[int, Query(..., description="Scenario ID", examples=[198])],
     year: Annotated[int, Query(..., description="Data year", examples=[2024])],
     source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
@@ -238,17 +274,18 @@ async def generate_3d_by_blocks(
             max_length=4000,
             description=(
                 "Optional Russian preset name or English facade prompt. Omit it "
-                "to use facade-jobs defaults for each functional zone."
+                "to use the default preset of each functional zone."
             ),
             examples=["Современный"],
         ),
     ] = None,
     user: auth.AuthUser = Depends(auth.get_current_user),
+    facade_source: FacadeSourceQuery = None,
     body: FunctionalZonesRequest = Body(
         ..., description="Per-zone targets and generation parameters"
     ),
-) -> dict[str, str]:
-    return await orchestration.generate_3d_by_blocks(
+) -> dict[str, Any]:
+    result = await orchestration.generate_3d_by_blocks(
         scenario_id=scenario_id,
         year=year,
         source=source,
@@ -258,7 +295,9 @@ async def generate_3d_by_blocks(
         requested_by=user.user_id,
         facade_style=facade_style,
         body=body,
+        facade_source=facade_source,
     )
+    return _facade_status(result, response)
 
 
 @generation_router.post(

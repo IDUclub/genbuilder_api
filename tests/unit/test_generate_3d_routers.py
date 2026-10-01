@@ -27,9 +27,26 @@ BLOCKS_PAYLOAD = {
 }
 
 FACADE_JOB_RESPONSE = {
+    "status": "queued",
     "job_id": "job-1",
     "status_url": "http://facade-jobs/status/job-1",
     "facade_style": "кирпичный",
+}
+
+SCENE_READY_RESPONSE = {
+    "status": "ready",
+    "result_id": "0123456789abcdef0123456789abcdef",
+    "glb_url": "/facade-scenes/0123456789abcdef0123456789abcdef.glb",
+    "origin": {"lon": 30.05, "lat": 60.05},
+    "facade_style": "Кирпичный",
+    "style_by_zone": {"residential": "brick"},
+    "source": "library",
+    "stats": {
+        "buildings": 3,
+        "wall_instances": 24,
+        "template_count": 2,
+        "nearest_substitutions": 0,
+    },
 }
 
 
@@ -78,7 +95,8 @@ def test_generate_3d_by_scenario_queues_facade_job(monkeypatch):
 def test_generate_3d_by_territory_queues_facade_job_without_auth(monkeypatch):
     calls: list[tuple] = []
 
-    async def _fake(payload, *, requested_by=None, facade_style=None):
+    async def _fake(payload, *, requested_by=None, facade_style=None, facade_source=None):
+        assert facade_source is None
         calls.append((payload, requested_by, facade_style))
         return FACADE_JOB_RESPONSE
 
@@ -157,3 +175,68 @@ def test_generate_3d_by_scenario_requires_authentication(monkeypatch):
     )
 
     assert response.status_code in (401, 403)
+
+
+def test_generate_3d_by_territory_returns_200_for_a_ready_library_scene(monkeypatch):
+    calls: list[str | None] = []
+
+    async def _fake(payload, *, requested_by=None, facade_style=None, facade_source=None):
+        calls.append(facade_source)
+        return SCENE_READY_RESPONSE
+
+    monkeypatch.setattr(generation_routers.orchestration, "generate_3d_by_territory", _fake)
+
+    response = _client(authenticated=False).post(
+        "/generate/3d/by_territory",
+        params={"facade_style": "кирпичный", "facade_source": "library"},
+        json={"blocks": BLOCKS_PAYLOAD},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == SCENE_READY_RESPONSE
+    assert calls == ["library"]
+
+
+def test_generate_3d_by_scenario_forwards_facade_source(monkeypatch):
+    calls: list[dict] = []
+
+    async def _fake(**kwargs):
+        calls.append(kwargs)
+        return FACADE_JOB_RESPONSE
+
+    monkeypatch.setattr(generation_routers.orchestration, "generate_3d_by_scenario", _fake)
+
+    response = _client().post(
+        "/generate/3d/by_scenario",
+        params={
+            "scenario_id": 198,
+            "year": 2024,
+            "source": "OSM",
+            "functional_zone_types": ["residential"],
+            "facade_source": "library_then_gpu",
+        },
+    )
+
+    assert response.status_code == 202
+    assert calls[0]["facade_source"] == "library_then_gpu"
+
+
+def test_generate_3d_rejects_unknown_facade_source(monkeypatch):
+    async def _fake(**kwargs):
+        raise AssertionError("orchestration must not run for an invalid facade_source")
+
+    monkeypatch.setattr(generation_routers.orchestration, "generate_3d_by_blocks", _fake)
+
+    response = _client().post(
+        "/generate/3d/by_blocks",
+        params={
+            "scenario_id": 198,
+            "year": 2024,
+            "source": "OSM",
+            "functional_zone_types": ["residential"],
+            "facade_source": "cpu",
+        },
+        json={"zones": [{"functional_zone_id": 1, "targets_by_zone": {}}]},
+    )
+
+    assert response.status_code == 422

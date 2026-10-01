@@ -1,10 +1,14 @@
 import asyncio
+import re
 
 from app.logic import generation_orchestration as orchestration
 from app.logic.chat.param_extraction import build_extraction_schema, normalize_targets
 from app.logic.facade_styles import (
     DEFAULT_FACADE_STYLE_NAME_RU,
+    FACADE_STYLE_PRESETS,
     build_style_by_zone,
+    library_prompt,
+    library_style_by_zone,
     resolve_facade_style,
 )
 
@@ -110,3 +114,41 @@ def test_submit_facade_job_passes_resolved_styles_and_returns_russian_name(
     assert result["facade_style"] == "Кирпичный"
     assert set(captured["style_by_zone"]) == {"business", "residential"}
     assert captured["requested_by"] == "user-1"
+
+
+def test_preset_style_ids_are_unique_url_safe_slugs():
+    style_ids = [preset.style_id for preset in FACADE_STYLE_PRESETS]
+
+    assert len(style_ids) == len(set(style_ids))
+    assert all(re.fullmatch(r"[a-z0-9-]+", style_id) for style_id in style_ids)
+
+
+def test_style_id_is_accepted_as_an_alias():
+    style = resolve_facade_style("art-nouveau")
+
+    assert style.style_id == "art-nouveau"
+    assert style.source == "preset"
+
+
+def test_library_styles_default_to_the_zone_preset():
+    assert library_style_by_zone(BUILDINGS, resolve_facade_style(None)) == {
+        "business": "glass",
+        "residential": "contemporary",
+    }
+
+
+def test_library_styles_apply_a_preset_to_every_present_zone():
+    assert library_style_by_zone(BUILDINGS, resolve_facade_style("кирпичный")) == {
+        "business": "brick",
+        "residential": "brick",
+    }
+
+
+def test_free_text_style_has_no_library_sections():
+    assert library_style_by_zone(BUILDINGS, resolve_facade_style("warm sandstone")) is None
+
+
+def test_library_prompt_extends_the_residential_base_with_the_preset():
+    preset = FACADE_STYLE_PRESETS[0]
+
+    assert library_prompt(preset).endswith(f", {preset.prompt}")

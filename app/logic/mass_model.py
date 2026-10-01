@@ -22,6 +22,7 @@ from typing import Any, Mapping, Sequence
 
 import geopandas as gpd
 from loguru import logger
+from pyproj import Transformer
 from shapely.geometry import MultiPolygon, Polygon, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
@@ -78,6 +79,13 @@ def build_local_frame(feature_collection: Mapping[str, Any]) -> LocalFrame:
         origin_x=(min_x + max_x) / 2.0,
         origin_y=(min_y + max_y) / 2.0,
     )
+
+
+def local_frame_origin_wgs84(frame: LocalFrame) -> tuple[float, float]:
+    """Return the local OBJ origin as ``(longitude, latitude)`` for map clients."""
+    transformer = Transformer.from_crs(frame.crs, "EPSG:4326", always_xy=True)
+    longitude, latitude = transformer.transform(frame.origin_x, frame.origin_y)
+    return float(longitude), float(latitude)
 
 
 def group_features_by_zone(
@@ -323,4 +331,5 @@ __all__ = [
     "build_local_frame",
     "buildings_to_obj",
     "group_features_by_zone",
+    "local_frame_origin_wgs84",
 ]

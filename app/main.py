@@ -20,6 +20,7 @@ from app.mcp_server import mcp_app
 from app.routers.generation_routers import generation_router
 from app.routers.generation_chat_routers import generation_chat_router
 from app.routers.layers_routers import layers_router
+from app.routers.facade_styles_routers import facade_styles_router
 from app.routers.logs_routers import logs_router
 from app.routers.admin_config_routers import router as admin_config_router
 from app.observability import OpenTelemetryAgent, PrometheusConfig
@@ -94,6 +95,7 @@ app.include_router(logs_router)
 app.include_router(generation_router)
 app.include_router(generation_chat_router)
 app.include_router(layers_router)
+app.include_router(facade_styles_router)
 app.include_router(admin_config_router)
 
 # MCP tools (see app/mcp_server) — streamable-HTTP transport at /mcp.
