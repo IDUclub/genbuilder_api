@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import math
 from collections.abc import Sequence
 
 import numpy as np
@@ -19,7 +18,8 @@ from app.logic.facade_library.assembly import (
 )
 
 PREVIEW_WIDTH_M = 12.0
-GALLERY_GAP_M = 6.0
+# Bumped whenever the gallery layout changes, so clients refetch it.
+GALLERY_FORMAT_VERSION = 2
 _ETAG_LENGTH = 16
 
 
@@ -68,30 +68,21 @@ def gallery_node_name(style_id: str) -> str:
     return f"style_{style_id}"
 
 
-def build_gallery_glb(
-    previews: Sequence[tuple[str, bytes]],
-    *,
-    pitch_m: float = PREVIEW_WIDTH_M + GALLERY_GAP_M,
-) -> bytes:
-    """Lay stored preview GLBs out on a centred grid in one scene.
+def build_gallery_glb(previews: Sequence[tuple[str, bytes]]) -> bytes:
+    """Stack stored preview GLBs at the origin of one scene.
 
-    Each preview hangs under a ``style_<id>`` node translated to its grid cell,
-    so the client can find, hide or label one style. Textures and the shared
-    wall geometry of every preview are kept as they are.
+    Each preview hangs under its own ``style_<id>`` node, all in the same spot,
+    so the client shows one style at a time by hiding the other nodes and
+    switches styles without another download. Textures and the shared wall
+    geometry of every preview are kept as they are.
     """
     if not previews:
         raise FacadeAssemblyError("gallery has no previews")
-    columns = math.ceil(math.sqrt(len(previews)))
-    rows = math.ceil(len(previews) / columns)
     geometries: dict[str, trimesh.Trimesh] = {}
     nodes: list[SceneNode] = []
-    for position, (style_id, payload) in enumerate(previews):
-        row, column = divmod(position, columns)
+    for style_id, payload in previews:
         root = gallery_node_name(style_id)
-        offset = np.eye(4)
-        offset[0, 3] = (column - (columns - 1) / 2) * pitch_m
-        offset[2, 3] = (row - (rows - 1) / 2) * pitch_m
-        nodes.append(SceneNode(root, matrix=offset))
+        nodes.append(SceneNode(root))
         _append_preview(
             payload, prefix=f"{root}/", root=root, geometries=geometries, nodes=nodes
         )
@@ -132,7 +123,7 @@ def preview_etag(payload: bytes) -> str:
 
 
 __all__ = [
-    "GALLERY_GAP_M",
+    "GALLERY_FORMAT_VERSION",
     "PREVIEW_WIDTH_M",
     "box_faces",
     "build_gallery_glb",
