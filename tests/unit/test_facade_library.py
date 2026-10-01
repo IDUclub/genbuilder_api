@@ -320,6 +320,28 @@ def test_instanced_wall_matches_a_transformed_copy_of_the_section():
     assert np.allclose(_load_scene(payload).bounds, expected.bounds, atol=1e-4)
 
 
+def test_export_makes_every_material_non_metallic():
+    template = load_template_mesh(wall_glb(12.0, 9.0), "test")
+    roof = trimesh.Trimesh(
+        vertices=[[0, 0, 0], [1, 0, 0], [0, 0, 1]], faces=[[0, 1, 2]], process=False
+    )
+
+    payload = export_glb(
+        {"section": template, "roof": roof},
+        [SceneNode("wall", geometry="section"), SceneNode("roof", geometry="roof")],
+    )
+
+    gltf = _gltf_json(payload)
+    primitives = [p for mesh in gltf["meshes"] for p in mesh["primitives"]]
+    assert all("material" in primitive for primitive in primitives)
+    assert all(
+        material["pbrMetallicRoughness"]["metallicFactor"] == 0.0
+        for material in gltf["materials"]
+    )
+    assert struct.unpack_from("<I", payload, 8)[0] == len(payload)
+    assert len(_load_scene(payload).geometry) == 2
+
+
 def test_export_refuses_a_child_listed_before_its_parent():
     template = load_template_mesh(wall_glb(12.0, 9.0), "test")
 
