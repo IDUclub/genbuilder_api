@@ -7,6 +7,7 @@ need the caller's token, like the geo layers under ``/files``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Path, Query, Response
@@ -20,7 +21,12 @@ from app.logic.facade_library.catalog import (
     FacadeTemplateLibrary,
 )
 from app.logic.facade_library.factory import get_facade_library
-from app.logic.facade_library.models import PreviewFloorGroup, StylePreviewIndex
+from app.logic.facade_library.models import (
+    PreviewFloorGroup,
+    StylePreview,
+    StylePreviewIndex,
+)
+from app.logic.facade_library.previews import build_gallery_glb, preview_etag
 from app.logic.facade_library.results import GLB_MIME_TYPE, is_scene_id, scene_glb_key
 from app.logic.facade_styles import FACADE_STYLE_PRESETS, PRESETS_BY_ID
 from app.schema.dto import FacadeStyleSummary
@@ -30,6 +36,8 @@ facade_styles_router = APIRouter()
 
 _PREVIEW_CACHE_CONTROL = "public, max-age=3600"
 _DEFAULT_PREVIEW_GROUP: PreviewFloorGroup = "medium"
+# floor group -> (etag, payload); rebuilt only when a preview in the group changes.
+_gallery_cache: dict[str, tuple[str, bytes]] = {}
 
 
 def _preview_url(style_id: str) -> str:
@@ -69,6 +77,74 @@ async def list_facade_styles(
         )
         for preset in FACADE_STYLE_PRESETS
     ]
+
+
+@facade_styles_router.get(
+    "/facade-styles/gallery.glb",
+    summary="One GLB with a textured preview box for every facade style",
+    response_class=Response,
+    responses={
+        200: {"content": {GLB_MIME_TYPE: {}}},
+        304: {"description": "The cached gallery is still current"},
+    },
+)
+async def facade_style_gallery(
+    library: Annotated[FacadeTemplateLibrary, Depends(get_facade_library)],
+    floor_group: Annotated[
+        PreviewFloorGroup, Query(description="Height of the preview boxes")
+    ] = _DEFAULT_PREVIEW_GROUP,
+    if_none_match: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Boxes follow the ``GET /facade-styles`` order on a centred grid, one
+    ``style_<style_id>`` node per box; styles without a preview are skipped."""
+    try:
+        index = await library.preview_index()
+    except FacadeLibraryUnavailable as exc:
+        logger.warning("Facade style previews are unavailable: {}", exc)
+        raise http_exception(503, "Facade style previews are unavailable.") from exc
+
+    by_style = {
+        item.style_id: item
+        for item in index.previews
+        if item.floor_group == floor_group
+    }
+    previews = [
+        by_style[preset.style_id]
+        for preset in FACADE_STYLE_PRESETS
+        if preset.style_id in by_style
+    ]
+    if not previews:
+        raise http_exception(404, f"No '{floor_group}' style previews")
+
+    etag_value = preview_etag(
+        "|".join(f"{item.style_id}:{item.etag}" for item in previews).encode()
+    )
+    etag = f'"{etag_value}"'
+    headers = {"ETag": etag, "Cache-Control": _PREVIEW_CACHE_CONTROL}
+    if if_none_match == etag:
+        return Response(status_code=304, headers=headers)
+    cached = _gallery_cache.get(floor_group)
+    if cached is not None and cached[0] == etag_value:
+        return Response(content=cached[1], media_type=GLB_MIME_TYPE, headers=headers)
+
+    payload = await asyncio.to_thread(
+        build_gallery_glb, await _read_previews(library, previews)
+    )
+    _gallery_cache[floor_group] = (etag_value, payload)
+    return Response(content=payload, media_type=GLB_MIME_TYPE, headers=headers)
+
+
+async def _read_previews(
+    library: FacadeTemplateLibrary, previews: list[StylePreview]
+) -> list[tuple[str, bytes]]:
+    try:
+        payloads = await asyncio.gather(
+            *(library.read_object(item.object_key) for item in previews)
+        )
+    except FacadeLibraryUnavailable as exc:
+        logger.warning("Facade style gallery previews are unreadable: {}", exc)
+        raise http_exception(503, "Facade style previews are unavailable.") from exc
+    return [(item.style_id, payload) for item, payload in zip(previews, payloads)]
 
 
 @facade_styles_router.get(
