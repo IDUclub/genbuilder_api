@@ -51,7 +51,7 @@ class Settings(BaseModel):
     fileserver_access_key: str = Field(default="", alias="FILESERVER_ACCESS_KEY")
     fileserver_secret_key: str = Field(default="", alias="FILESERVER_SECRET_KEY")
     fileserver_bucket_name: str = Field(default="", alias="FILESERVER_BUCKET_NAME")
-    fileserver_secure: bool = Field(default=False, alias="FILESERVER_SECURE")
+    fileserver_secure: bool = Field(default=True, alias="FILESERVER_SECURE")
     fileserver_region: str = Field(default="us-east-1", alias="FILESERVER_REGION")
     outputs_dir: str = Field(default="outputs", alias="OUTPUTS_DIR")
 
@@ -68,7 +68,7 @@ class Settings(BaseModel):
         default=2.5, gt=1.0, alias="FACADE_LIBRARY_MAX_WIDTH_SCALE"
     )
     facade_library_max_walls: int = Field(
-        default=500, ge=1, alias="FACADE_LIBRARY_MAX_WALLS"
+        default=5000, ge=1, alias="FACADE_LIBRARY_MAX_WALLS"
     )
     facade_library_manifest_ttl_seconds: float = Field(
         default=300.0, ge=0.0, alias="FACADE_LIBRARY_MANIFEST_TTL_SECONDS"

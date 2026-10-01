@@ -248,8 +248,11 @@ def _env(key: str) -> str | None:
     return os.getenv(key) or None
 
 
-def _env_flag(key: str) -> bool:
-    return (os.getenv(key) or "").strip().lower() in ("1", "true", "yes", "on")
+def _env_flag(key: str, default: bool = False) -> bool:
+    value = (os.getenv(key) or "").strip().lower()
+    if not value:
+        return default
+    return value in ("1", "true", "yes", "on")
 
 
 _MINIO_KEYS = (
@@ -283,7 +286,7 @@ def get_object_storage() -> ObjectStorage:
             access_key=present["FILESERVER_ACCESS_KEY"] or "",
             secret_key=present["FILESERVER_SECRET_KEY"] or "",
             bucket=present["FILESERVER_BUCKET_NAME"] or "",
-            secure=_env_flag("FILESERVER_SECURE"),
+            secure=_env_flag("FILESERVER_SECURE", default=True),
             region=_env("FILESERVER_REGION") or DEFAULT_REGION,
         )
 

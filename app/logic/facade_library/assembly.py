@@ -7,7 +7,9 @@ are now split by width for floor stacking, so scenes no longer match there.
 from __future__ import annotations
 
 import io
+import json
 import math
+import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -18,6 +20,7 @@ DEFAULT_MAX_WALL_WIDTH_M = 24.0
 DEPTH_SCALE_REFERENCE = 32.0
 _HORIZONTAL_NORMAL_Y = 0.01
 _ROOF_SINK_M = 0.2
+_GLB_JSON_CHUNK = 0x4E4F534A
 
 
 class FacadeAssemblyError(RuntimeError):
@@ -256,7 +259,40 @@ def export_glb(
     payload = scene.export(file_type="glb")
     if not isinstance(payload, bytes) or not payload.startswith(b"glTF"):
         raise FacadeAssemblyError("trimesh did not produce a valid binary glTF")
-    return payload
+    return _without_metal(payload)
+
+
+def _without_metal(payload: bytes) -> bytes:
+    """Make every material dielectric.
+
+    glTF defaults ``metallicFactor`` (and the material of a primitive without
+    one) to fully metallic, which renders black without an environment map.
+    trimesh omits the factor, so facades and roofs would look black in a
+    plain viewer.
+    """
+    json_length, chunk_type = struct.unpack_from("<II", payload, 12)
+    if chunk_type != _GLB_JSON_CHUNK:
+        raise FacadeAssemblyError("binary glTF does not start with a JSON chunk")
+    gltf = json.loads(payload[20 : 20 + json_length])
+    materials = gltf.setdefault("materials", [])
+    for material in materials:
+        material.setdefault("pbrMetallicRoughness", {})["metallicFactor"] = 0.0
+    default_material = None
+    for mesh in gltf.get("meshes", []):
+        for primitive in mesh.get("primitives", []):
+            if "material" in primitive:
+                continue
+            if default_material is None:
+                default_material = len(materials)
+                materials.append({"pbrMetallicRoughness": {"metallicFactor": 0.0}})
+            primitive["material"] = default_material
+    if not materials:
+        del gltf["materials"]
+    chunk = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    chunk += b" " * (-len(chunk) % 4)
+    rest = payload[20 + json_length :]
+    header = struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(chunk) + len(rest))
+    return header + struct.pack("<II", len(chunk), _GLB_JSON_CHUNK) + chunk + rest
 
 
 __all__ = [

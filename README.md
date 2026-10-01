@@ -43,7 +43,7 @@ job, `202`), `library` (assemble now, `200`, nearest width on a miss) or
 | `FACADE_LIBRARY_PREFIX` | `facade-library/v2` | Object prefix of the library manifest, sections and previews |
 | `FACADE_LIBRARY_PPM` | `32` | Texture resolution of the sections to use |
 | `FACADE_LIBRARY_MAX_WIDTH_SCALE` | `2.5` | Largest horizontal stretch of a section |
-| `FACADE_LIBRARY_MAX_WALLS` | `500` | Larger scenes go to `facade-jobs` (or `413` without it) |
+| `FACADE_LIBRARY_MAX_WALLS` | `5000` | Larger scenes go to `facade-jobs` (or `413` without it) |
 | `FACADE_LIBRARY_MANIFEST_TTL_SECONDS` | `300` | How long the manifest and preview index are cached |
 
 The library and the previews are filled by
@@ -118,7 +118,7 @@ re-checked on every fetch.
 | `FILESERVER_ACCESS_KEY` | yes* | — | Scoped access key |
 | `FILESERVER_SECRET_KEY` | yes* | — | Scoped secret key |
 | `FILESERVER_BUCKET_NAME` | yes* | — | Bucket holding the layers, for example `genbuilder` |
-| `FILESERVER_SECURE` | no | `false` | Use HTTPS towards MinIO |
+| `FILESERVER_SECURE` | no | `true` | Use HTTPS towards MinIO; set `false` only for a plain-HTTP endpoint |
 | `FILESERVER_REGION` | no | `us-east-1` | Sent explicitly so the client never calls `GetBucketLocation`, a right the scoped credentials do not have |
 | `OUTPUTS_DIR` | no | `outputs` | Local fallback directory, used only when no `FILESERVER_*` variable is set |
 | `DEFAULT_SERVICES_TERRITORY_ID` | no | `1` | UrbanDB region whose service normatives place services in the project-less chat mode when the request has neither `territory_id` nor `project_id`. `1` is Leningrad Oblast; an empty value disables the fallback |
