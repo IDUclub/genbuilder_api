@@ -24,18 +24,23 @@ preset of each functional zone.
 ### Facade library
 
 Built-in styles can also be assembled synchronously from pre-generated facade
-sections stored in MinIO under `FACADE_LIBRARY_PREFIX` (the same layout that
-`facade-jobs` uses). The `facade_source` query parameter of `/generate/3d/*`
-selects `gpu` (queue a job, `202`), `library` (assemble now, `200`, nearest
-floor count on a miss) or `library_then_gpu` (library when every wall is
-cached, otherwise a job). Library scenes are served by
+sections stored in MinIO under `FACADE_LIBRARY_PREFIX`. Each style has three
+seed variants per width (6, 9, 12, 18, 24 m), each generated as an 8-floor, 32 m wall
+because Facades-3D draws one floor per about 4 m of wall height. The section is
+cut into ground, typical and top floors, and every wall is stacked from them to
+the building's real floor count; walls wider than 24 m are split into equal
+segments. A building picks one variant by a hash of its id, so all its walls
+match while neighbouring buildings differ. `facade-jobs` still reads the older `facade-library/v1` layout. The
+`facade_source` query parameter of `/generate/3d/*` selects `gpu` (queue a
+job, `202`), `library` (assemble now, `200`, nearest width on a miss) or
+`library_then_gpu` (library when every wall has a section, otherwise a job). Library scenes are served by
 `GET /facade-scenes/{result_id}.glb`; style previews by `GET /facade-styles` and
 `GET /facade-styles/{style_id}/preview.glb`.
 
 | Environment variable | Default | Purpose |
 |---|---:|---|
 | `FACADE_SOURCE_DEFAULT` | `gpu` | Source used when `facade_source` is omitted |
-| `FACADE_LIBRARY_PREFIX` | `facade-library/v1` | Object prefix of the library manifest, sections and previews |
+| `FACADE_LIBRARY_PREFIX` | `facade-library/v2` | Object prefix of the library manifest, sections and previews |
 | `FACADE_LIBRARY_PPM` | `32` | Texture resolution of the sections to use |
 | `FACADE_LIBRARY_MAX_WIDTH_SCALE` | `2.5` | Largest horizontal stretch of a section |
 | `FACADE_LIBRARY_MAX_WALLS` | `500` | Larger scenes go to `facade-jobs` (or `413` without it) |
@@ -53,8 +58,11 @@ python scripts/build_facade_library.py prewarm --styles brick glass
 python scripts/build_facade_library.py previews
 ```
 
-`prewarm` skips sections that already exist (`--force` regenerates them) and
-rewrites the manifest after every section, so it can be interrupted and resumed.
+`prewarm` generates `--variants` sections (3 by default) per style and width
+(`--section-floors` and `--section-floor-height`, 8 x 4 m by default), skips sections that already exist
+(`--force` regenerates them) and rewrites the manifest after every section, so
+it can be interrupted and resumed. `previews` stacks 3, 6 and 12 floors of each
+style's 12 m variant-0 section into the low, medium and high preview boxes.
 
 ## Configuration
 

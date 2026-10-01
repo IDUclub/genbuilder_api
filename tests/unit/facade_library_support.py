@@ -8,13 +8,9 @@ import trimesh
 
 from app.infrastructure.object_storage import LocalStorage
 from app.logic.facade_library.catalog import FacadeTemplateLibrary
-from app.logic.facade_library.models import (
-    FacadeLibraryManifest,
-    FacadeTemplate,
-    floor_group,
-)
+from app.logic.facade_library.models import FacadeLibraryManifest, FacadeSection
 
-PREFIX = "facade-library/v1"
+PREFIX = "facade-library/v2"
 LON, LAT = 30.3, 59.93
 _METERS_PER_DEGREE_LAT = 111_320.0
 _METERS_PER_DEGREE_LON = _METERS_PER_DEGREE_LAT * math.cos(math.radians(LAT))
@@ -32,41 +28,42 @@ def wall_glb(width_m: float = 12.0, height_m: float = 9.0) -> bytes:
     return payload
 
 
-def make_template(
+def make_section(
     style_id: str,
-    floors: int,
     width_m: float,
     *,
     pixels_per_meter: int = 32,
-    floor_height_m: float = 3.0,
-) -> FacadeTemplate:
-    group = floor_group(floors)
-    height_m = floors * floor_height_m
+    section_floors: int = 8,
+    section_floor_height_m: float = 4.0,
+    variant: int = 0,
+) -> FacadeSection:
+    height_m = section_floors * section_floor_height_m
     size_key = f"w{round(width_m * 100):04d}-h{round(height_m * 100):04d}"
-    return FacadeTemplate(
-        object_key=f"{PREFIX}/styles/{style_id}/{group}/{size_key}/wall.glb",
+    variant_folder = f"/v{variant}" if variant else ""
+    return FacadeSection(
+        object_key=f"{PREFIX}/styles/{style_id}/{size_key}{variant_folder}/wall.glb",
         style_id=style_id,
         style_name_ru=style_id,
         style_key="test",
         prompt="test",
-        floor_group=group,
-        floors=floors,
-        floor_height_m=floor_height_m,
+        section_floors=section_floors,
+        section_floor_height_m=section_floor_height_m,
         width_m=width_m,
         height_m=height_m,
         pixels_per_meter=pixels_per_meter,
+        variant=variant,
         glb_size_bytes=1,
     )
 
 
-def seed_library(storage: LocalStorage, templates: list[FacadeTemplate]) -> None:
-    for template in templates:
+def seed_library(storage: LocalStorage, sections: list[FacadeSection]) -> None:
+    for section in sections:
         storage.put_bytes(
-            wall_glb(template.width_m, template.height_m),
-            template.object_key,
+            wall_glb(section.width_m, section.height_m),
+            section.object_key,
             "model/gltf-binary",
         )
-    manifest = FacadeLibraryManifest(templates=templates)
+    manifest = FacadeLibraryManifest(sections=sections)
     storage.put_json(manifest.model_dump(mode="json"), f"{PREFIX}/manifest.json")
 
 

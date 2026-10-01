@@ -49,6 +49,7 @@ def store_scene(
     stats = {
         "buildings": scene.buildings,
         "wall_instances": scene.wall_instances,
+        "floor_instances": scene.floor_instances,
         "template_count": scene.template_count,
         "nearest_substitutions": scene.nearest_substitutions,
     }

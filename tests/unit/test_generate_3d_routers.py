@@ -44,6 +44,7 @@ SCENE_READY_RESPONSE = {
     "stats": {
         "buildings": 3,
         "wall_instances": 24,
+        "floor_instances": 144,
         "template_count": 2,
         "nearest_substitutions": 0,
     },

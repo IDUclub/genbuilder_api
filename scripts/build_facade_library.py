@@ -42,13 +42,13 @@ from app.logic.facade_library.catalog import (
     FacadeLibraryUnavailable,
     FacadeTemplateLibrary,
     FacadeTemplateMiss,
-    resolve_template,
+    resolve_section,
 )
 from app.logic.facade_library.models import (
     PREVIEW_FLOOR_GROUPS,
     REPRESENTATIVE_FLOORS,
     FacadeLibraryManifest,
-    FacadeTemplate,
+    FacadeSection,
     PreviewFloorGroup,
     StylePreview,
     StylePreviewIndex,
@@ -68,6 +68,11 @@ GENERATION_TIMEOUT_S = 2700
 BUSY_RETRIES = 5
 MAX_BACKOFF_S = 60
 SEED_BASE = 8400
+DEFAULT_SECTION_FLOORS = 8
+DEFAULT_SECTION_FLOOR_HEIGHT_M = 4.0
+DEFAULT_VARIANTS = 3
+MAX_VARIANTS = 9
+MAX_WIDTHS = 10
 
 
 def canonical_wall_obj(width_m: float, height_m: float) -> bytes:
@@ -92,12 +97,22 @@ def validate_glb(payload: bytes) -> None:
         )
 
 
-def template_seed(style_id: str, group_index: int, width_index: int) -> int:
-    return SEED_BASE + STYLE_IDS.index(style_id) * 100 + group_index * 10 + width_index
+def section_seed(style_id: str, width_index: int, variant: int) -> int:
+    return SEED_BASE + STYLE_IDS.index(style_id) * 100 + variant * 10 + width_index
 
 
 def size_key(width_m: float, height_m: float) -> str:
     return f"w{round(width_m * 100):04d}-h{round(height_m * 100):04d}"
+
+
+def section_object_key(
+    prefix: str, style_id: str, width_m: float, height_m: float, variant: int
+) -> str:
+    # Variant 0 keeps the key the library was first filled with.
+    folder = f"{prefix}/styles/{style_id}/{size_key(width_m, height_m)}"
+    if variant == 0:
+        return f"{folder}/wall.glb"
+    return f"{folder}/v{variant}/wall.glb"
 
 
 def load_manifest(storage: ObjectStorage, key: str) -> FacadeLibraryManifest:
@@ -169,113 +184,108 @@ def run_check(storage: ObjectStorage, prefix: str) -> None:
             print(f"warning: cannot delete {key}, the probe object stays: {exc}")
 
 
-def _identity(template: FacadeTemplate) -> tuple[str, str, float, int]:
-    return (
-        template.style_id,
-        template.floor_group,
-        template.width_m,
-        template.pixels_per_meter,
-    )
+def _identity(section: FacadeSection) -> tuple[str, float, int, int]:
+    return section.style_id, section.width_m, section.pixels_per_meter, section.variant
 
 
 def run_prewarm(storage: ObjectStorage, args: argparse.Namespace) -> None:
     manifest_key = f"{args.prefix}/manifest.json"
     manifest = load_manifest(storage, manifest_key)
-    existing = {_identity(item) for item in manifest.templates}
+    existing = {_identity(item) for item in manifest.sections}
     with httpx.Client(
         base_url=args.facades_url.rstrip("/"),
         timeout=httpx.Timeout(GENERATION_TIMEOUT_S),
         trust_env=False,
     ) as api:
-        for style_id in args.styles:
-            for group_index, group in enumerate(args.floor_groups):
+        for variant in range(args.variants):
+            for style_id in args.styles:
                 for width_index, width_m in enumerate(args.widths):
-                    template = _planned_template(
+                    section = _planned_section(
                         args,
                         style_id=style_id,
-                        group=group,
                         width_m=width_m,
-                        seed=template_seed(style_id, group_index, width_index),
+                        variant=variant,
+                        seed=section_seed(style_id, width_index, variant),
                     )
-                    label = f"{style_id}/{group}/{width_m:g}m"
-                    if _identity(template) in existing and not args.force:
+                    label = f"{style_id}/{width_m:g}m/v{variant}"
+                    if _identity(section) in existing and not args.force:
                         print(f"skip {label}: already present")
                         continue
                     if args.dry_run:
                         print(
-                            f"would generate {label} ({width_m:g}x{template.height_m:g} m)"
+                            f"would generate {label} "
+                            f"({width_m:g}x{section.height_m:g} m)"
                         )
                         continue
-                    manifest = _generate_template(
+                    manifest = _generate_section(
                         api,
                         storage,
                         manifest,
                         manifest_key=manifest_key,
-                        template=template,
+                        section=section,
                     )
-                    existing.add(_identity(template))
-    print(f"manifest: {manifest_key} ({len(manifest.templates)} templates)")
+                    existing.add(_identity(section))
+    print(f"manifest: {manifest_key} ({len(manifest.sections)} sections)")
 
 
-def _planned_template(
+def _planned_section(
     args: argparse.Namespace,
     *,
     style_id: str,
-    group: PreviewFloorGroup,
     width_m: float,
+    variant: int,
     seed: int,
-) -> FacadeTemplate:
+) -> FacadeSection:
     preset = PRESETS_BY_ID[style_id]
     prompt = library_prompt(preset)
-    floors = REPRESENTATIVE_FLOORS[group]
-    height_m = floors * args.floor_height
-    return FacadeTemplate(
-        object_key=(
-            f"{args.prefix}/styles/{style_id}/{group}/{size_key(width_m, height_m)}/wall.glb"
+    height_m = args.section_floors * args.section_floor_height
+    return FacadeSection(
+        object_key=section_object_key(
+            args.prefix, style_id, width_m, height_m, variant
         ),
         style_id=style_id,
         style_name_ru=preset.name_ru,
         style_key=canonical_style_key(prompt),
         prompt=prompt,
-        floor_group=group,
-        floors=floors,
-        floor_height_m=args.floor_height,
+        section_floors=args.section_floors,
+        section_floor_height_m=args.section_floor_height,
         width_m=width_m,
         height_m=height_m,
         pixels_per_meter=args.pixels_per_meter,
         seed=seed,
+        variant=variant,
         glb_size_bytes=1,
     )
 
 
-def _generate_template(
+def _generate_section(
     api: httpx.Client,
     storage: ObjectStorage,
     manifest: FacadeLibraryManifest,
     *,
     manifest_key: str,
-    template: FacadeTemplate,
+    section: FacadeSection,
 ) -> FacadeLibraryManifest:
     started = time.monotonic()
-    print(f"generate {template.object_key}")
+    print(f"generate {section.object_key}")
     payload = generate_wall(
         api,
-        prompt=template.prompt,
-        width_m=template.width_m,
-        height_m=template.height_m,
-        pixels_per_meter=template.pixels_per_meter,
-        seed=template.seed if template.seed is not None else SEED_BASE,
+        prompt=section.prompt,
+        width_m=section.width_m,
+        height_m=section.height_m,
+        pixels_per_meter=section.pixels_per_meter,
+        seed=section.seed if section.seed is not None else SEED_BASE,
     )
-    storage.put_bytes(payload, template.object_key, GLB_MIME_TYPE)
+    storage.put_bytes(payload, section.object_key, GLB_MIME_TYPE)
     now = datetime.now(timezone.utc)
-    stored = template.model_copy(
+    stored = section.model_copy(
         update={"glb_size_bytes": len(payload), "generated_at": now}
     )
     updated = FacadeLibraryManifest(
-        templates=[
+        sections=[
             *(
                 item
-                for item in manifest.templates
+                for item in manifest.sections
                 if _identity(item) != _identity(stored)
             ),
             stored,
@@ -284,29 +294,25 @@ def _generate_template(
     )
     storage.put_json(updated.model_dump(mode="json"), manifest_key)
     elapsed = time.monotonic() - started
-    print(f"uploaded {template.object_key} ({len(payload)} bytes, {elapsed:.1f}s)")
+    print(f"uploaded {section.object_key} ({len(payload)} bytes, {elapsed:.1f}s)")
     return updated
 
 
-def pick_preview_template(
-    templates: Sequence[FacadeTemplate],
+def pick_preview_section(
+    sections: Sequence[FacadeSection],
     *,
     style_id: str,
-    group: PreviewFloorGroup,
     args: argparse.Namespace,
-) -> FacadeTemplate | None:
-    """Only a section of the same floor group, so a preview never shows a stretched texture."""
-    floors = REPRESENTATIVE_FLOORS[group]
+) -> FacadeSection | None:
     try:
-        return resolve_template(
-            templates,
+        return resolve_section(
+            [section for section in sections if section.variant == 0],
             style_id=style_id,
-            floors=floors,
             width_m=PREVIEW_WIDTH_M,
-            height_m=floors * args.floor_height,
             pixels_per_meter=args.pixels_per_meter,
             max_width_scale=args.max_width_scale,
             allow_nearest=False,
+            variant_key=style_id,
         )
     except FacadeTemplateMiss:
         return None
@@ -326,21 +332,19 @@ async def run_previews(storage: ObjectStorage, args: argparse.Namespace) -> None
 
     previews: list[StylePreview] = []
     for style_id in args.styles:
+        section = pick_preview_section(manifest.sections, style_id=style_id, args=args)
+        if section is None:
+            print(f"skip previews of {style_id}: no section near {PREVIEW_WIDTH_M:g} m")
+            continue
         for group in PREVIEW_FLOOR_GROUPS:
-            template = pick_preview_template(
-                manifest.templates, style_id=style_id, group=group, args=args
-            )
-            if template is None:
-                print(
-                    f"skip preview {style_id}/{group}: no section in this floor group"
-                )
-                continue
             if args.dry_run:
                 print(
-                    f"would build preview {style_id}/{group} from {template.object_key}"
+                    f"would build preview {style_id}/{group} from {section.object_key}"
                 )
                 continue
-            previews.append(await _upload_preview(storage, library, template, group))
+            previews.append(
+                await _upload_preview(storage, library, section, group, args)
+            )
     if args.dry_run:
         return
     index = StylePreviewIndex(previews=_merge_previews(storage, library, previews))
@@ -353,22 +357,24 @@ async def run_previews(storage: ObjectStorage, args: argparse.Namespace) -> None
 async def _upload_preview(
     storage: ObjectStorage,
     library: FacadeTemplateLibrary,
-    template: FacadeTemplate,
+    section: FacadeSection,
     group: PreviewFloorGroup,
+    args: argparse.Namespace,
 ) -> StylePreview:
-    mesh = (await library.load_meshes([template]))[template.cache_key]
+    pieces = (await library.load_pieces([section]))[section.cache_key]
     payload = build_preview_glb(
-        mesh,
+        pieces,
         width_m=PREVIEW_WIDTH_M,
-        height_m=template.height_m,
-        name=f"preview_{template.style_id}",
+        floors=REPRESENTATIVE_FLOORS[group],
+        floor_height_m=args.floor_height,
+        name=f"preview_{section.style_id}",
     )
-    key = library.preview_key(template.style_id, group)
+    key = library.preview_key(section.style_id, group)
     storage.put_bytes(payload, key, GLB_MIME_TYPE)
     print(f"uploaded {key} ({len(payload)} bytes)")
     return StylePreview(
-        style_id=template.style_id,
-        style_name_ru=PRESETS_BY_ID[template.style_id].name_ru,
+        style_id=section.style_id,
+        style_name_ru=PRESETS_BY_ID[section.style_id].name_ru,
         floor_group=group,
         object_key=key,
         etag=preview_etag(payload),
@@ -398,20 +404,34 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("command", choices=["check", "prewarm", "previews", "all"])
     parser.add_argument(
-        "--prefix", default=os.getenv("FACADE_LIBRARY_PREFIX", "facade-library/v1")
+        "--prefix", default=os.getenv("FACADE_LIBRARY_PREFIX", "facade-library/v2")
     )
     parser.add_argument(
         "--facades-url", default=os.getenv("FACADES_3D_API", "http://a6k4.dgx:8030")
     )
     parser.add_argument("--styles", nargs="+", choices=STYLE_IDS, default=STYLE_IDS)
-    parser.add_argument(
-        "--floor-groups",
-        nargs="+",
-        choices=PREVIEW_FLOOR_GROUPS,
-        default=list(PREVIEW_FLOOR_GROUPS),
-    )
     parser.add_argument("--widths", nargs="+", type=float, default=list(DEFAULT_WIDTHS))
-    parser.add_argument("--floor-height", type=float, default=3.0)
+    parser.add_argument(
+        "--section-floors",
+        type=int,
+        default=DEFAULT_SECTION_FLOORS,
+        help="Floors ordered per section; Facades-3D draws one per 4 m of wall",
+    )
+    parser.add_argument(
+        "--section-floor-height", type=float, default=DEFAULT_SECTION_FLOOR_HEIGHT_M
+    )
+    parser.add_argument(
+        "--variants",
+        type=int,
+        default=DEFAULT_VARIANTS,
+        help="Sections per style and width, each with its own seed",
+    )
+    parser.add_argument(
+        "--floor-height",
+        type=float,
+        default=3.0,
+        help="Storey height of the preview boxes",
+    )
     parser.add_argument(
         "--pixels-per-meter",
         type=int,
@@ -435,6 +455,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args.prefix = args.prefix.strip("/")
     if any(width <= 0 for width in args.widths):
         parser.error("all widths must be positive")
+    if args.section_floors < 3:
+        parser.error("--section-floors must be at least 3")
+    if not 1 <= args.variants <= MAX_VARIANTS:
+        parser.error(f"--variants must be between 1 and {MAX_VARIANTS}")
+    if len(args.widths) > MAX_WIDTHS:
+        parser.error(f"at most {MAX_WIDTHS} widths keep section seeds unique")
     return args
 
 

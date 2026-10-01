@@ -4,7 +4,7 @@ import pytest
 from facade_library_support import (
     collection,
     make_library,
-    make_template,
+    make_section,
     rect_feature,
     seed_library,
 )
@@ -31,7 +31,7 @@ class _Harness:
         if seeded:
             seed_library(
                 self.storage,
-                [make_template("brick", 6, 12.0), make_template("glass", 6, 12.0)],
+                [make_section("brick", 6.0), make_section("glass", 6.0)],
             )
         self.submitted: list[dict] = []
         library = make_library(self.storage)
@@ -59,19 +59,21 @@ class _Harness:
         )
 
 
-def _six_floors(zone="residential"):
-    return collection(rect_feature("1", zone=zone, floors=6))
+def _narrow_building(zone="residential"):
+    return collection(rect_feature("1", zone=zone, floors=6, width_m=8.0, depth_m=8.0))
 
 
-def _twelve_floors():
-    return collection(rect_feature("1", zone="residential", floors=12))
+def _wide_building():
+    return collection(
+        rect_feature("1", zone="residential", floors=6, width_m=18.0, depth_m=8.0)
+    )
 
 
 def test_library_source_returns_a_stored_ready_scene(monkeypatch, tmp_path):
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=False)
 
     result = harness.produce(
-        _six_floors(), facade_style="кирпичный", facade_source="library"
+        _narrow_building(), facade_style="кирпичный", facade_source="library"
     )
 
     assert result["status"] == "ready"
@@ -87,7 +89,7 @@ def test_omitted_style_uses_the_zone_default_preset(monkeypatch, tmp_path):
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=False)
 
     result = harness.produce(
-        _six_floors("business"), facade_style=None, facade_source="library"
+        _narrow_building("business"), facade_style=None, facade_source="library"
     )
 
     assert result["style_by_zone"] == {"business": "glass"}
@@ -97,7 +99,7 @@ def test_library_source_borrows_the_nearest_section_on_a_miss(monkeypatch, tmp_p
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
 
     result = harness.produce(
-        _twelve_floors(), facade_style="кирпичный", facade_source="library"
+        _wide_building(), facade_style="кирпичный", facade_source="library"
     )
 
     assert result["status"] == "ready"
@@ -109,7 +111,7 @@ def test_library_then_gpu_queues_the_whole_request_on_a_miss(monkeypatch, tmp_pa
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
 
     result = harness.produce(
-        _twelve_floors(), facade_style="кирпичный", facade_source="library_then_gpu"
+        _wide_building(), facade_style="кирпичный", facade_source="library_then_gpu"
     )
 
     assert result == QUEUED
@@ -122,7 +124,7 @@ def test_library_then_gpu_answers_from_the_library_when_everything_is_cached(
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
 
     result = harness.produce(
-        _six_floors(), facade_style="кирпичный", facade_source="library_then_gpu"
+        _narrow_building(), facade_style="кирпичный", facade_source="library_then_gpu"
     )
 
     assert result["status"] == "ready"
@@ -133,7 +135,7 @@ def test_gpu_source_always_queues(monkeypatch, tmp_path):
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
 
     result = harness.produce(
-        _six_floors(), facade_style="кирпичный", facade_source="gpu"
+        _narrow_building(), facade_style="кирпичный", facade_source="gpu"
     )
 
     assert result == QUEUED
@@ -143,7 +145,9 @@ def test_free_text_style_queues_when_facade_jobs_is_configured(monkeypatch, tmp_
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
 
     result = harness.produce(
-        _six_floors(), facade_style="warm sandstone facade", facade_source="library"
+        _narrow_building(),
+        facade_style="warm sandstone facade",
+        facade_source="library",
     )
 
     assert result == QUEUED
@@ -154,7 +158,9 @@ def test_free_text_style_is_rejected_without_facade_jobs(monkeypatch, tmp_path):
 
     with pytest.raises(HTTPException) as excinfo:
         harness.produce(
-            _six_floors(), facade_style="warm sandstone facade", facade_source="library"
+            _narrow_building(),
+            facade_style="warm sandstone facade",
+            facade_source="library",
         )
 
     assert excinfo.value.status_code == 422
@@ -165,7 +171,7 @@ def test_unavailable_library_is_503_in_library_mode(monkeypatch, tmp_path):
 
     with pytest.raises(HTTPException) as excinfo:
         harness.produce(
-            _six_floors(), facade_style="кирпичный", facade_source="library"
+            _narrow_building(), facade_style="кирпичный", facade_source="library"
         )
 
     assert excinfo.value.status_code == 503
@@ -178,7 +184,7 @@ def test_unavailable_library_falls_back_to_gpu_in_library_then_gpu_mode(
     harness = _Harness(monkeypatch, tmp_path, facade_jobs=True, seeded=False)
 
     result = harness.produce(
-        _six_floors(), facade_style="кирпичный", facade_source="library_then_gpu"
+        _narrow_building(), facade_style="кирпичный", facade_source="library_then_gpu"
     )
 
     assert result == QUEUED

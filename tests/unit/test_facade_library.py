@@ -12,7 +12,7 @@ from facade_library_support import (
     PREFIX,
     collection,
     make_library,
-    make_template,
+    make_section,
     rect_feature,
     seed_library,
     wall_glb,
@@ -25,13 +25,19 @@ from app.logic.facade_library.assembly import (
     building_faces,
     export_glb,
     load_template_mesh,
-    wall_transform,
+    split_wall,
 )
 from app.logic.facade_library.catalog import (
     FacadeLibraryUnavailable,
     FacadeTemplateMiss,
-    resolve_template,
+    resolve_section,
 )
+from app.logic.facade_library.floors import (
+    floor_sequence,
+    slice_section,
+    stack_transforms,
+)
+from app.logic.facade_library.models import FacadeLibraryManifest
 from app.logic.facade_library.previews import box_faces, build_preview_glb, preview_etag
 from app.logic.facade_library.results import (
     is_scene_id,
@@ -46,7 +52,7 @@ from app.logic.facade_library.scene import (
 )
 from app.logic.mass_model import build_local_frame, local_frame_origin_wgs84
 
-_RESOLVE = {"height_m": 18.0, "pixels_per_meter": 32, "max_width_scale": 2.5}
+_RESOLVE = {"pixels_per_meter": 32, "max_width_scale": 2.5, "variant_key": "gb_1"}
 
 
 def _run(coro):
@@ -64,83 +70,232 @@ def _gltf_json(payload: bytes) -> dict:
     return json.loads(payload[20 : 20 + json_length])
 
 
-def test_resolve_picks_the_closest_width_within_the_same_floor_group():
-    templates = [make_template("brick", 6, 6.0), make_template("brick", 6, 12.0)]
+SLAB_SHARE = 0.8
 
-    chosen = resolve_template(
-        templates,
-        style_id="brick",
-        floors=6,
-        width_m=11.0,
-        allow_nearest=False,
-        **_RESOLVE,
+
+def _striped_section(
+    floors: int = 8, floor_height: float = 4.0, missing: int | None = None
+) -> trimesh.Trimesh:
+    """One slab per floor, shifted along X by its floor index.
+
+    Slabs fill the lower 80% of their floor, the top one the upper 80%, so the
+    section spans exactly ``floors * floor_height``.
+    """
+    slab_height = floor_height * SLAB_SHARE
+    slabs = []
+    for index in range(floors):
+        if index == missing:
+            continue
+        slab = trimesh.creation.box(extents=[1.0, slab_height, 0.2])
+        bottom = index * floor_height
+        if index == floors - 1:
+            bottom += floor_height - slab_height
+        slab.apply_translation([index * 2.0, bottom + slab_height / 2, 0.0])
+        slabs.append(slab)
+    mesh = trimesh.util.concatenate(slabs)
+    mesh.apply_translation(-(mesh.bounds[0] + mesh.bounds[1]) / 2.0)
+    return mesh
+
+
+def _floor_index(piece: trimesh.Trimesh, section: trimesh.Trimesh) -> int:
+    return round((piece.centroid[0] - section.bounds[0][0] - 0.5) / 2.0)
+
+
+def test_resolve_picks_the_closest_width_whatever_the_floor_count():
+    sections = [make_section("brick", 6.0), make_section("brick", 12.0)]
+
+    chosen = resolve_section(
+        sections, style_id="brick", width_m=11.0, allow_nearest=False, **_RESOLVE
     )
 
     assert chosen.width_m == 12.0
 
 
-def test_resolve_misses_without_nearest_when_the_floor_group_is_absent():
-    templates = [make_template("brick", 3, 12.0)]
+def test_resolve_rejects_a_section_beyond_the_width_scale():
+    sections = [make_section("brick", 6.0)]
 
     with pytest.raises(FacadeTemplateMiss):
-        resolve_template(
-            templates,
-            style_id="brick",
-            floors=12,
-            width_m=12.0,
-            allow_nearest=False,
-            **_RESOLVE,
+        resolve_section(
+            sections, style_id="brick", width_m=24.0, allow_nearest=False, **_RESOLVE
         )
 
 
-def test_resolve_nearest_prefers_the_closest_floor_count_of_the_same_style():
-    templates = [
-        make_template("brick", 3, 12.0),
-        make_template("brick", 6, 12.0),
-        make_template("glass", 12, 12.0),
+def test_resolve_nearest_takes_the_closest_width_of_the_same_style():
+    sections = [
+        make_section("brick", 6.0),
+        make_section("brick", 9.0),
+        make_section("glass", 24.0),
     ]
 
-    chosen = resolve_template(
-        templates,
-        style_id="brick",
-        floors=12,
-        width_m=12.0,
-        allow_nearest=True,
-        **_RESOLVE,
+    chosen = resolve_section(
+        sections, style_id="brick", width_m=40.0, allow_nearest=True, **_RESOLVE
     )
 
-    assert (chosen.style_id, chosen.floors) == ("brick", 6)
+    assert (chosen.style_id, chosen.width_m) == ("brick", 9.0)
 
 
 def test_resolve_nearest_never_borrows_another_style_or_resolution():
-    templates = [
-        make_template("glass", 6, 12.0),
-        make_template("brick", 6, 12.0, pixels_per_meter=64),
+    sections = [
+        make_section("glass", 12.0),
+        make_section("brick", 12.0, pixels_per_meter=64),
     ]
 
     with pytest.raises(FacadeTemplateMiss):
-        resolve_template(
-            templates,
-            style_id="brick",
-            floors=6,
-            width_m=12.0,
-            allow_nearest=True,
-            **_RESOLVE,
+        resolve_section(
+            sections, style_id="brick", width_m=12.0, allow_nearest=True, **_RESOLVE
         )
 
 
-def test_resolve_rejects_an_exact_group_beyond_the_width_scale():
-    templates = [make_template("brick", 6, 6.0)]
+def _variants(style_id, width_m, count=3):
+    return [make_section(style_id, width_m, variant=n) for n in range(count)]
 
-    with pytest.raises(FacadeTemplateMiss):
-        resolve_template(
-            templates,
-            style_id="brick",
-            floors=6,
-            width_m=24.0,
-            allow_nearest=False,
-            **_RESOLVE,
+
+def _resolve_variant(sections, key, width_m=12.0):
+    options = {**_RESOLVE, "variant_key": key}
+    return resolve_section(
+        sections, style_id="brick", width_m=width_m, allow_nearest=False, **options
+    ).variant
+
+
+def test_resolve_gives_the_same_key_the_same_variant():
+    sections = _variants("brick", 12.0)
+
+    picks = {_resolve_variant(sections, "gb_42") for _ in range(5)}
+
+    assert len(picks) == 1
+
+
+def test_resolve_spreads_keys_over_all_variants():
+    sections = _variants("brick", 12.0)
+
+    picks = {_resolve_variant(sections, f"gb_{index}") for index in range(30)}
+
+    assert picks == {0, 1, 2}
+
+
+def test_resolve_picks_the_variant_among_sections_of_the_chosen_width():
+    sections = [*_variants("brick", 6.0), *_variants("brick", 12.0)]
+
+    chosen = resolve_section(
+        sections, style_id="brick", width_m=11.0, allow_nearest=False, **_RESOLVE
+    )
+
+    assert chosen.width_m == 12.0
+
+
+def test_resolve_uses_the_variants_that_exist():
+    sections = [make_section("brick", 12.0, variant=2)]
+
+    picks = {_resolve_variant(sections, f"gb_{index}") for index in range(10)}
+
+    assert picks == {2}
+
+
+def test_resolve_keeps_the_variant_number_when_a_width_lacks_some_variants():
+    sections = [
+        *_variants("brick", 6.0),
+        make_section("brick", 12.0, variant=0),
+        make_section("brick", 12.0, variant=2),
+    ]
+
+    for index in range(30):
+        key = f"gb_{index}"
+        on_narrow = _resolve_variant(sections, key, width_m=6.0)
+        on_wide = _resolve_variant(sections, key, width_m=12.0)
+        if on_narrow in (0, 2):
+            assert on_wide == on_narrow
+
+
+def test_resolve_breaks_an_equal_width_score_towards_the_narrower_section():
+    narrow, wide = make_section("brick", 6.0), make_section("brick", 24.0)
+
+    for order in ([narrow, wide], [wide, narrow]):
+        chosen = resolve_section(
+            order, style_id="brick", width_m=12.0, allow_nearest=False, **_RESOLVE
         )
+        assert chosen.width_m == 6.0
+
+
+def test_manifest_without_variants_reads_every_section_as_variant_zero():
+    payload = FacadeLibraryManifest(sections=[make_section("brick", 12.0)]).model_dump(
+        mode="json"
+    )
+    del payload["sections"][0]["variant"]
+
+    manifest = FacadeLibraryManifest.model_validate(payload)
+
+    assert manifest.sections[0].variant == 0
+
+
+def test_floor_sequence_puts_typical_floors_between_ground_and_top():
+    assert floor_sequence(1) == ["ground"]
+    assert floor_sequence(2) == ["ground", "top"]
+    assert floor_sequence(5) == ["ground", "typical", "typical", "typical", "top"]
+    assert len(floor_sequence(16)) == 16
+
+
+def test_floor_sequence_refuses_zero_floors():
+    with pytest.raises(FacadeAssemblyError):
+        floor_sequence(0)
+
+
+def test_slice_section_cuts_ground_middle_and_top_floors_on_the_grid():
+    section = _striped_section()
+
+    pieces = slice_section(section, 8, 32.0)
+
+    assert {
+        kind: _floor_index(mesh, section) for kind, mesh in pieces.meshes.items()
+    } == {
+        "ground": 0,
+        "typical": 3,
+        "top": 7,
+    }
+    assert pieces.floor_height == pytest.approx(section.extents[1] / 8)
+    assert pieces.section_width == pytest.approx(section.extents[0])
+
+
+def test_slice_section_refuses_fewer_than_three_floors():
+    with pytest.raises(FacadeAssemblyError):
+        slice_section(_striped_section(), 2, 32.0)
+
+
+def test_slice_section_refuses_an_empty_floor():
+    with pytest.raises(FacadeAssemblyError):
+        slice_section(_striped_section(missing=3), 8, 32.0)
+
+
+def test_slice_section_refuses_a_section_taller_than_its_floors():
+    section = _striped_section()
+    parapet = trimesh.creation.box(extents=[1.0, 2.0, 0.2])
+    parapet.apply_translation([0.0, section.bounds[1][1] + 1.0, 0.0])
+    with_parapet = trimesh.util.concatenate([section, parapet])
+
+    with pytest.raises(FacadeAssemblyError, match="expected 32.00 m"):
+        slice_section(with_parapet, 8, 32.0)
+
+
+def test_slice_section_accepts_a_height_within_the_tolerance():
+    pieces = slice_section(_striped_section(), 8, 32.2)
+
+    assert pieces.floor_height == pytest.approx(4.0)
+
+
+def test_stacked_floors_fill_the_wall_quad_exactly():
+    pieces = slice_section(_striped_section(), 8, 32.0)
+    points = np.array([[0, 0, 0], [8, 0, -6], [8, 15, -6], [0, 15, 0]], dtype=float)
+
+    placed = stack_transforms(pieces, points, 5)
+
+    assert [kind for kind, _ in placed] == floor_sequence(5)
+    storey = 3.0
+    slab = SLAB_SHARE * storey
+    for index, (kind, matrix) in enumerate(placed):
+        low, high = pieces.meshes[kind].copy().apply_transform(matrix).bounds[:, 1]
+        expected_low = index * storey + (storey - slab if kind == "top" else 0.0)
+        assert low == pytest.approx(expected_low, abs=1e-6)
+        assert high == pytest.approx(expected_low + slab, abs=1e-6)
+    assert high == pytest.approx(15.0, abs=1e-6)
 
 
 def test_library_reports_a_missing_manifest_as_unavailable(tmp_path):
@@ -152,7 +307,15 @@ def test_library_reports_a_missing_manifest_as_unavailable(tmp_path):
 
 def test_library_reports_an_invalid_manifest_as_unavailable(tmp_path):
     storage = LocalStorage(str(tmp_path))
-    storage.put_json({"templates": [{"unexpected": True}]}, f"{PREFIX}/manifest.json")
+    storage.put_json({"sections": [{"unexpected": True}]}, f"{PREFIX}/manifest.json")
+
+    with pytest.raises(FacadeLibraryUnavailable):
+        _run(make_library(storage).manifest())
+
+
+def test_library_refuses_a_version_1_manifest(tmp_path):
+    storage = LocalStorage(str(tmp_path))
+    storage.put_json({"version": 1, "templates": []}, f"{PREFIX}/manifest.json")
 
     with pytest.raises(FacadeLibraryUnavailable):
         _run(make_library(storage).manifest())
@@ -160,7 +323,7 @@ def test_library_reports_an_invalid_manifest_as_unavailable(tmp_path):
 
 def test_library_keeps_the_manifest_until_the_ttl_expires(tmp_path):
     storage = LocalStorage(str(tmp_path))
-    seed_library(storage, [make_template("brick", 6, 12.0)])
+    seed_library(storage, [make_section("brick", 12.0)])
     library = make_library(storage)
 
     async def scenario():
@@ -171,13 +334,13 @@ def test_library_keeps_the_manifest_until_the_ttl_expires(tmp_path):
     first, second = _run(scenario())
 
     assert second is first
-    assert len(second.templates) == 1
+    assert len(second.sections) == 1
 
 
-def test_library_downloads_each_template_mesh_once(tmp_path):
+def test_library_downloads_and_slices_each_section_once(tmp_path):
     storage = LocalStorage(str(tmp_path))
-    template = make_template("brick", 6, 12.0)
-    seed_library(storage, [template])
+    section = make_section("brick", 12.0)
+    seed_library(storage, [section])
     reads: list[str] = []
     original = storage.get_bytes
 
@@ -189,13 +352,27 @@ def test_library_downloads_each_template_mesh_once(tmp_path):
     library = make_library(storage)
 
     async def scenario():
-        await library.load_meshes([template])
-        return await library.load_meshes([template, template])
+        first = await library.load_pieces([section])
+        return first, await library.load_pieces([section, section])
 
-    meshes = _run(scenario())
+    first, second = _run(scenario())
 
-    assert reads.count(template.object_key) == 1
-    assert list(meshes) == [template.cache_key]
+    assert reads.count(section.object_key) == 1
+    assert list(second) == [section.cache_key]
+    assert second[section.cache_key] is first[section.cache_key]
+    assert set(second[section.cache_key].meshes) == {"ground", "typical", "top"}
+
+
+def test_library_refuses_a_section_whose_glb_height_differs_from_the_manifest(
+    tmp_path,
+):
+    storage = LocalStorage(str(tmp_path))
+    section = make_section("brick", 12.0)
+    seed_library(storage, [section])
+    storage.put_bytes(wall_glb(12.0, 20.0), section.object_key, "model/gltf-binary")
+
+    with pytest.raises(FacadeAssemblyError):
+        _run(make_library(storage).load_pieces([section]))
 
 
 def test_building_faces_separates_walls_and_roofs_and_splits_wide_walls():
@@ -203,10 +380,10 @@ def test_building_faces_separates_walls_and_roofs_and_splits_wide_walls():
         "o po_1\n"
         "v 0 0 0\n"
         "v 0 3 0\n"
-        "v 30 0 0\n"
-        "v 30 3 0\n"
-        "v 30 0 -10\n"
-        "v 30 3 -10\n"
+        "v 50 0 0\n"
+        "v 50 3 0\n"
+        "v 50 0 -10\n"
+        "v 50 3 -10\n"
         "v 0 0 -10\n"
         "v 0 3 -10\n"
         "f 1 3 4 2\n"
@@ -218,7 +395,24 @@ def test_building_faces_separates_walls_and_roofs_and_splits_wide_walls():
 
     assert [face.name for face in faces] == ["po_1"]
     assert len(faces[0].roofs) == 1
-    assert len(faces[0].walls) > 1
+    assert len(faces[0].walls) == 3
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "segments"),
+    [(24.0, 3.0, 1), (24.0, 60.0, 1), (25.0, 3.0, 2), (60.0, 30.0, 3)],
+)
+def test_split_wall_depends_on_width_only(width, height, segments):
+    points = np.array(
+        [[0, 0, 0], [width, 0, 0], [width, height, 0], [0, height, 0]], dtype=float
+    )
+
+    parts = split_wall(points, 24.0)
+
+    assert len(parts) == segments
+    assert sum(float(np.linalg.norm(p[1] - p[0])) for p in parts) == pytest.approx(
+        width
+    )
 
 
 def test_origin_of_the_local_frame_is_inside_the_input_area():
@@ -235,9 +429,10 @@ def _seeded(tmp_path):
     seed_library(
         storage,
         [
-            make_template("contemporary", 6, 12.0),
-            make_template("glass", 6, 12.0),
-            make_template("glass", 12, 12.0),
+            make_section("contemporary", 12.0),
+            make_section("glass", 12.0),
+            make_section("glass", 24.0),
+            make_section("minimalist", 6.0),
         ],
     )
     return storage, make_library(storage)
@@ -268,51 +463,123 @@ def test_scene_textures_each_zone_with_its_style(tmp_path):
     )
 
     loaded = _load_scene(scene.glb)
-    assert {"gb_1__wall_0", "gb_1__roof", "gb_2__wall_0", "gb_2__roof"} <= set(
+    assert {"gb_1__wall_0__floor_0", "gb_1__roof", "gb_2__wall_0__floor_11"} <= set(
         loaded.graph.nodes_geometry
     )
-    assert loaded.graph.transforms.parents["gb_1__wall_0"] == "gb_1"
+    parents = loaded.graph.transforms.parents
+    assert parents["gb_1__wall_0__floor_0"] == "gb_1__wall_0"
+    assert parents["gb_1__wall_0"] == "gb_1"
     assert scene.buildings == 2
-    assert scene.template_count == 2
+    assert scene.template_count == 3
     assert scene.nearest_substitutions == 0
-    assert scene.wall_instances >= 8
+    assert scene.wall_instances == 8
+    assert scene.floor_instances == 4 * 6 + 4 * 12
     assert scene.origin_lon == pytest.approx(LON, abs=0.001)
     assert scene.origin_lat == pytest.approx(LAT, abs=0.001)
 
 
-def test_scene_stores_each_section_once_however_many_walls_use_it(tmp_path):
+def test_scene_stores_three_floor_pieces_per_section_for_any_heights(tmp_path):
     _, library = _seeded(tmp_path)
     buildings = collection(
         *(
             rect_feature(
-                str(index), zone="residential", floors=6, offset_m=index * 40.0
+                str(floors), zone="residential", floors=floors, offset_m=floors * 40.0
             )
-            for index in range(3)
+            for floors in (3, 9, 16)
         )
     )
 
     scene = _build(library, buildings, {"residential": "contemporary"})
 
     gltf = _gltf_json(scene.glb)
-    section_meshes = [m for m in gltf["meshes"] if m["name"].startswith("section_")]
-    wall_nodes = [n for n in gltf["nodes"] if "__wall_" in n["name"]]
-    assert len(section_meshes) == scene.template_count == 1
-    assert len(wall_nodes) == scene.wall_instances > 3
+    piece_meshes = sorted(
+        m["name"] for m in gltf["meshes"] if m["name"].startswith("section_")
+    )
+    floor_nodes = [n for n in gltf["nodes"] if "__floor_" in n["name"]]
+    assert piece_meshes == [
+        "section_0__ground",
+        "section_0__top",
+        "section_0__typical",
+    ]
+    assert len(floor_nodes) == scene.floor_instances == 4 * (3 + 9 + 16)
 
 
-def test_instanced_wall_matches_a_transformed_copy_of_the_section():
-    template = load_template_mesh(wall_glb(12.0, 9.0), "test")
+def _many_buildings(count):
+    return collection(
+        *(
+            rect_feature(
+                str(index),
+                zone="residential",
+                floors=5,
+                width_m=12.0,
+                offset_m=index * 40.0,
+            )
+            for index in range(count)
+        )
+    )
+
+
+def test_all_walls_of_a_building_share_one_variant(tmp_path):
+    storage = LocalStorage(str(tmp_path))
+    seed_library(storage, _variants("contemporary", 12.0))
+
+    scene = _build(
+        make_library(storage), _many_buildings(1), {"residential": "contemporary"}
+    )
+
+    assert scene.wall_instances == 4
+    assert scene.template_count == 1
+
+
+def test_different_buildings_get_different_variants(tmp_path):
+    storage = LocalStorage(str(tmp_path))
+    seed_library(storage, _variants("contemporary", 12.0))
+
+    scene = _build(
+        make_library(storage), _many_buildings(12), {"residential": "contemporary"}
+    )
+
+    assert scene.template_count == 3
+
+
+def test_one_storey_building_uses_only_the_ground_piece(tmp_path):
+    _, library = _seeded(tmp_path)
+    buildings = collection(rect_feature("1", zone="residential", floors=1))
+
+    scene = _build(library, buildings, {"residential": "contemporary"})
+
+    gltf = _gltf_json(scene.glb)
+    assert [m["name"] for m in gltf["meshes"] if m["name"].startswith("section_")] == [
+        "section_0__ground"
+    ]
+    assert scene.floor_instances == scene.wall_instances == 4
+
+
+def test_scene_is_as_tall_as_the_buildings(tmp_path):
+    _, library = _seeded(tmp_path)
+    buildings = collection(rect_feature("1", zone="business", floors=9))
+
+    scene = _build(library, buildings, {"business": "glass"})
+
+    assert _load_scene(scene.glb).extents[1] == pytest.approx(27.0, abs=0.5)
+
+
+def test_floor_node_matches_a_transformed_copy_of_its_piece():
+    pieces = slice_section(load_template_mesh(wall_glb(12.0, 32.0), "test"), 8, 32.0)
     points = np.array([[0, 0, 0], [8, 0, -6], [8, 9, -6], [0, 9, 0]], dtype=float)
-    matrix = wall_transform(template, points)
-    expected = template.copy()
+    kind, matrix = stack_transforms(pieces, points, 3)[1]
+    expected = pieces.meshes[kind].copy()
     expected.apply_transform(matrix)
 
     payload = export_glb(
-        {"section": template},
+        {"piece": pieces.meshes[kind]},
         [
             SceneNode("building"),
             SceneNode(
-                "building__wall_0", geometry="section", matrix=matrix, parent="building"
+                "building__wall_0__floor_1",
+                geometry="piece",
+                matrix=matrix,
+                parent="building",
             ),
         ],
     )
@@ -332,21 +599,22 @@ def test_export_refuses_a_child_listed_before_its_parent():
 
 def test_scene_miss_is_raised_when_nearest_is_off(tmp_path):
     _, library = _seeded(tmp_path)
-    buildings = collection(rect_feature("1", zone="residential", floors=12))
+    buildings = collection(rect_feature("1", zone="residential", floors=6))
 
     with pytest.raises(FacadeTemplateMiss):
-        _build(library, buildings, {"residential": "contemporary"})
+        _build(library, buildings, {"residential": "minimalist"})
 
 
 def test_scene_uses_the_nearest_section_and_counts_substitutions(tmp_path):
     _, library = _seeded(tmp_path)
-    buildings = collection(rect_feature("1", zone="residential", floors=12))
+    buildings = collection(rect_feature("1", zone="residential", floors=6))
 
     scene = _build(
-        library, buildings, {"residential": "contemporary"}, allow_nearest=True
+        library, buildings, {"residential": "minimalist"}, allow_nearest=True
     )
 
-    assert scene.nearest_substitutions == scene.wall_instances > 0
+    assert scene.nearest_substitutions == 2
+    assert scene.wall_instances == 4
 
 
 def test_scene_refuses_more_walls_than_the_limit(tmp_path):
@@ -383,6 +651,7 @@ def test_store_scene_writes_glb_and_metadata_under_a_fresh_id(tmp_path):
     assert is_scene_id(result_id)
     assert ready["status"] == "ready"
     assert ready["glb_url"] == f"/facade-scenes/{result_id}.glb"
+    assert ready["stats"]["floor_instances"] == scene.floor_instances
     assert storage.get_bytes(scene_glb_key(result_id)) == scene.glb
     assert storage.exists(scene_metadata_key(result_id))
 
@@ -403,17 +672,17 @@ def test_preview_box_has_four_outward_walls_and_a_roof():
     assert np.allclose(roof[:, 1], 18.0)
 
 
-def test_preview_glb_is_a_box_of_the_requested_height():
-    template = load_template_mesh(wall_glb(12.0, 18.0), "test")
+def test_preview_glb_stacks_the_requested_floors():
+    pieces = slice_section(load_template_mesh(wall_glb(12.0, 32.0), "test"), 8, 32.0)
 
     payload = build_preview_glb(
-        template, width_m=12.0, height_m=18.0, name="preview_brick"
+        pieces, width_m=12.0, floors=6, floor_height_m=3.0, name="preview_brick"
     )
 
     loaded = _load_scene(payload)
-    assert {"preview_brick__wall_0", "preview_brick__roof"} <= set(
+    assert {"preview_brick__wall_0__floor_5", "preview_brick__roof"} <= set(
         loaded.graph.nodes_geometry
     )
-    assert len(_gltf_json(payload)["meshes"]) == 2
+    assert len(_gltf_json(payload)["meshes"]) == 4
     assert loaded.extents[1] == pytest.approx(18.0, abs=0.5)
     assert len(preview_etag(payload)) == 16

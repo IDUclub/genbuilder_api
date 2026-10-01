@@ -1,7 +1,7 @@
-"""Place ready wall templates onto a mass model without GPU inference.
+"""Split a mass model into walls and roofs and export assembled facade scenes.
 
-Ported from ``facade-jobs`` (``app/logic/cached_facades.py``); the geometry
-must stay identical so a library scene matches a scene assembled there.
+Originally ported from ``facade-jobs`` (``app/logic/cached_facades.py``); walls
+are now split by width for floor stacking, so scenes no longer match there.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import trimesh
 
-DEFAULT_MAX_WALL_ASPECT_RATIO = 1.5
-_DEPTH_SCALE_REFERENCE = 32.0
+DEFAULT_MAX_WALL_WIDTH_M = 24.0
+DEPTH_SCALE_REFERENCE = 32.0
 _HORIZONTAL_NORMAL_Y = 0.01
 _ROOF_SINK_M = 0.2
 
@@ -74,8 +74,8 @@ def _vertical_fraction(first: np.ndarray, second: np.ndarray) -> float:
     return math.inf if length == 0 else abs(float(edge[1])) / length
 
 
-def split_wall(points: np.ndarray, max_aspect_ratio: float) -> list[np.ndarray]:
-    """Cut a wide wall quad into segments no wider than ``max_aspect_ratio``."""
+def split_wall(points: np.ndarray, max_width_m: float) -> list[np.ndarray]:
+    """Cut a wall quad into equal segments no wider than ``max_width_m``."""
     if len(points) != 4:
         return [points]
     pair_0 = (
@@ -101,10 +101,10 @@ def split_wall(points: np.ndarray, max_aspect_ratio: float) -> list[np.ndarray]:
 
     width = float(np.linalg.norm(width_vector))
     height = float(np.linalg.norm(first_height_vector))
-    if width == 0 or height == 0 or width / height + 1e-9 < max_aspect_ratio:
+    if width == 0 or height == 0 or width <= max_width_m + 1e-9:
         return [points]
 
-    count = math.floor(width / height / max_aspect_ratio + 1e-9) + 1
+    count = math.ceil(width / max_width_m - 1e-9)
     first = [points[a] + width_vector * (index / count) for index in range(count + 1)]
     opposite = [
         points[d] + opposite_width_vector * (index / count)
@@ -121,7 +121,7 @@ def split_wall(points: np.ndarray, max_aspect_ratio: float) -> list[np.ndarray]:
 def building_faces(
     obj_text: str,
     *,
-    max_aspect_ratio: float = DEFAULT_MAX_WALL_ASPECT_RATIO,
+    max_wall_width_m: float = DEFAULT_MAX_WALL_WIDTH_M,
 ) -> list[BuildingFaces]:
     """Split an OBJ mass model into per-building wall segments and roofs.
 
@@ -137,7 +137,7 @@ def building_faces(
             if abs(float(face_normal(points)[1])) >= _HORIZONTAL_NORMAL_Y:
                 building.roofs.append(points)
             else:
-                building.walls.extend(split_wall(points, max_aspect_ratio))
+                building.walls.extend(split_wall(points, max_wall_width_m))
     return [
         building for building in buildings.values() if building.walls or building.roofs
     ]
@@ -218,25 +218,6 @@ def load_template_mesh(payload: bytes, label: str) -> trimesh.Trimesh:
     return mesh
 
 
-def wall_transform(template: trimesh.Trimesh, points: np.ndarray) -> np.ndarray:
-    """Matrix that stretches a centred template onto one wall quad."""
-    width, height = wall_size(points)
-    normal = face_normal(points)
-    angle = np.arctan2(-normal[0], -normal[2])
-    size_x, size_y, _ = template.extents
-    if size_x <= 0 or size_y <= 0:
-        raise FacadeAssemblyError("template has a zero-size X or Y extent")
-    return trimesh.transformations.compose_matrix(
-        angles=[0, angle, 0],
-        translate=points.mean(axis=0),
-        scale=[
-            width / size_x,
-            height / size_y,
-            _DEPTH_SCALE_REFERENCE / max(size_x, size_y),
-        ],
-    )
-
-
 @dataclass(frozen=True)
 class SceneNode:
     """A glTF node; nodes naming the same ``geometry`` share one stored mesh."""
@@ -279,7 +260,8 @@ def export_glb(
 
 
 __all__ = [
-    "DEFAULT_MAX_WALL_ASPECT_RATIO",
+    "DEFAULT_MAX_WALL_WIDTH_M",
+    "DEPTH_SCALE_REFERENCE",
     "BuildingFaces",
     "FacadeAssemblyError",
     "SceneNode",
@@ -290,5 +272,4 @@ __all__ = [
     "roof_mesh",
     "split_wall",
     "wall_size",
-    "wall_transform",
 ]
