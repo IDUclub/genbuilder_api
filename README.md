@@ -38,7 +38,7 @@ cached, otherwise a job). Library scenes are served by
 | `FACADE_LIBRARY_PREFIX` | `facade-library/v1` | Object prefix of the library manifest, sections and previews |
 | `FACADE_LIBRARY_PPM` | `32` | Texture resolution of the sections to use |
 | `FACADE_LIBRARY_MAX_WIDTH_SCALE` | `2.5` | Largest horizontal stretch of a section |
-| `FACADE_LIBRARY_MAX_WALLS` | `500` | Larger scenes go to `facade-jobs` (or `413` without it) |
+| `FACADE_LIBRARY_MAX_WALLS` | `5000` | Larger scenes go to `facade-jobs` (or `413` without it) |
 | `FACADE_LIBRARY_MANIFEST_TTL_SECONDS` | `300` | How long the manifest and preview index are cached |
 
 The library and the previews are filled by

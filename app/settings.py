@@ -68,7 +68,7 @@ class Settings(BaseModel):
         default=2.5, gt=1.0, alias="FACADE_LIBRARY_MAX_WIDTH_SCALE"
     )
     facade_library_max_walls: int = Field(
-        default=500, ge=1, alias="FACADE_LIBRARY_MAX_WALLS"
+        default=5000, ge=1, alias="FACADE_LIBRARY_MAX_WALLS"
     )
     facade_library_manifest_ttl_seconds: float = Field(
         default=300.0, ge=0.0, alias="FACADE_LIBRARY_MANIFEST_TTL_SECONDS"
