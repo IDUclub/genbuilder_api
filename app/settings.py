@@ -51,7 +51,7 @@ class Settings(BaseModel):
     fileserver_access_key: str = Field(default="", alias="FILESERVER_ACCESS_KEY")
     fileserver_secret_key: str = Field(default="", alias="FILESERVER_SECRET_KEY")
     fileserver_bucket_name: str = Field(default="", alias="FILESERVER_BUCKET_NAME")
-    fileserver_secure: bool = Field(default=False, alias="FILESERVER_SECURE")
+    fileserver_secure: bool = Field(default=True, alias="FILESERVER_SECURE")
     fileserver_region: str = Field(default="us-east-1", alias="FILESERVER_REGION")
     outputs_dir: str = Field(default="outputs", alias="OUTPUTS_DIR")
 

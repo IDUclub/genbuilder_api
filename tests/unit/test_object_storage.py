@@ -169,6 +169,19 @@ def test_get_object_storage_selects_minio_when_fully_configured(monkeypatch):
         get_object_storage.cache_clear()
 
 
+def test_get_object_storage_uses_tls_by_default(monkeypatch):
+    pytest.importorskip("minio")
+    _minio_env(monkeypatch)
+    monkeypatch.delenv("FILESERVER_SECURE")
+    get_object_storage.cache_clear()
+
+    try:
+        storage = get_object_storage()
+        assert storage._client._base_url.is_https
+    finally:
+        get_object_storage.cache_clear()
+
+
 def test_get_object_storage_falls_back_to_local_without_credentials(
     monkeypatch, tmp_path
 ):
