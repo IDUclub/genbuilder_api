@@ -193,8 +193,10 @@ def test_gallery_holds_one_textured_box_per_style_in_preset_order(tmp_path):
     expected = sorted(["glass", "brick", "loft"], key=order.index)
     assert roots == [f"style_{style_id}" for style_id in expected]
     assert len(gltf["images"]) == 3
+    # Every style sits at the origin, so the stack is as wide as one box.
+    assert all("matrix" not in nodes[index] for index in world["children"])
     scene = trimesh.load(io.BytesIO(response.content), file_type="glb", force="scene")
-    assert scene.extents[0] > 12.0 and scene.extents[2] > 12.0
+    assert (scene.extents[[0, 2]] < 2 * 12.0).all()
 
 
 def test_gallery_answers_304_and_reuses_the_built_payload(tmp_path, monkeypatch):

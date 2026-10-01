@@ -916,12 +916,57 @@ GenBuilder сначала генерирует здания, затем став
   `Cache-Control: public, max-age=3600`, повторный запрос с `If-None-Match`
   получает `304`. Для стиля без превью — `404`.
 - `GET /facade-styles/gallery.glb?floor_group=low|medium|high` — один GLB со
-  всеми стилями сразу: текстурированные боксы стоят сеткой (шаг 18 м, центр
-  сетки в начале координат) в порядке списка `/facade-styles`. Каждый бокс —
-  отдельный узел `style_<style_id>` (например, `style_brick`), по нему можно
-  найти, подписать или скрыть стиль. Стили без превью в этой группе этажей
-  пропускаются. Кэширование то же (`ETag`, `304`); если превью нет ни у одного
-  стиля — `404`, если библиотека недоступна — `503`.
+  всеми стилями сразу, чтобы переключать стиль в окне просмотра без новой
+  загрузки. Все боксы стоят в одной точке (начало координат) в порядке списка
+  `/facade-styles`, каждый — отдельный узел `style_<style_id>` (например,
+  `style_brick`). Сразу после загрузки видны все стили друг в друге: клиент
+  оставляет `visible` только у выбранного узла и скрывает остальные, а при
+  выборе другого стиля просто переключает видимость. Стили без превью в этой
+  группе этажей пропускаются. Кэширование то же (`ETag`, `304`); если превью
+  нет ни у одного стиля — `404`, если библиотека недоступна — `503`.
+
+Пример окна просмотра галереи на three.js: загрузить GLB один раз, собрать
+узлы стилей и дать пользователю крутить модель мышью. Все превью одного
+размера и стоят в одной точке, поэтому камеру настраивают один раз — при смене
+стиля ракурс сохраняется. Текстуры лежат внутри GLB, переключение и вращение
+сетевых запросов не делают. Материалы неметаллические (`metallicFactor = 0`),
+карта окружения не нужна — хватает обычного освещения.
+
+```js
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.6));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enablePan = false;            // модель не утащить из кадра
+controls.minDistance = 15;             // интерьера нет, внутрь не пускаем
+controls.maxDistance = 80;
+controls.maxPolarAngle = Math.PI / 2;  // не заглядывать под землю
+controls.autoRotate = true;            // по желанию
+
+const styles = {};
+const gltf = await new GLTFLoader().loadAsync(
+  "/facade-styles/gallery.glb?floor_group=medium",
+);
+// GLTFLoader убирает "/" из имён дочерних узлов, корневые style_<id> целы.
+gltf.scene.traverse((node) => {
+  if (node.name.startsWith("style_") && !node.name.includes("preview")) {
+    styles[node.name.slice("style_".length)] = node;
+  }
+});
+scene.add(gltf.scene);
+
+function selectStyle(styleId) {
+  for (const [id, node] of Object.entries(styles)) node.visible = id === styleId;
+  // центр здания (основание в 0, высота ~20 м) — точка вращения камеры
+  new THREE.Box3().setFromObject(styles[styleId]).getCenter(controls.target);
+}
+
+selectStyle("brick");
+// в цикле рендера: controls.update(); renderer.render(scene, camera);
+```
 
 `style_id` из этого списка можно передавать в `facade_style` как есть.
 

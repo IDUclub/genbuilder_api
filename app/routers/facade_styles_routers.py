@@ -26,7 +26,11 @@ from app.logic.facade_library.models import (
     StylePreview,
     StylePreviewIndex,
 )
-from app.logic.facade_library.previews import build_gallery_glb, preview_etag
+from app.logic.facade_library.previews import (
+    GALLERY_FORMAT_VERSION,
+    build_gallery_glb,
+    preview_etag,
+)
 from app.logic.facade_library.results import GLB_MIME_TYPE, is_scene_id, scene_glb_key
 from app.logic.facade_styles import FACADE_STYLE_PRESETS, PRESETS_BY_ID
 from app.schema.dto import FacadeStyleSummary
@@ -81,7 +85,7 @@ async def list_facade_styles(
 
 @facade_styles_router.get(
     "/facade-styles/gallery.glb",
-    summary="One GLB with a textured preview box for every facade style",
+    summary="One GLB with every facade style preview stacked at the origin",
     response_class=Response,
     responses={
         200: {"content": {GLB_MIME_TYPE: {}}},
@@ -95,8 +99,9 @@ async def facade_style_gallery(
     ] = _DEFAULT_PREVIEW_GROUP,
     if_none_match: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """Boxes follow the ``GET /facade-styles`` order on a centred grid, one
-    ``style_<style_id>`` node per box; styles without a preview are skipped."""
+    """Boxes follow the ``GET /facade-styles`` order, one ``style_<style_id>``
+    node per box, all at the origin: the client shows one and hides the rest.
+    Styles without a preview are skipped."""
     try:
         index = await library.preview_index()
     except FacadeLibraryUnavailable as exc:
@@ -117,7 +122,12 @@ async def facade_style_gallery(
         raise http_exception(404, f"No '{floor_group}' style previews")
 
     etag_value = preview_etag(
-        "|".join(f"{item.style_id}:{item.etag}" for item in previews).encode()
+        "|".join(
+            [
+                f"v{GALLERY_FORMAT_VERSION}",
+                *(f"{item.style_id}:{item.etag}" for item in previews),
+            ]
+        ).encode()
     )
     etag = f'"{etag_value}"'
     headers = {"ETag": etag, "Cache-Control": _PREVIEW_CACHE_CONTROL}
