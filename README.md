@@ -110,7 +110,7 @@ re-checked on every fetch.
 | `FILESERVER_ACCESS_KEY` | yes* | — | Scoped access key |
 | `FILESERVER_SECRET_KEY` | yes* | — | Scoped secret key |
 | `FILESERVER_BUCKET_NAME` | yes* | — | Bucket holding the layers, for example `genbuilder` |
-| `FILESERVER_SECURE` | no | `false` | Use HTTPS towards MinIO |
+| `FILESERVER_SECURE` | no | `true` | Use HTTPS towards MinIO; set `false` only for a plain-HTTP endpoint |
 | `FILESERVER_REGION` | no | `us-east-1` | Sent explicitly so the client never calls `GetBucketLocation`, a right the scoped credentials do not have |
 | `OUTPUTS_DIR` | no | `outputs` | Local fallback directory, used only when no `FILESERVER_*` variable is set |
 | `DEFAULT_SERVICES_TERRITORY_ID` | no | `1` | UrbanDB region whose service normatives place services in the project-less chat mode when the request has neither `territory_id` nor `project_id`. `1` is Leningrad Oblast; an empty value disables the fallback |
