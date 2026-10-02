@@ -357,10 +357,20 @@ class ServiceGenerationDiagnostics(BaseModel):
         ge=0,
         description="Number of service-capacity targets that were not fully satisfied.",
     )
+    unplaced_type_not_supported: int = Field(
+        default=0,
+        ge=0,
+        description="Unfulfilled service targets of types GenBuilder does not place at all.",
+    )
     unplaced_no_template: int = Field(
         default=0,
         ge=0,
-        description="Unfulfilled service targets for which no building template exists.",
+        description="Unfulfilled service targets of supported types that have no building template yet.",
+    )
+    unplaced_demand_below_template: int = Field(
+        default=0,
+        ge=0,
+        description="Unfulfilled service targets whose demand is too small for a whole building.",
     )
     unplaced_no_space: int = Field(
         default=0,
@@ -374,7 +384,9 @@ class ServiceGenerationDiagnostics(BaseModel):
     )
     unplaced_by_reason: Dict[str, list[str]] = Field(
         default_factory=lambda: {
+            "type_not_supported": [],
             "no_template": [],
+            "demand_below_template": [],
             "no_space": [],
             "site_limit": [],
         },
