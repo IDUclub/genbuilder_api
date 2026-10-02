@@ -32,7 +32,6 @@ from app.dependencies import (
     builder,
     chat_llm_configured,
     default_services_territory_id,
-    facade_jobs_configured,
     optional_object_storage,
     urban_db_api,
     zones_service,
@@ -157,7 +156,7 @@ async def generate_chat_stream(
 
 @generation_chat_router.post(
     "/generate/chat/stream/3d",
-    summary="Conversational building generation with an asynchronous 3D facade job",
+    summary="Conversational building generation with a 3D facade scene",
 )
 async def generate_chat_stream_3d(
     user_query: Annotated[str, Form(min_length=1, description="Free-text request")],
@@ -261,12 +260,6 @@ async def _generate_chat_stream_response(
             "Conversational generation is unavailable: LLM backend is not "
             "configured (set LLM_API and Chat_Model).",
         )
-    if queue_facades and not facade_jobs_configured():
-        raise http_exception(
-            503,
-            "3D facade generation is unavailable: facade-jobs is not "
-            "configured (set FACADE_JOBS_API).",
-        )
 
     # Territory comes either from a scenario or from an uploaded blocks file.
     has_file = _has_upload(blocks_file)
@@ -338,8 +331,8 @@ async def _generate_chat_stream_response(
                             if isinstance(style_name, str):
                                 facade_style_name_ru = style_name
 
-                    # Submit after the textual summary and immediately before the
-                    # terminal event, so ``facade_job`` is the final useful SSE
+                    # Produce after the textual summary and immediately before the
+                    # terminal event, so the facade event is the final useful SSE
                     # payload while ``done`` remains the stream terminator.
                     if (
                         queue_facades
@@ -347,7 +340,7 @@ async def _generate_chat_stream_response(
                         and facade_buildings is not None
                     ):
                         try:
-                            job = await orchestration.submit_facade_job(
+                            scene = await orchestration.produce_chat_facade_scene(
                                 facade_buildings,
                                 requested_by=user.user_id,
                                 facade_style=facade_style_prompt,
@@ -366,8 +359,12 @@ async def _generate_chat_stream_response(
                             )
                         else:
                             yield ServerSentEvent(
-                                event="facade_job",
-                                data=json.dumps(job, ensure_ascii=False),
+                                event=(
+                                    "facade_scene"
+                                    if scene.get("status") == "ready"
+                                    else "facade_job"
+                                ),
+                                data=json.dumps(scene, ensure_ascii=False),
                             )
 
                     event_type = event.pop("type", "message")

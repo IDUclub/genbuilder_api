@@ -661,12 +661,24 @@ async def _library_scene_or_none(
         raise http_exception(503, "Could not store the 3D facade scene.") from exc
 
 
+def _requested_facade_style(
+    facade_style: str | None, facade_style_name_ru: str | None
+) -> FacadeStyle:
+    """Resolve a style, recognising a preset sent as its English prompt plus Russian name."""
+    if facade_style_name_ru:
+        named = resolve_facade_style(facade_style_name_ru)
+        if named.source == "preset" and named.prompt == (facade_style or "").strip():
+            return named
+    return resolve_facade_style(facade_style, name_ru=facade_style_name_ru)
+
+
 async def produce_facade_scene(
     buildings: dict[str, Any],
     *,
     requested_by: str | None,
     facade_style: str | None,
     facade_source: FacadeSource,
+    facade_style_name_ru: str | None = None,
 ) -> dict[str, Any]:
     """Return a ready library scene or a queued facade-jobs handle.
 
@@ -677,10 +689,13 @@ async def produce_facade_scene(
     """
     if facade_source == "gpu":
         return await submit_facade_job(
-            buildings, requested_by=requested_by, facade_style=facade_style
+            buildings,
+            requested_by=requested_by,
+            facade_style=facade_style,
+            facade_style_name_ru=facade_style_name_ru,
         )
 
-    style = resolve_facade_style(facade_style)
+    style = _requested_facade_style(facade_style, facade_style_name_ru)
     style_by_zone = library_style_by_zone(buildings, style)
     if style_by_zone is None:
         if not facade_jobs_configured():
@@ -691,7 +706,10 @@ async def produce_facade_scene(
                 detail={"presets": list(FACADE_STYLE_NAMES_RU)},
             )
         return await submit_facade_job(
-            buildings, requested_by=requested_by, facade_style=facade_style
+            buildings,
+            requested_by=requested_by,
+            facade_style=facade_style,
+            facade_style_name_ru=facade_style_name_ru,
         )
 
     ready = await _library_scene_or_none(
@@ -703,7 +721,30 @@ async def produce_facade_scene(
     if ready is not None:
         return ready
     return await submit_facade_job(
-        buildings, requested_by=requested_by, facade_style=facade_style
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_style_name_ru=facade_style_name_ru,
+    )
+
+
+async def produce_chat_facade_scene(
+    buildings: dict[str, Any],
+    *,
+    requested_by: str | None,
+    facade_style: str | None,
+    facade_style_name_ru: str | None,
+) -> dict[str, Any]:
+    """Produce the chat's 3D scene from the library, queueing misses when facade-jobs exists."""
+    facade_source: FacadeSource = (
+        "library_then_gpu" if facade_jobs_configured() else "library"
+    )
+    return await produce_facade_scene(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_source=facade_source,
+        facade_style_name_ru=facade_style_name_ru,
     )
 
 
