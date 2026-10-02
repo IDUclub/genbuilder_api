@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from app.infrastructure.object_storage import LocalStorage
 from app.logic import generation_orchestration as orchestration
 from app.logic.facade_library.results import scene_glb_key
+from app.logic.facade_styles import DEFAULT_FACADE_STYLE_NAME_RU, PRESETS_BY_ID
 from app.settings import Settings
 
 QUEUED = {
@@ -198,6 +199,84 @@ def test_library_mode_does_not_require_facade_jobs_up_front(monkeypatch):
         orchestration._require_facade_backend("gpu")
 
     assert excinfo.value.status_code == 503
+
+
+def _produce_chat(harness, buildings, *, prompt, name_ru):
+    return asyncio.run(
+        orchestration.produce_chat_facade_scene(
+            buildings,
+            requested_by="user-1",
+            facade_style=prompt,
+            facade_style_name_ru=name_ru,
+        )
+    )
+
+
+def test_chat_preset_style_is_assembled_from_the_library_without_facade_jobs(
+    monkeypatch, tmp_path
+):
+    harness = _Harness(monkeypatch, tmp_path, facade_jobs=False)
+    brick = PRESETS_BY_ID["brick"]
+
+    result = _produce_chat(
+        harness, _narrow_building(), prompt=brick.prompt, name_ru=brick.name_ru
+    )
+
+    assert result["status"] == "ready"
+    assert result["style_by_zone"] == {"residential": "brick"}
+    assert harness.submitted == []
+
+
+def test_chat_default_style_uses_the_zone_default_preset(monkeypatch, tmp_path):
+    harness = _Harness(monkeypatch, tmp_path, facade_jobs=False)
+
+    result = _produce_chat(
+        harness,
+        _narrow_building("business"),
+        prompt=None,
+        name_ru=DEFAULT_FACADE_STYLE_NAME_RU,
+    )
+
+    assert result["style_by_zone"] == {"business": "glass"}
+
+
+def test_chat_free_text_style_is_rejected_without_facade_jobs(monkeypatch, tmp_path):
+    harness = _Harness(monkeypatch, tmp_path, facade_jobs=False)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _produce_chat(
+            harness,
+            _narrow_building(),
+            prompt="warm sandstone facade",
+            name_ru="Песчаник",
+        )
+
+    assert excinfo.value.status_code == 422
+
+
+def test_chat_free_text_style_queues_with_its_russian_name(monkeypatch, tmp_path):
+    harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
+
+    result = _produce_chat(
+        harness, _narrow_building(), prompt="warm sandstone facade", name_ru="Песчаник"
+    )
+
+    assert result == QUEUED
+    assert harness.submitted[0]["facade_style"] == "warm sandstone facade"
+    assert harness.submitted[0]["facade_style_name_ru"] == "Песчаник"
+
+
+def test_chat_queues_a_library_miss_when_facade_jobs_is_configured(
+    monkeypatch, tmp_path
+):
+    harness = _Harness(monkeypatch, tmp_path, facade_jobs=True)
+    brick = PRESETS_BY_ID["brick"]
+
+    result = _produce_chat(
+        harness, _wide_building(), prompt=brick.prompt, name_ru=brick.name_ru
+    )
+
+    assert result == QUEUED
 
 
 def test_omitted_facade_source_uses_the_server_default(monkeypatch):

@@ -147,7 +147,6 @@ def test_territory_id_reaches_the_chat_stream(monkeypatch, path):
         yield {"type": "done", "chat_id": None, "assistant_message_id": None}
 
     client = _chat_client(monkeypatch, _stream)
-    monkeypatch.setattr(generation_chat_routers, "facade_jobs_configured", lambda: True)
 
     response = client.post(
         path,

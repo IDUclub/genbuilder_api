@@ -21,6 +21,11 @@ accepts the same value as a multipart field and can also extract arbitrary
 Russian descriptions from `user_query`. Omitting the style picks the default
 preset of each functional zone.
 
+The chat stream assembles preset styles from the facade library and emits a
+`facade_scene` event with the ready scene before `done`. It falls back to a
+`facade_job` event when `FACADE_JOBS_API` is set and the library misses or the
+style is free text; without facade-jobs the chat works from the library alone.
+
 ### Facade library
 
 Built-in styles can also be assembled synchronously from pre-generated facade
