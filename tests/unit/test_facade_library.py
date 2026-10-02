@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import struct
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -33,6 +34,8 @@ from app.logic.facade_library.catalog import (
     resolve_section,
 )
 from app.logic.facade_library.floors import (
+    FloorKind,
+    FloorPieces,
     floor_sequence,
     slice_section,
     stack_transforms,
@@ -95,6 +98,22 @@ def _striped_section(
     mesh = trimesh.util.concatenate(slabs)
     mesh.apply_translation(-(mesh.bounds[0] + mesh.bounds[1]) / 2.0)
     return mesh
+
+
+BALCONY_LOW, BALCONY_HIGH, BALCONY_DEPTH = 27.62, 28.83, 1.2
+
+
+def _section_with_straddling_balcony() -> trimesh.Trimesh:
+    """A 6 x 32 m wall whose top balcony crosses the 28 m floor line, as in Facades-3D output."""
+    wall = trimesh.creation.box(extents=[6.0, 32.0, 0.2])
+    wall.apply_translation([0.0, 16.0, 0.0])
+    balcony = trimesh.creation.box(
+        extents=[4.0, BALCONY_HIGH - BALCONY_LOW, BALCONY_DEPTH]
+    )
+    balcony.apply_translation(
+        [0.0, (BALCONY_LOW + BALCONY_HIGH) / 2, 0.1 + BALCONY_DEPTH / 2]
+    )
+    return trimesh.util.concatenate([wall, balcony])
 
 
 def _floor_index(piece: trimesh.Trimesh, section: trimesh.Trimesh) -> int:
@@ -251,7 +270,9 @@ def test_slice_section_cuts_ground_middle_and_top_floors_on_the_grid():
         "typical": 3,
         "top": 7,
     }
-    assert pieces.floor_height == pytest.approx(section.extents[1] / 8)
+    step = section.extents[1] / 8
+    for height in pieces.heights.values():
+        assert height == pytest.approx(step, abs=step / 4)
     assert pieces.section_width == pytest.approx(section.extents[0])
 
 
@@ -278,24 +299,61 @@ def test_slice_section_refuses_a_section_taller_than_its_floors():
 def test_slice_section_accepts_a_height_within_the_tolerance():
     pieces = slice_section(_striped_section(), 8, 32.2)
 
-    assert pieces.floor_height == pytest.approx(4.0)
+    assert pieces.heights["typical"] == pytest.approx(4.0, abs=1.0)
+
+
+def test_slice_section_keeps_a_straddling_balcony_whole_in_the_top_floor():
+    pieces = slice_section(_section_with_straddling_balcony(), 8, 32.0)
+
+    assert pieces.bottoms["top"] < BALCONY_LOW
+    assert pieces.meshes["top"].bounds[1][2] == pytest.approx(0.1 + BALCONY_DEPTH)
+    assert pieces.meshes["typical"].bounds[1][2] == pytest.approx(0.1)
+    assert pieces.heights["top"] == pytest.approx(32.0 - pieces.bottoms["top"])
+
+
+def test_slice_section_cuts_on_the_grid_where_the_wall_is_plain():
+    pieces = slice_section(_section_with_straddling_balcony(), 8, 32.0)
+
+    assert pieces.bottoms["typical"] == pytest.approx(12.0)
+    assert pieces.heights["ground"] == pytest.approx(4.0)
+    assert pieces.heights["typical"] == pytest.approx(4.0)
+
+
+def _stacked_bands(
+    pieces: FloorPieces, placed: list[tuple[FloorKind, np.ndarray]]
+) -> list[tuple[float, float]]:
+    bands = []
+    for kind, matrix in placed:
+        low, high = pieces.meshes[kind].copy().apply_transform(matrix).bounds[:, 1]
+        bands.append((float(low), float(high)))
+    return bands
 
 
 def test_stacked_floors_fill_the_wall_quad_exactly():
-    pieces = slice_section(_striped_section(), 8, 32.0)
+    pieces = slice_section(_section_with_straddling_balcony(), 8, 32.0)
     points = np.array([[0, 0, 0], [8, 0, -6], [8, 15, -6], [0, 15, 0]], dtype=float)
 
     placed = stack_transforms(pieces, points, 5)
 
     assert [kind for kind, _ in placed] == floor_sequence(5)
-    storey = 3.0
-    slab = SLAB_SHARE * storey
-    for index, (kind, matrix) in enumerate(placed):
-        low, high = pieces.meshes[kind].copy().apply_transform(matrix).bounds[:, 1]
-        expected_low = index * storey + (storey - slab if kind == "top" else 0.0)
-        assert low == pytest.approx(expected_low, abs=1e-6)
-        assert high == pytest.approx(expected_low + slab, abs=1e-6)
-    assert high == pytest.approx(15.0, abs=1e-6)
+    bands = _stacked_bands(pieces, placed)
+    assert bands[0][0] == pytest.approx(0.0, abs=1e-6)
+    for (_, below_top), (above_bottom, _) in pairwise(bands):
+        assert above_bottom == pytest.approx(below_top, abs=1e-6)
+    assert bands[-1][1] == pytest.approx(15.0, abs=1e-6)
+
+
+def test_stacked_floors_keep_the_proportions_of_uneven_pieces():
+    pieces = slice_section(_section_with_straddling_balcony(), 8, 32.0)
+    points = np.array([[0, 0, 0], [8, 0, 0], [8, 9, 0], [0, 9, 0]], dtype=float)
+
+    bands = _stacked_bands(pieces, stack_transforms(pieces, points, 3))
+
+    ground, typical, top = (high - low for low, high in bands)
+    assert ground == pytest.approx(typical, abs=1e-6)
+    assert top / ground == pytest.approx(
+        pieces.heights["top"] / pieces.heights["ground"]
+    )
 
 
 def test_library_reports_a_missing_manifest_as_unavailable(tmp_path):
