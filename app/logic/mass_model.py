@@ -61,7 +61,13 @@ class MassModelStats:
 
 
 def build_local_frame(feature_collection: Mapping[str, Any]) -> LocalFrame:
-    """Pick a UTM zone and a local origin covering the whole feature collection."""
+    """Pick a transverse Mercator frame centred on the whole feature collection.
+
+    Its grid north is true north at the origin and it uses the Web Mercator
+    sphere, so the frame matches how map clients place a model at the origin.
+    UTM grid north is rotated by the meridian convergence, which shifts
+    buildings by tens of metres across a district.
+    """
     geometries = [
         shape(feature["geometry"])
         for feature in _features(feature_collection)
@@ -73,11 +79,18 @@ def build_local_frame(feature_collection: Mapping[str, Any]) -> LocalFrame:
     series = gpd.GeoSeries(geometries, crs="EPSG:4326")
     utm_crs = series.estimate_utm_crs()
     min_x, min_y, max_x, max_y = series.to_crs(utm_crs).total_bounds
+    to_wgs84 = Transformer.from_crs(utm_crs, "EPSG:4326", always_xy=True)
+    longitude, latitude = to_wgs84.transform(
+        (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
+    )
 
     return LocalFrame(
-        crs=utm_crs.to_string(),
-        origin_x=(min_x + max_x) / 2.0,
-        origin_y=(min_y + max_y) / 2.0,
+        crs=(
+            f"+proj=tmerc +lat_0={latitude!r} +lon_0={longitude!r} +k=1 "
+            "+x_0=0 +y_0=0 +R=6378137 +units=m +no_defs"
+        ),
+        origin_x=0.0,
+        origin_y=0.0,
     )
 
 

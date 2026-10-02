@@ -2,12 +2,14 @@ import math
 
 import numpy as np
 import pytest
+from pyproj import Transformer
 
 from app.logic.mass_model import (
     MassModelParams,
     build_local_frame,
     buildings_to_obj,
     group_features_by_zone,
+    local_frame_origin_wgs84,
 )
 
 LON, LAT = 31.0, 59.92
@@ -184,3 +186,55 @@ def test_per_zone_exports_share_one_local_frame():
 def test_empty_collection_is_rejected():
     with pytest.raises(ValueError):
         _export(_collection())
+
+
+def test_local_frame_axes_point_east_and_north_away_from_the_utm_meridian():
+    collection = _collection(
+        _feature(_rect(20.0, 30.0, lon_offset_m=-500.0), feature_id="west"),
+        _feature(_rect(20.0, 30.0, lon_offset_m=500.0), feature_id="east"),
+    )
+
+    vertices, groups = _parse_obj(_export(collection)[0])
+    west = vertices[np.unique(groups["gb_west"])]
+    east = vertices[np.unique(groups["gb_east"])]
+
+    assert east[:, 2].max() - west[:, 2].max() == pytest.approx(0.0, abs=0.1)
+    assert east[:, 0].min() - west[:, 0].min() == pytest.approx(1000.0, abs=5.0)
+    assert np.ptp(west[west[:, 0] < west[:, 0].min() + 1.0][:, 0]) < 0.1
+
+
+def test_local_frame_matches_web_mercator_placement_at_the_origin():
+    corner_lon, corner_lat = LON + 0.009, LAT + 0.0045
+    collection = _collection(
+        _feature(_rect(20.0, 30.0, lon_offset_m=-500.0), feature_id="west"),
+        _feature(
+            {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [corner_lon, corner_lat],
+                        [corner_lon + 0.0003, corner_lat],
+                        [corner_lon + 0.0003, corner_lat + 0.0003],
+                        [corner_lon, corner_lat],
+                    ]
+                ],
+            },
+            feature_id="east",
+        ),
+    )
+    frame = build_local_frame(collection)
+    origin_lon, origin_lat = local_frame_origin_wgs84(frame)
+    to_mercator = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+    origin_x, origin_y = to_mercator.transform(origin_lon, origin_lat)
+    corner_x, corner_y = to_mercator.transform(corner_lon, corner_lat)
+    meters_per_mercator_unit = math.cos(math.radians(origin_lat))
+    expected = (
+        (corner_x - origin_x) * meters_per_mercator_unit,
+        -(corner_y - origin_y) * meters_per_mercator_unit,
+    )
+
+    vertices, groups = _parse_obj(buildings_to_obj(collection, frame)[0])
+    east = vertices[sorted({index for face in groups["gb_east"] for index in face})]
+    ground = east[np.isclose(east[:, 1], 0.0)][:, [0, 2]]
+
+    assert np.linalg.norm(ground - expected, axis=1).min() < 0.1
