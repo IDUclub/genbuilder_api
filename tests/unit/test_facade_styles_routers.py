@@ -12,6 +12,7 @@ from PIL import Image
 
 from app.infrastructure.object_storage import LocalStorage, get_object_storage
 from app.logic.facade_library.factory import get_facade_library
+from app.logic.facade_library.floors import slice_section
 from app.logic.facade_library.models import StylePreview, StylePreviewIndex
 from app.logic.facade_library.previews import build_preview_glb
 from app.logic.facade_library.results import GLB_MIME_TYPE, scene_glb_key
@@ -29,7 +30,13 @@ def _empty_gallery_cache(monkeypatch):
 
 
 def _textured_preview(style_id: str, color: tuple[int, int, int]) -> bytes:
-    section = trimesh.creation.box(extents=[12.0, 9.0, 0.4])
+    slabs = []
+    for floor in range(3):
+        slab = trimesh.creation.box(extents=[12.0, 2.4, 0.4])
+        slab.apply_translation([0.0, floor * 3.0 + (1.8 if floor == 2 else 1.2), 0.0])
+        slabs.append(slab)
+    section = trimesh.util.concatenate(slabs)
+    section.apply_translation([0.0, -4.5, 0.0])
     uv = np.c_[(section.vertices[:, 0] + 6) / 12, (section.vertices[:, 1] + 4.5) / 9]
     section.visual = trimesh.visual.TextureVisuals(
         uv=uv,
@@ -38,7 +45,11 @@ def _textured_preview(style_id: str, color: tuple[int, int, int]) -> bytes:
         ),
     )
     return build_preview_glb(
-        section, width_m=12.0, height_m=9.0, name=f"preview_{style_id}"
+        slice_section(section, 3, 9.0),
+        width_m=12.0,
+        floors=3,
+        floor_height_m=3.0,
+        name=f"preview_{style_id}",
     )
 
 

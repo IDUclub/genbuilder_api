@@ -59,7 +59,7 @@ class Settings(BaseModel):
         default="gpu", alias="FACADE_SOURCE_DEFAULT"
     )
     facade_library_prefix: str = Field(
-        default="facade-library/v1", min_length=1, alias="FACADE_LIBRARY_PREFIX"
+        default="facade-library/v2", min_length=1, alias="FACADE_LIBRARY_PREFIX"
     )
     facade_library_pixels_per_meter: int = Field(
         default=32, ge=1, alias="FACADE_LIBRARY_PPM"

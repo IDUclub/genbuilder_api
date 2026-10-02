@@ -14,8 +14,8 @@ from app.logic.facade_library.assembly import (
     SceneNode,
     export_glb,
     roof_mesh,
-    wall_transform,
 )
+from app.logic.facade_library.floors import FloorPieces, stack_transforms
 
 PREVIEW_WIDTH_M = 12.0
 # Bumped whenever the gallery layout changes, so clients refetch it.
@@ -39,29 +39,35 @@ def box_faces(
 
 
 def build_preview_glb(
-    template: trimesh.Trimesh,
+    pieces: FloorPieces,
     *,
     width_m: float,
-    height_m: float,
+    floors: int,
+    floor_height_m: float,
     name: str,
 ) -> bytes:
-    walls, roof = box_faces(width_m=width_m, height_m=height_m)
-    section = f"{name}__section"
+    """A square box whose four walls stack ``floors`` pieces of one section."""
+    walls, roof = box_faces(width_m=width_m, height_m=floors * floor_height_m)
     roof_name = f"{name}__roof"
-    nodes = [
-        SceneNode(name),
-        *(
-            SceneNode(
-                f"{name}__wall_{index}",
-                geometry=section,
-                matrix=wall_transform(template, wall),
-                parent=name,
+    geometries: dict[str, trimesh.Trimesh] = {roof_name: roof_mesh(roof)}
+    nodes = [SceneNode(name)]
+    for wall_index, wall in enumerate(walls):
+        wall_name = f"{name}__wall_{wall_index}"
+        nodes.append(SceneNode(wall_name, parent=name))
+        placed = stack_transforms(pieces, wall, floors)
+        for floor_index, (kind, matrix) in enumerate(placed):
+            geometry = f"{name}__{kind}"
+            geometries[geometry] = pieces.meshes[kind]
+            nodes.append(
+                SceneNode(
+                    f"{wall_name}__floor_{floor_index}",
+                    geometry=geometry,
+                    matrix=matrix,
+                    parent=wall_name,
+                )
             )
-            for index, wall in enumerate(walls)
-        ),
-        SceneNode(roof_name, geometry=roof_name, parent=name),
-    ]
-    return export_glb({section: template, roof_name: roof_mesh(roof)}, nodes)
+    nodes.append(SceneNode(roof_name, geometry=roof_name, parent=name))
+    return export_glb(geometries, nodes)
 
 
 def gallery_node_name(style_id: str) -> str:

@@ -498,6 +498,9 @@ class SceneOrigin(BaseModel):
 class FacadeSceneStats(BaseModel):
     buildings: int = Field(..., ge=0)
     wall_instances: int = Field(..., ge=0)
+    floor_instances: int = Field(
+        ..., ge=0, description="Floor pieces stacked onto all walls"
+    )
     template_count: int = Field(..., ge=0)
     nearest_substitutions: int = Field(
         ...,

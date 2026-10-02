@@ -1,7 +1,7 @@
-"""Manifest schema of the facade template library.
+"""Manifest schema of the facade section library.
 
-The manifest is shared with ``facade-jobs``, which reads the same objects, so
-the template model mirrors its schema field for field and forbids extras.
+Version 2 stores one tall section per style and width; walls of any floor
+count are stacked from its floors. ``facade-jobs`` still reads version 1.
 """
 
 from __future__ import annotations
@@ -44,35 +44,24 @@ def canonical_style_key(prompt: str, negative_prompt: str | None = None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
 
-def floor_group(floors: int) -> str:
-    if floors == 1:
-        return "single"
-    if floors <= 4:
-        return "low"
-    if floors <= 8:
-        return "medium"
-    if floors <= 16:
-        return "high"
-    return f"extra-high-{floors}"
+class FacadeSection(BaseModel):
+    """A generated wall whose floors are evenly spaced ``section_floor_height_m`` apart."""
 
-
-class FacadeTemplate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     object_key: str
-    metadata_key: str | None = None
     style_id: str
     style_name_ru: str
     style_key: str
     prompt: str
     negative_prompt: str | None = None
-    floor_group: str
-    floors: int = Field(gt=0)
-    floor_height_m: float = Field(gt=0)
+    section_floors: int = Field(ge=3)
+    section_floor_height_m: float = Field(gt=0)
     width_m: float = Field(gt=0)
     height_m: float = Field(gt=0)
     pixels_per_meter: int = Field(gt=0)
     seed: int | None = None
+    variant: int = Field(default=0, ge=0)
     glb_size_bytes: int = Field(ge=1)
     generated_at: datetime = Field(default_factory=_utc_now)
 
@@ -83,18 +72,16 @@ class FacadeTemplate(BaseModel):
     def width_scale_for(self, width_m: float) -> float:
         return max(width_m / self.width_m, self.width_m / width_m)
 
-    def score(self, width_m: float, height_m: float) -> float:
-        return abs(math.log(width_m / self.width_m)) + 0.25 * abs(
-            math.log(height_m / self.height_m)
-        )
+    def score(self, width_m: float) -> float:
+        return abs(math.log(width_m / self.width_m))
 
 
 class FacadeLibraryManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: int = 1
+    version: Literal[2] = 2
     updated_at: datetime = Field(default_factory=_utc_now)
-    templates: list[FacadeTemplate] = Field(default_factory=list)
+    sections: list[FacadeSection] = Field(default_factory=list)
 
 
 class StylePreview(BaseModel):
@@ -121,10 +108,9 @@ __all__ = [
     "PREVIEW_FLOOR_GROUPS",
     "REPRESENTATIVE_FLOORS",
     "FacadeLibraryManifest",
-    "FacadeTemplate",
+    "FacadeSection",
     "PreviewFloorGroup",
     "StylePreview",
     "StylePreviewIndex",
     "canonical_style_key",
-    "floor_group",
 ]

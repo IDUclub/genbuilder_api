@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+import zlib
 from collections import OrderedDict
 from collections.abc import Sequence
 
-import trimesh
 from pydantic import ValidationError
 
 from app.infrastructure.object_storage import (
@@ -14,14 +14,14 @@ from app.infrastructure.object_storage import (
     ObjectStorageError,
 )
 from app.logic.facade_library.assembly import load_template_mesh
+from app.logic.facade_library.floors import FloorPieces, slice_section
 from app.logic.facade_library.models import (
     FacadeLibraryManifest,
-    FacadeTemplate,
+    FacadeSection,
     StylePreviewIndex,
-    floor_group,
 )
 
-_DEFAULT_MESH_CACHE_SIZE = 64
+_DEFAULT_MESH_CACHE_SIZE = 192
 
 
 class FacadeTemplateMiss(LookupError):
@@ -32,47 +32,61 @@ class FacadeLibraryUnavailable(RuntimeError):
     """The library manifest or a template could not be read."""
 
 
-def resolve_template(
-    templates: Sequence[FacadeTemplate],
+def _pick_variant(
+    variants: Sequence[FacadeSection], variant_key: str, variant_count: int
+) -> FacadeSection:
+    # crc32 instead of hash(): str hashes are salted per process.
+    wanted = zlib.crc32(variant_key.encode("utf-8")) % variant_count
+    ordered = sorted(variants, key=lambda item: item.variant)
+    for section in ordered:
+        if section.variant == wanted:
+            return section
+    return ordered[wanted % len(ordered)]
+
+
+def resolve_section(
+    sections: Sequence[FacadeSection],
     *,
     style_id: str,
-    floors: int,
     width_m: float,
-    height_m: float,
     pixels_per_meter: int,
     max_width_scale: float,
     allow_nearest: bool,
-) -> FacadeTemplate:
-    """Pick the template for one wall.
+    variant_key: str,
+) -> FacadeSection:
+    """Pick the section for one wall by width; floor count plays no part.
 
-    An exact match shares the style, floor group and resolution and stays
-    within ``max_width_scale``. With ``allow_nearest`` a miss falls back to the
-    same style's template closest in floor count, then in size.
+    An exact match shares the style and resolution and stays within
+    ``max_width_scale``. With ``allow_nearest`` a miss falls back to the same
+    style's section closest in width. ``variant_key`` selects the variant
+    number from all the style's variants, so equal keys get the same variant on
+    every width that has it.
     """
     same_style = [
-        template
-        for template in templates
-        if template.style_id == style_id
-        and template.pixels_per_meter == pixels_per_meter
+        section
+        for section in sections
+        if section.style_id == style_id and section.pixels_per_meter == pixels_per_meter
     ]
-    group = floor_group(floors)
     exact = [
-        template
-        for template in same_style
-        if template.floor_group == group
-        and template.width_scale_for(width_m) <= max_width_scale
+        section
+        for section in same_style
+        if section.width_scale_for(width_m) <= max_width_scale
     ]
-    if exact:
-        return min(exact, key=lambda item: item.score(width_m, height_m))
-    if allow_nearest and same_style:
-        return min(
-            same_style,
-            key=lambda item: (abs(item.floors - floors), item.score(width_m, height_m)),
-        )
+    candidates = exact or (same_style if allow_nearest else [])
+    if candidates:
+        best = min(candidates, key=lambda item: (item.score(width_m), item.width_m))
+        variants = [item for item in candidates if item.width_m == best.width_m]
+        variant_count = 1 + max(item.variant for item in same_style)
+        return _pick_variant(variants, variant_key, variant_count)
     raise FacadeTemplateMiss(
-        f"no template for style={style_id}, floors={group}, "
-        f"width={width_m:.2f}m, ppm={pixels_per_meter}"
+        f"no section for style={style_id}, width={width_m:.2f}m, "
+        f"ppm={pixels_per_meter}"
     )
+
+
+def _load_pieces(payload: bytes, section: FacadeSection) -> FloorPieces:
+    mesh = load_template_mesh(payload, section.cache_key)
+    return slice_section(mesh, section.section_floors, section.height_m)
 
 
 class FacadeTemplateLibrary:
@@ -97,7 +111,7 @@ class FacadeTemplateLibrary:
         self._previews: StylePreviewIndex | None = None
         self._previews_loaded_at = 0.0
         self._lock = asyncio.Lock()
-        self._meshes: OrderedDict[str, trimesh.Trimesh] = OrderedDict()
+        self._pieces: OrderedDict[str, FloorPieces] = OrderedDict()
 
     @property
     def manifest_key(self) -> str:
@@ -158,35 +172,35 @@ class FacadeTemplateLibrary:
     async def read_object(self, object_key: str) -> bytes:
         return await self._read(object_key)
 
-    async def load_meshes(
-        self, templates: Sequence[FacadeTemplate]
-    ) -> dict[str, trimesh.Trimesh]:
-        """Return centred template meshes keyed by ``FacadeTemplate.cache_key``."""
-        meshes: dict[str, trimesh.Trimesh] = {}
-        for template in templates:
-            key = template.cache_key
-            if key in meshes:
+    async def load_pieces(
+        self, sections: Sequence[FacadeSection]
+    ) -> dict[str, FloorPieces]:
+        """Return sliced floor pieces keyed by ``FacadeSection.cache_key``."""
+        pieces: dict[str, FloorPieces] = {}
+        for section in sections:
+            key = section.cache_key
+            if key in pieces:
                 continue
-            cached = self._meshes.get(key)
+            cached = self._pieces.get(key)
             if cached is None:
-                payload = await self._read(template.object_key)
-                cached = await asyncio.to_thread(load_template_mesh, payload, key)
+                payload = await self._read(section.object_key)
+                cached = await asyncio.to_thread(_load_pieces, payload, section)
                 self._remember(key, cached)
             else:
-                self._meshes.move_to_end(key)
-            meshes[key] = cached
-        return meshes
+                self._pieces.move_to_end(key)
+            pieces[key] = cached
+        return pieces
 
-    def _remember(self, key: str, mesh: trimesh.Trimesh) -> None:
-        self._meshes[key] = mesh
-        self._meshes.move_to_end(key)
-        while len(self._meshes) > self._mesh_cache_size:
-            self._meshes.popitem(last=False)
+    def _remember(self, key: str, section_pieces: FloorPieces) -> None:
+        self._pieces[key] = section_pieces
+        self._pieces.move_to_end(key)
+        while len(self._pieces) > self._mesh_cache_size:
+            self._pieces.popitem(last=False)
 
 
 __all__ = [
     "FacadeLibraryUnavailable",
     "FacadeTemplateLibrary",
     "FacadeTemplateMiss",
-    "resolve_template",
+    "resolve_section",
 ]

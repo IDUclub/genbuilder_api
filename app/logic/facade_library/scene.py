@@ -17,14 +17,14 @@ from app.logic.facade_library.assembly import (
     export_glb,
     roof_mesh,
     wall_size,
-    wall_transform,
 )
 from app.logic.facade_library.catalog import (
     FacadeTemplateLibrary,
     FacadeTemplateMiss,
-    resolve_template,
+    resolve_section,
 )
-from app.logic.facade_library.models import FacadeTemplate
+from app.logic.facade_library.floors import FloorPieces, stack_transforms
+from app.logic.facade_library.models import FacadeSection
 from app.logic.mass_model import (
     DEFAULT_FLOOR_HEIGHT_M,
     LocalFrame,
@@ -51,6 +51,7 @@ class LibraryScene:
     origin_lat: float
     buildings: int
     wall_instances: int
+    floor_instances: int
     template_count: int
     nearest_substitutions: int
 
@@ -59,7 +60,8 @@ class LibraryScene:
 class _PlacedWall:
     building: str
     points: np.ndarray
-    template: FacadeTemplate
+    floors: int
+    section: FacadeSection
 
 
 @dataclass(frozen=True)
@@ -91,9 +93,45 @@ def _zone_faces(
     return faces_by_zone
 
 
+def _pick_section(
+    sections: list[FacadeSection],
+    *,
+    style_id: str,
+    width_m: float,
+    pixels_per_meter: int,
+    max_width_scale: float,
+    allow_nearest: bool,
+    variant_key: str,
+) -> tuple[FacadeSection, bool]:
+    try:
+        section = resolve_section(
+            sections,
+            style_id=style_id,
+            width_m=width_m,
+            pixels_per_meter=pixels_per_meter,
+            max_width_scale=max_width_scale,
+            allow_nearest=False,
+            variant_key=variant_key,
+        )
+        return section, False
+    except FacadeTemplateMiss:
+        if not allow_nearest:
+            raise
+    section = resolve_section(
+        sections,
+        style_id=style_id,
+        width_m=width_m,
+        pixels_per_meter=pixels_per_meter,
+        max_width_scale=max_width_scale,
+        allow_nearest=True,
+        variant_key=variant_key,
+    )
+    return section, True
+
+
 def _plan(
     faces_by_zone: Mapping[str, list[BuildingFaces]],
-    templates: list[FacadeTemplate],
+    sections: list[FacadeSection],
     *,
     style_by_zone: Mapping[str, str],
     floor_height_m: float,
@@ -110,44 +148,50 @@ def _plan(
         for building in faces:
             for points in building.walls:
                 width, height = wall_size(points)
+                section, substituted = _pick_section(
+                    sections,
+                    style_id=style_id,
+                    width_m=width,
+                    pixels_per_meter=pixels_per_meter,
+                    max_width_scale=max_width_scale,
+                    allow_nearest=allow_nearest,
+                    variant_key=building.name,
+                )
+                substitutions += substituted
                 floors = max(1, round(height / floor_height_m))
-                try:
-                    template = resolve_template(
-                        templates,
-                        style_id=style_id,
-                        floors=floors,
-                        width_m=width,
-                        height_m=height,
-                        pixels_per_meter=pixels_per_meter,
-                        max_width_scale=max_width_scale,
-                        allow_nearest=False,
-                    )
-                except FacadeTemplateMiss:
-                    if not allow_nearest:
-                        raise
-                    template = resolve_template(
-                        templates,
-                        style_id=style_id,
-                        floors=floors,
-                        width_m=width,
-                        height_m=height,
-                        pixels_per_meter=pixels_per_meter,
-                        max_width_scale=max_width_scale,
-                        allow_nearest=True,
-                    )
-                    substitutions += 1
-                walls.append(_PlacedWall(building.name, points, template))
+                walls.append(_PlacedWall(building.name, points, floors, section))
     return _ScenePlan(all_buildings, walls, substitutions)
 
 
-def _render(plan: _ScenePlan, meshes: Mapping[str, trimesh.Trimesh]) -> bytes:
-    """Each building is a node whose wall children instance shared section meshes."""
-    section_names = {key: f"section_{index}" for index, key in enumerate(meshes)}
-    geometries = {section_names[key]: mesh for key, mesh in meshes.items()}
+def _wall_nodes(
+    name: str, parent: str, wall: _PlacedWall, pieces: FloorPieces, section_name: str
+) -> tuple[list[SceneNode], dict[str, trimesh.Trimesh]]:
+    """A wall group node with one child per floor, plus the pieces it uses."""
+    nodes = [SceneNode(name, parent=parent)]
+    used: dict[str, trimesh.Trimesh] = {}
+    placed = stack_transforms(pieces, wall.points, wall.floors)
+    for index, (kind, matrix) in enumerate(placed):
+        geometry = f"{section_name}__{kind}"
+        used[geometry] = pieces.meshes[kind]
+        nodes.append(
+            SceneNode(
+                f"{name}__floor_{index}",
+                geometry=geometry,
+                matrix=matrix,
+                parent=name,
+            )
+        )
+    return nodes, used
+
+
+def _render(plan: _ScenePlan, pieces: Mapping[str, FloorPieces]) -> bytes:
+    """Each building holds wall groups whose floor nodes instance shared pieces."""
+    section_names = {key: f"section_{index}" for index, key in enumerate(pieces)}
     walls_by_building: dict[str, list[_PlacedWall]] = {}
     for wall in plan.walls:
         walls_by_building.setdefault(wall.building, []).append(wall)
 
+    geometries: dict[str, trimesh.Trimesh] = {}
     nodes: list[SceneNode] = []
     for building in plan.buildings:
         walls = walls_by_building.get(building.name, [])
@@ -155,15 +199,16 @@ def _render(plan: _ScenePlan, meshes: Mapping[str, trimesh.Trimesh]) -> bytes:
             continue
         nodes.append(SceneNode(building.name))
         for index, wall in enumerate(walls):
-            key = wall.template.cache_key
-            nodes.append(
-                SceneNode(
-                    f"{building.name}__wall_{index}",
-                    geometry=section_names[key],
-                    matrix=wall_transform(meshes[key], wall.points),
-                    parent=building.name,
-                )
+            key = wall.section.cache_key
+            wall_nodes, used = _wall_nodes(
+                f"{building.name}__wall_{index}",
+                building.name,
+                wall,
+                pieces[key],
+                section_names[key],
             )
+            geometries.update(used)
+            nodes.extend(wall_nodes)
         if building.roofs:
             roof_name = f"{building.name}__roof"
             geometries[roof_name] = trimesh.util.concatenate(
@@ -185,7 +230,7 @@ async def build_library_scene(
 ) -> LibraryScene:
     """Assemble one GLB for all zones, each textured with its library style.
 
-    Raises :class:`FacadeTemplateMiss` when a wall has no template and
+    Raises :class:`FacadeTemplateMiss` when a wall has no section and
     ``allow_nearest`` is off, :class:`SceneTooLarge` above ``max_walls`` and
     :class:`EmptyScene` when nothing has walls.
     """
@@ -204,18 +249,18 @@ async def build_library_scene(
     manifest = await library.manifest()
     plan = _plan(
         faces_by_zone,
-        manifest.templates,
+        manifest.sections,
         style_by_zone=style_by_zone,
         floor_height_m=floor_height_m,
         pixels_per_meter=pixels_per_meter,
         max_width_scale=library.max_width_scale,
         allow_nearest=allow_nearest,
     )
-    unique_templates = list(
-        {wall.template.cache_key: wall.template for wall in plan.walls}.values()
+    unique_sections = list(
+        {wall.section.cache_key: wall.section for wall in plan.walls}.values()
     )
-    meshes = await library.load_meshes(unique_templates)
-    glb = await asyncio.to_thread(_render, plan, meshes)
+    pieces = await library.load_pieces(unique_sections)
+    glb = await asyncio.to_thread(_render, plan, pieces)
     origin_lon, origin_lat = local_frame_origin_wgs84(frame)
     return LibraryScene(
         glb=glb,
@@ -223,7 +268,8 @@ async def build_library_scene(
         origin_lat=origin_lat,
         buildings=len(plan.buildings),
         wall_instances=len(plan.walls),
-        template_count=len(unique_templates),
+        floor_instances=sum(wall.floors for wall in plan.walls),
+        template_count=len(unique_sections),
         nearest_substitutions=plan.nearest_substitutions,
     )
 
