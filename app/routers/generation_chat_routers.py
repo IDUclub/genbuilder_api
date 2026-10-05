@@ -21,7 +21,7 @@ import json
 from contextlib import AsyncExitStack
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from loguru import logger
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
@@ -290,9 +290,14 @@ async def _generate_chat_stream_response(
                 if storage is not None:
                     await stack.enter_async_context(storage)
 
-                facade_buildings: dict[str, Any] | None = None
-                facade_style_prompt: str | None = None
-                facade_style_name_ru: str | None = None
+                facade_scene_producer = None
+                if queue_facades:
+
+                    async def facade_scene_producer(buildings, **style):
+                        return await orchestration.produce_chat_facade_scene(
+                            buildings, requested_by=user.user_id, **style
+                        )
+
                 async for event in stream_generation_chat(
                     builder=builder,
                     llm_client=llm,
@@ -320,53 +325,8 @@ async def _generate_chat_stream_response(
                     zones_service=zones_service,
                     urban_api=urban_db_api,
                     object_storage=optional_object_storage(),
+                    facade_scene_producer=facade_scene_producer,
                 ):
-                    if queue_facades and event.get("type") == "result":
-                        content = event.get("content")
-                        if isinstance(content, dict):
-                            facade_buildings = content
-                            prompt = event.get("facade_style_prompt")
-                            facade_style_prompt = prompt if isinstance(prompt, str) else None
-                            style_name = event.get("facade_style")
-                            if isinstance(style_name, str):
-                                facade_style_name_ru = style_name
-
-                    # Produce after the textual summary and immediately before the
-                    # terminal event, so the facade event is the final useful SSE
-                    # payload while ``done`` remains the stream terminator.
-                    if (
-                        queue_facades
-                        and event.get("type") == "done"
-                        and facade_buildings is not None
-                    ):
-                        try:
-                            scene = await orchestration.produce_chat_facade_scene(
-                                facade_buildings,
-                                requested_by=user.user_id,
-                                facade_style=facade_style_prompt,
-                                facade_style_name_ru=facade_style_name_ru,
-                            )
-                        except HTTPException as exc:
-                            yield ServerSentEvent(
-                                event="error",
-                                data=json.dumps(
-                                    {
-                                        "stage": "facade_job",
-                                        "detail": exc.detail,
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            )
-                        else:
-                            yield ServerSentEvent(
-                                event=(
-                                    "facade_scene"
-                                    if scene.get("status") == "ready"
-                                    else "facade_job"
-                                ),
-                                data=json.dumps(scene, ensure_ascii=False),
-                            )
-
                     event_type = event.pop("type", "message")
                     if event.get("chat_id"):
                         stream_chat_id = event["chat_id"]
