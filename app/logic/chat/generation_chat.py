@@ -30,8 +30,16 @@ Event envelope (``{"type": ..., ...}``), matching the reference style:
 - ``file``          {name, title, url, ...}  — a geo-layer link descriptor; the
                                                same payload is persisted to
                                                history as a ``file`` part.
+- ``facade_scene``  {status: "ready", glb_url, origin, ...} — 3D mode only:
+                                               the library-built scene, followed
+                                               by its ``file`` descriptor.
+- ``facade_job``    {status: "queued", job_id, status_url, ...} — 3D mode
+                                               only: the scene went to the GPU
+                                               queue.
 - ``warning``       {stage, detail, message} — non-fatal (e.g. not persisted).
 - ``error``         {stage, detail, code?, message?} — fatal; generation/answer failed.
+                                              ``stage: "facade_job"`` is the
+                                              exception: the 2D result stands.
                                               Carries a user-facing ``message``
                                               when the cause is explainable.
 - ``done``          {chat_id, assistant_message_id} — terminal marker.
@@ -40,7 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Protocol
 from uuid import uuid4
 
 import aiohttp
@@ -66,6 +74,7 @@ from app.logic.geo_layers import (
     SLOT_BUILDINGS,
     SLOT_EXISTING_BUILDINGS,
     SLOT_ZONES,
+    build_facade_scene_layer,
     build_stored_layer,
     build_zones_layer,
     geo_layer_to_file_part,
@@ -78,6 +87,21 @@ from app.logic.zone_taxonomy import normalize_zone
 
 
 _POLYGONAL = {"Polygon", "MultiPolygon"}
+
+
+class FacadeSceneProducer(Protocol):
+    """Turns generated buildings into a 3D scene: ``ready`` or ``queued``.
+
+    Raises ``HTTPException`` when no scene can be produced.
+    """
+
+    def __call__(
+        self,
+        buildings: dict[str, Any],
+        *,
+        facade_style: str | None,
+        facade_style_name_ru: str | None,
+    ) -> Awaitable[dict[str, Any]]: ...
 
 
 def _quoted_counts(counts: dict[str, int], limit: int = 10) -> str:
@@ -461,6 +485,7 @@ async def stream_generation_chat(
     zones_service: Any | None = None,
     urban_api: Any | None = None,
     object_storage: ObjectStorage | None = None,
+    facade_scene_producer: FacadeSceneProducer | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     persist = chat_storage_client is not None and bool(user_id)
     metadata = _request_metadata(
@@ -929,6 +954,19 @@ async def stream_generation_chat(
         }
     answer_text = "".join(collected).strip()
 
+    # 6.1 3D mode: produce the facade scene after the summary, so it is the last
+    # useful payload, and before persisting, so its GLB link reaches history.
+    assistant_metadata = {**metadata, _REPORTED_NOTICES_KEY: reported}
+    if enable_facade_styles and facade_scene_producer is not None:
+        async for event in _produce_facade_scene(
+            facade_scene_producer,
+            merged,
+            selected_facade_style,
+            file_layers,
+            assistant_metadata,
+        ):
+            yield event
+
     # 7. Persist the assistant turn.
     assistant_message_id = await _persist_assistant(
         chat_storage_client,
@@ -936,7 +974,7 @@ async def stream_generation_chat(
         user_id,
         chat_id,
         answer_text or "Генерация застройки завершена.",
-        {**metadata, _REPORTED_NOTICES_KEY: reported},
+        assistant_metadata,
         file_parts=[geo_layer_to_file_part(layer) for layer in file_layers],
     )
     yield {"type": "done", "chat_id": chat_id, "assistant_message_id": assistant_message_id}
@@ -972,6 +1010,44 @@ async def _store_layers(
         descriptor = build_stored_layer(slot=slot, result_id=result_id)
         file_layers.append(descriptor)
         yield {"type": "file", **descriptor}
+
+
+async def _produce_facade_scene(
+    producer: FacadeSceneProducer,
+    buildings: dict[str, Any],
+    style: Any,
+    file_layers: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> AsyncIterator[dict[str, Any]]:
+    """Produce the 3D scene and yield ``facade_scene``/``facade_job`` or an error.
+
+    A ready scene also gets a ``file`` descriptor appended to ``file_layers``,
+    so the GLB link is persisted like the geo layers. The scene payload goes to
+    ``metadata`` under ``facade_scene``: ``origin`` is needed to place the GLB on
+    the map, and a queued job is only reachable by its ``job_id``.
+    """
+    try:
+        scene = await producer(
+            buildings,
+            facade_style=style.prompt,
+            facade_style_name_ru=style.name_ru,
+        )
+    except HTTPException as exc:
+        yield {"type": "error", "stage": "facade_job", "detail": exc.detail}
+        return
+    except Exception as exc:  # noqa: BLE001 - the 2D result must still be persisted
+        logger.exception("facade scene production failed")
+        yield {"type": "error", "stage": "facade_job", "detail": str(exc)}
+        return
+
+    metadata["facade_scene"] = scene
+    if scene.get("status") != "ready":
+        yield {"type": "facade_job", **scene}
+        return
+    yield {"type": "facade_scene", **scene}
+    descriptor = build_facade_scene_layer(result_id=scene["result_id"])
+    file_layers.append(descriptor)
+    yield {"type": "file", **descriptor}
 
 
 async def _persist_assistant(
