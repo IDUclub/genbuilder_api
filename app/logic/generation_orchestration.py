@@ -10,7 +10,7 @@ through the ASGI stack.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
 
 import geopandas as gpd
 from fastapi import HTTPException
@@ -18,8 +18,29 @@ from loguru import logger
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
-from app.dependencies import builder, physical_objects_service, urban_db_api, zones_service
+from app.dependencies import (
+    build_facade_jobs_client,
+    builder,
+    facade_jobs_configured,
+    physical_objects_service,
+    urban_db_api,
+    zones_service,
+)
 from app.exceptions.http_exception_wrapper import http_exception
+from app.infrastructure.facade_jobs_client import FacadeJobsError
+from app.infrastructure.object_storage import ObjectStorageError, get_object_storage
+from app.logic.facade_library.assembly import FacadeAssemblyError
+from app.logic.facade_library.catalog import FacadeLibraryUnavailable, FacadeTemplateMiss
+from app.logic.facade_library.factory import get_facade_library
+from app.logic.facade_library.results import store_scene
+from app.logic.facade_library.scene import EmptyScene, SceneTooLarge, build_library_scene
+from app.logic.facade_styles import (
+    FACADE_STYLE_NAMES_RU,
+    FacadeStyle,
+    build_style_by_zone,
+    library_style_by_zone,
+    resolve_facade_style,
+)
 from app.logic.polygon_converter import (
     _explode_to_polygons,
     _scale_numeric_targets,
@@ -29,6 +50,7 @@ from app.logic.polygon_converter import (
 from app.logic.zone_taxonomy import normalize_zone
 from app.schema.default_params import DEFAULT_BLOCK_GENERATION_PARAMETERS, DEFAULT_BLOCK_TARGETS_BY_ZONE
 from app.schema.dto import BlockFeatureCollection, FunctionalZonesRequest, TerritoryRequest
+from app.settings import get_settings
 
 
 ProgressCallback = Callable[[int, int], Awaitable[None]]
@@ -519,6 +541,297 @@ async def estimate_capacity_by_blocks(
     return estimates
 
 
+FacadeSource = Literal["gpu", "library", "library_then_gpu"]
+
+
+def _effective_facade_source(facade_source: FacadeSource | None) -> FacadeSource:
+    return facade_source or get_settings().facade_source_default
+
+
+def _require_facade_backend(facade_source: FacadeSource) -> None:
+    """Fail before running the comparatively expensive building generator.
+
+    Library modes can answer without facade-jobs, so only ``gpu`` needs it
+    up front.
+    """
+    if facade_source == "gpu":
+        _require_facade_jobs()
+
+
+def _require_facade_jobs() -> None:
+    if not facade_jobs_configured():
+        raise http_exception(
+            503,
+            "3D facade generation is unavailable: facade-jobs is not "
+            "configured (set FACADE_JOBS_API).",
+        )
+
+
+async def submit_facade_job(
+    buildings: dict[str, Any],
+    *,
+    requested_by: str | None,
+    facade_style: str | None = None,
+    facade_style_name_ru: str | None = None,
+) -> dict[str, str]:
+    """Submit generated buildings to ``facade-jobs`` without waiting for GLB."""
+    _require_facade_jobs()
+    style = resolve_facade_style(facade_style, name_ru=facade_style_name_ru)
+    style_by_zone = build_style_by_zone(buildings, style)
+
+    try:
+        async with build_facade_jobs_client() as client:
+            job = await client.submit_job(
+                buildings,
+                requested_by=requested_by,
+                style_by_zone=style_by_zone,
+            )
+    except FacadeJobsError as exc:
+        if exc.status_code == 0 or exc.status_code == 503:
+            status_code = 503
+        elif exc.status_code >= 500:
+            status_code = 502
+        else:
+            status_code = exc.status_code
+        raise http_exception(
+            status_code,
+            "Could not queue 3D facade generation.",
+            detail=exc.body,
+        ) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise http_exception(503, str(exc)) from exc
+
+    return {
+        "status": "queued",
+        "job_id": job["job_id"],
+        "status_url": job["status_url"],
+        "facade_style": style.name_ru,
+    }
+
+
+async def _library_scene_or_none(
+    buildings: dict[str, Any],
+    style: FacadeStyle,
+    style_by_zone: dict[str, str],
+    *,
+    allow_gpu: bool,
+) -> dict[str, Any] | None:
+    """Build and store a library scene; ``None`` hands the request to facade-jobs."""
+    settings = get_settings()
+    try:
+        scene = await build_library_scene(
+            buildings,
+            style_by_zone=style_by_zone,
+            library=get_facade_library(),
+            pixels_per_meter=settings.facade_library_pixels_per_meter,
+            allow_nearest=not allow_gpu,
+            max_walls=settings.facade_library_max_walls,
+        )
+    except FacadeTemplateMiss as exc:
+        logger.info("Facade library miss, falling back to facade-jobs: {}", exc)
+        return None
+    except SceneTooLarge as exc:
+        if facade_jobs_configured():
+            logger.info("Facade library scene too large, using facade-jobs: {}", exc)
+            return None
+        raise http_exception(413, "Too many buildings for 3D facade generation.") from exc
+    except FacadeLibraryUnavailable as exc:
+        logger.warning("Facade library unavailable: {}", exc)
+        if allow_gpu:
+            return None
+        raise http_exception(503, "3D facade library is unavailable.") from exc
+    except EmptyScene as exc:
+        raise http_exception(
+            422, "Generated buildings have no walls for a 3D scene."
+        ) from exc
+    except FacadeAssemblyError as exc:
+        logger.error("Facade library assembly failed: {}", exc)
+        raise http_exception(500, "Could not assemble the 3D facade scene.") from exc
+
+    try:
+        return await asyncio.to_thread(
+            store_scene,
+            get_object_storage(),
+            scene,
+            style_by_zone=style_by_zone,
+            facade_style=style.name_ru,
+        )
+    except ObjectStorageError as exc:
+        logger.error("Could not store the 3D facade scene: {}", exc)
+        raise http_exception(503, "Could not store the 3D facade scene.") from exc
+
+
+def _requested_facade_style(
+    facade_style: str | None, facade_style_name_ru: str | None
+) -> FacadeStyle:
+    """Resolve a style, recognising a preset sent as its English prompt plus Russian name."""
+    if facade_style_name_ru:
+        named = resolve_facade_style(facade_style_name_ru)
+        if named.source == "preset" and named.prompt == (facade_style or "").strip():
+            return named
+    return resolve_facade_style(facade_style, name_ru=facade_style_name_ru)
+
+
+async def produce_facade_scene(
+    buildings: dict[str, Any],
+    *,
+    requested_by: str | None,
+    facade_style: str | None,
+    facade_source: FacadeSource,
+    facade_style_name_ru: str | None = None,
+) -> dict[str, Any]:
+    """Return a ready library scene or a queued facade-jobs handle.
+
+    ``gpu`` always queues. ``library`` answers from cached sections, borrowing
+    the nearest section of the same style on a miss. ``library_then_gpu``
+    queues the whole request on any miss. Free-text styles have no sections
+    and always queue.
+    """
+    if facade_source == "gpu":
+        return await submit_facade_job(
+            buildings,
+            requested_by=requested_by,
+            facade_style=facade_style,
+            facade_style_name_ru=facade_style_name_ru,
+        )
+
+    style = _requested_facade_style(facade_style, facade_style_name_ru)
+    style_by_zone = library_style_by_zone(buildings, style)
+    if style_by_zone is None:
+        if not facade_jobs_configured():
+            raise http_exception(
+                422,
+                "Free-text facade styles need facade-jobs, which is not configured. "
+                "Choose a preset style.",
+                detail={"presets": list(FACADE_STYLE_NAMES_RU)},
+            )
+        return await submit_facade_job(
+            buildings,
+            requested_by=requested_by,
+            facade_style=facade_style,
+            facade_style_name_ru=facade_style_name_ru,
+        )
+
+    ready = await _library_scene_or_none(
+        buildings,
+        style,
+        style_by_zone,
+        allow_gpu=facade_source == "library_then_gpu",
+    )
+    if ready is not None:
+        return ready
+    return await submit_facade_job(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_style_name_ru=facade_style_name_ru,
+    )
+
+
+async def produce_chat_facade_scene(
+    buildings: dict[str, Any],
+    *,
+    requested_by: str | None,
+    facade_style: str | None,
+    facade_style_name_ru: str | None,
+) -> dict[str, Any]:
+    """Produce the chat's 3D scene from the library, queueing misses when facade-jobs exists."""
+    facade_source: FacadeSource = (
+        "library_then_gpu" if facade_jobs_configured() else "library"
+    )
+    return await produce_facade_scene(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_source=facade_source,
+        facade_style_name_ru=facade_style_name_ru,
+    )
+
+
+async def generate_3d_by_scenario(
+    *,
+    scenario_id: int,
+    year: int,
+    source: str,
+    functional_zone_types: list[str],
+    physical_object_id: Optional[list[int]],
+    token: str,
+    requested_by: str | None,
+    facade_style: str | None,
+    targets_by_zone: Optional[dict[str, dict[str, Any]]],
+    generation_parameters: Optional[dict[str, Any]],
+    facade_source: FacadeSource | None = None,
+) -> dict[str, Any]:
+    source = _effective_facade_source(facade_source)
+    _require_facade_backend(source)
+    buildings = await generate_by_scenario(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        functional_zone_types=functional_zone_types,
+        physical_object_id=physical_object_id,
+        token=token,
+        targets_by_zone=targets_by_zone,
+        generation_parameters=generation_parameters,
+    )
+    return await produce_facade_scene(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_source=source,
+    )
+
+
+async def generate_3d_by_territory(
+    payload: TerritoryRequest,
+    *,
+    requested_by: str | None = None,
+    facade_style: str | None = None,
+    facade_source: FacadeSource | None = None,
+) -> dict[str, Any]:
+    source = _effective_facade_source(facade_source)
+    _require_facade_backend(source)
+    buildings = await generate_by_territory(payload)
+    return await produce_facade_scene(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_source=source,
+    )
+
+
+async def generate_3d_by_blocks(
+    *,
+    scenario_id: int,
+    year: int,
+    source: str,
+    functional_zone_types: list[str],
+    physical_object_id: Optional[list[int]],
+    token: str,
+    requested_by: str | None,
+    facade_style: str | None,
+    body: FunctionalZonesRequest,
+    facade_source: FacadeSource | None = None,
+) -> dict[str, Any]:
+    source = _effective_facade_source(facade_source)
+    _require_facade_backend(source)
+    buildings = await generate_by_blocks(
+        scenario_id=scenario_id,
+        year=year,
+        source=source,
+        functional_zone_types=functional_zone_types,
+        physical_object_id=physical_object_id,
+        token=token,
+        body=body,
+    )
+    return await produce_facade_scene(
+        buildings,
+        requested_by=requested_by,
+        facade_style=facade_style,
+        facade_source=source,
+    )
+
+
 async def estimate_max_residents_by_blocks(
     *,
     scenario_id: int,
@@ -574,5 +887,9 @@ __all__ = [
     "list_functional_zones",
     "load_existing_buildings",
     "estimate_capacity_by_blocks",
+    "submit_facade_job",
+    "generate_3d_by_scenario",
+    "generate_3d_by_territory",
+    "generate_3d_by_blocks",
     "estimate_max_residents_by_blocks",
 ]

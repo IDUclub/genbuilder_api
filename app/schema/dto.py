@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Union, Annotated
+from typing import Any, Dict, Literal, Optional, Union, Annotated
 
 from geojson_pydantic import Feature, FeatureCollection, Polygon, MultiPolygon
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
@@ -471,6 +471,83 @@ class BuildingFeatureCollection(BaseModel):
     }
 
 
+class FacadeJobAccepted(BaseModel):
+    """Handle returned after asynchronous 3D facade generation is queued."""
+
+    status: Literal["queued"] = Field(
+        default="queued", description="Always `queued`: poll `status_url` for the GLB"
+    )
+    job_id: str = Field(..., description="Facade generation job identifier")
+    status_url: str = Field(..., description="URL to poll for job status and result")
+    facade_style: str = Field(
+        ...,
+        description=(
+            "Applied Russian preset name or the original free-text style label"
+        ),
+        examples=["Кирпичный"],
+    )
+
+
+class SceneOrigin(BaseModel):
+    """WGS84 point that the scene's local (0, 0, 0) corresponds to."""
+
+    lon: float = Field(..., description="Longitude of the scene origin")
+    lat: float = Field(..., description="Latitude of the scene origin")
+
+
+class FacadeSceneStats(BaseModel):
+    buildings: int = Field(..., ge=0)
+    wall_instances: int = Field(..., ge=0)
+    floor_instances: int = Field(
+        ..., ge=0, description="Floor pieces stacked onto all walls"
+    )
+    template_count: int = Field(..., ge=0)
+    nearest_substitutions: int = Field(
+        ...,
+        ge=0,
+        description="Walls textured with the nearest section of the style instead of an exact match",
+    )
+
+
+class FacadeSceneReady(BaseModel):
+    """3D scene assembled synchronously from the facade section library."""
+
+    status: Literal["ready"] = Field(default="ready")
+    result_id: str = Field(..., description="Stored scene identifier (uuid4 hex)")
+    glb_url: str = Field(
+        ...,
+        description="Relative URL streaming the GLB; needs the same bearer token",
+        examples=["/facade-scenes/0123456789abcdef0123456789abcdef.glb"],
+    )
+    origin: SceneOrigin
+    facade_style: str = Field(..., examples=["Стеклянный"])
+    style_by_zone: Dict[str, str] = Field(
+        ...,
+        description="Library style id applied to each functional zone",
+        examples=[{"residential": "contemporary", "business": "glass"}],
+    )
+    source: Literal["library"] = Field(default="library")
+    stats: FacadeSceneStats
+
+
+FacadeSceneResult = Annotated[
+    FacadeSceneReady | FacadeJobAccepted, Field(discriminator="status")
+]
+
+
+class FacadeStyleSummary(BaseModel):
+    style_id: str = Field(..., examples=["brick"])
+    name_ru: str = Field(..., examples=["Кирпичный"])
+    floor_groups: list[str] = Field(
+        ..., description="Floor groups that have a preview", examples=[["low", "medium", "high"]]
+    )
+    preview_url: Optional[str] = Field(
+        default=None,
+        description="Relative URL of the preview GLB; add `?floor_group=` to pick one",
+        examples=["/facade-styles/brick/preview.glb"],
+    )
+
+
 class FunctionalZoneGenerationConfig(BaseModel):
     functional_zone_id: int = Field(..., description="Functional zone ID")
     targets_by_zone: Dict[str, Dict[str, Any]] = Field(
@@ -616,4 +693,5 @@ __all__ = [
     "FunctionalZonesRequest",
     "ExistingBuildingFeature",
     "ExistingBuildingsFeatureCollection",
+    "FacadeJobAccepted",
 ]

@@ -86,9 +86,10 @@
 
 ## 1. Авторизация
 
-Все эндпоинты требуют **HTTP Bearer**-токен. Теперь это **Keycloak**-токен
-пользователя (realm `IDU`); бэкенд проверяет подпись, срок действия и издателя
-по JWKS realm-а.
+Все эндпоинты, кроме legacy `/generate/by_territory` и его точного 3D-зеркала
+`/generate/3d/by_territory`, требуют **HTTP Bearer**-токен. Теперь это
+**Keycloak**-токен пользователя (realm `IDU`); бэкенд проверяет подпись, срок
+действия и издателя по JWKS realm-а.
 
 ```
 Authorization: Bearer <keycloak_access_token>
@@ -802,6 +803,217 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 `source`, `functional_zone_types[]`, `functional_zone_ids[]`.
 → `{ <functional_zone_id>: <residents> }`.
 
+<a id="3d-фасады"></a>
+
+### 3D-фасады
+
+Три эндпоинта полностью повторяют параметры соответствующей обычной
+генерации, но вместо `FeatureCollection` возвращают либо готовую сцену из
+библиотеки фасадов (`200`, `status: "ready"`), либо задачу в очереди
+`facade-jobs` (`202`, `status: "queued"`). Какой вариант придёт, зависит от
+параметра `facade_source` (см. ниже); различать ответы нужно по полю `status`.
+
+| 3D-эндпоинт | Повторяет |
+|---|---|
+| `POST /generate/3d/by_scenario` | `/generate/by_scenario` |
+| `POST /generate/3d/by_blocks` | `/generate/by_blocks` |
+| `POST /generate/3d/by_territory` | `/generate/by_territory` |
+
+У каждой 3D-ручки есть дополнительный необязательный query-параметр
+`facade_style`. Он принимает русское имя встроенного стиля или произвольный
+английский prompt, например `кирпичный`, `glass` или
+`warm sandstone facade with arched windows`. Если его не передать, каждая
+функциональная зона получает свой стиль по умолчанию.
+
+```json
+{
+  "status": "queued",
+  "job_id": "01K2...",
+  "status_url": "https://facades.example.com/jobs/01K2...",
+  "facade_style": "Кирпичный"
+}
+```
+
+`facade_style` в ответе — нормализованное русское имя встроенного стиля,
+пригодное для показа в интерфейсе. Для произвольного REST prompt возвращается
+его исходный текст; в чате LLM формирует русское отображаемое имя. Встроенные
+названия:
+
+| Русское имя | Допустимые варианты |
+|---|---|
+| Современный | `современный`, `modern`, `contemporary` |
+| Классический | `классический`, `классика`, `classic` |
+| Неоклассический | `неоклассический`, `неоклассика`, `neoclassical` |
+| Модерн | `модерн`, `ар-нуво`, `art nouveau` |
+| Кирпичный | `кирпичный`, `кирпич`, `brick` |
+| Стеклянный | `стеклянный`, `стекло`, `glass` |
+| Индустриальный | `индустриальный`, `промышленный`, `industrial` |
+| Минималистичный | `минималистичный`, `минимализм`, `minimalist` |
+| Скандинавский | `скандинавский`, `сканди`, `scandinavian` |
+| Лофт | `лофт`, `loft` |
+| Деревянный | `деревянный`, `дерево`, `wood`, `timber` |
+
+Произвольный текст тоже допустим в чате, в том числе на русском. Для известных
+названий сервер использует фиксированный английский prompt; свободное описание
+из чата LLM переводит в короткий английский prompt для генератора текстур.
+
+GenBuilder сначала генерирует здания, затем ставит всю коллекцию квартала в
+очередь `facade-jobs`. По `status_url` нужно опрашивать состояние до
+`succeeded`, `failed` или `cancelled`; при успехе ответ job-сервиса содержит
+`result_url` на итоговый GLB. Сам запрос GenBuilder готовности GLB не ждёт.
+
+#### Библиотека фасадов и `facade_source`
+
+Для встроенных стилей сцену можно собрать сразу из заранее сгенерированных
+секций фасада, без GPU и без очереди. Источник задаёт query-параметр
+`facade_source`:
+
+| Значение | Поведение |
+|---|---|
+| `gpu` | Всегда задача в `facade-jobs`, ответ `202`. |
+| `library` | Сцена из библиотеки, ответ `200`. Если секции нужной этажности нет, берётся ближайшая по этажности секция того же стиля. |
+| `library_then_gpu` | `200`, если в библиотеке есть все секции; иначе весь запрос уходит в `facade-jobs` (`202`). Части из разных источников в одной сцене не смешиваются. |
+
+Если параметр не передан, используется серверный дефолт (`FACADE_SOURCE_DEFAULT`,
+по умолчанию `gpu`). Свободный prompt в библиотеке не представлен и всегда
+уходит в `facade-jobs`; если он не настроен, ответ `422` со списком встроенных
+стилей.
+
+Готовая сцена:
+
+```json
+{
+  "status": "ready",
+  "result_id": "0123456789abcdef0123456789abcdef",
+  "glb_url": "/facade-scenes/0123456789abcdef0123456789abcdef.glb",
+  "origin": {"lon": 30.31, "lat": 59.93},
+  "facade_style": "Кирпичный",
+  "style_by_zone": {"residential": "brick"},
+  "source": "library",
+  "stats": {"buildings": 42, "wall_instances": 510, "floor_instances": 3060, "template_count": 6, "nearest_substitutions": 0}
+}
+```
+
+`glb_url` скачивается с тем же `Authorization: Bearer`, что и остальные ручки.
+Модель задана в локальной метрической системе координат (Y вверх), её начало
+совпадает с точкой `origin` в WGS84. Ось X смотрит на восток, ось −Z на
+истинный север, метры считаются на сфере Web Mercator. Поэтому модель
+достаточно поставить в `origin` с масштабом `meterInMercatorCoordinateUnits()`
+без поворота, и она совпадёт с 2D-контурами зданий. Каждое здание — узел `gb_<id>` без
+геометрии; его дочерние узлы — стены `gb_<id>__wall_<n>` (тоже без геометрии)
+и крыша `gb_<id>__roof`. Стена собрана из этажей: узлы
+`gb_<id>__wall_<n>__floor_<k>`, `k = 0` — первый этаж. Этажей на стене
+столько же, сколько у здания. Каждый этаж ссылается на один из трёх общих
+мешей секции (`section_<i>__ground`, `section_<i>__typical`, `section_<i>__top`)
+и отличается только матрицей узла, поэтому размер файла почти не растёт с
+числом зданий и этажей. Узлов-этажей много (`stats.floor_instances`), и при
+большом квартале их стоит объединять на клиенте в `InstancedMesh` по имени
+меша. Сцены большего размера, чем
+`FACADE_LIBRARY_MAX_WALLS` стен, уходят в `facade-jobs`, а без него
+возвращается `413`.
+
+#### Превью стилей
+
+- `GET /facade-styles` — список всех встроенных стилей: `style_id`, `name_ru`,
+  доступные `floor_groups` превью и `preview_url` (или `null`, если превью ещё
+  нет).
+- `GET /facade-styles/{style_id}/preview.glb?floor_group=low|medium|high` —
+  вращаемый бокс 12×12 м, обтянутый секцией стиля (по умолчанию `medium`).
+  Авторизация не нужна; ответ отдаётся с `ETag` и
+  `Cache-Control: public, max-age=3600`, повторный запрос с `If-None-Match`
+  получает `304`. Для стиля без превью — `404`.
+- `GET /facade-styles/gallery.glb?floor_group=low|medium|high` — один GLB со
+  всеми стилями сразу, чтобы переключать стиль в окне просмотра без новой
+  загрузки. Все боксы стоят в одной точке (начало координат) в порядке списка
+  `/facade-styles`, каждый — отдельный узел `style_<style_id>` (например,
+  `style_brick`). Сразу после загрузки видны все стили друг в друге: клиент
+  оставляет `visible` только у выбранного узла и скрывает остальные, а при
+  выборе другого стиля просто переключает видимость. Стили без превью в этой
+  группе этажей пропускаются. Кэширование то же (`ETag`, `304`); если превью
+  нет ни у одного стиля — `404`, если библиотека недоступна — `503`.
+
+Пример окна просмотра галереи на three.js: загрузить GLB один раз, собрать
+узлы стилей и дать пользователю крутить модель мышью. Все превью одного
+размера и стоят в одной точке, поэтому камеру настраивают один раз — при смене
+стиля ракурс сохраняется. Текстуры лежат внутри GLB, переключение и вращение
+сетевых запросов не делают. Материалы неметаллические (`metallicFactor = 0`),
+карта окружения не нужна — хватает обычного освещения.
+
+```js
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.6));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enablePan = false;            // модель не утащить из кадра
+controls.minDistance = 15;             // интерьера нет, внутрь не пускаем
+controls.maxDistance = 80;
+controls.maxPolarAngle = Math.PI / 2;  // не заглядывать под землю
+controls.autoRotate = true;            // по желанию
+
+const styles = {};
+const gltf = await new GLTFLoader().loadAsync(
+  "/facade-styles/gallery.glb?floor_group=medium",
+);
+// GLTFLoader убирает "/" из имён дочерних узлов, корневые style_<id> целы.
+gltf.scene.traverse((node) => {
+  if (node.name.startsWith("style_") && !node.name.includes("preview")) {
+    styles[node.name.slice("style_".length)] = node;
+  }
+});
+scene.add(gltf.scene);
+
+function selectStyle(styleId) {
+  for (const [id, node] of Object.entries(styles)) node.visible = id === styleId;
+  // центр здания (основание в 0, высота ~20 м) — точка вращения камеры
+  new THREE.Box3().setFromObject(styles[styleId]).getCenter(controls.target);
+}
+
+selectStyle("brick");
+// в цикле рендера: controls.update(); renderer.render(scene, camera);
+```
+
+`style_id` из этого списка можно передавать в `facade_style` как есть.
+
+Для чата используется `POST /generate/chat/stream/3d` с теми же multipart-
+полями, что у `/generate/chat/stream`, и необязательным form-полем
+`facade_style`. Стиль можно передать этим полем или написать прямо в
+`user_query`, например «сделай фасады в скандинавском стиле». Явное form-поле
+имеет приоритет. Поток остаётся совместимым с обычным и после
+`result`/текстового описания получает одно дополнительное событие перед `done`.
+
+В 3D-потоке события `status` и `result` содержат русское поле
+`facade_style`; `result` дополнительно содержит фактический английский
+`facade_style_prompt`. В обычном `/generate/chat/stream` этих полей нет.
+
+Пресетные стили и стиль по умолчанию собираются из библиотеки фасадов сразу,
+без очереди. Тогда приходит `facade_scene` с тем же payload, что и у
+`/generate/3d/*` со `status: "ready"`:
+
+```text
+event: facade_scene
+data: {"status":"ready","result_id":"0123...","glb_url":"/facade-scenes/0123....glb","origin":{"lon":30.05,"lat":60.05},"facade_style":"Кирпичный","style_by_zone":{"residential":"brick"},"source":"library","stats":{...}}
+```
+
+`glb_url` скачивается так же, как описано выше для готовой сцены. Если в
+библиотеке нет подходящей секции или стиль задан свободным текстом, а
+`facade-jobs` настроен, вместо этого приходит задача в очереди:
+
+```text
+event: facade_job
+data: {"status":"queued","job_id":"01K2...","status_url":"https://facades.example.com/jobs/01K2...","facade_style":"Скандинавский"}
+```
+
+Фронтенду достаточно смотреть на имя события (или на `status` в payload).
+Без `facade-jobs` библиотека подставляет ближайшую секцию того же стиля, а
+свободный стиль недоступен. Если сцену получить не удалось (свободный стиль
+без `facade-jobs`, библиотека или очередь недоступны), приходит
+`event: error` с `stage: "facade_job"`, затем обычный `done`; полученный ранее
+2D-результат остаётся валидным. Сам эндпоинт больше не отвечает `503`, когда
+`facade-jobs` не настроен.
+
 **Структура `targets_by_zone`** (общая для body классических эндпоинтов):
 
 ```json
@@ -890,6 +1102,8 @@ Body (`FunctionalZonesRequest`): список `zones` с `functional_zone_id` и
 | `404` | Не найдены функциональные зоны/сценарий (классические эндпоинты); слой недоступен или истёк (`/files/{slot}/{result_id}`) |
 | `401` | Битый/просроченный токен на `/layers/functional_zones` и `/files/{slot}/{result_id}` |
 | `503` | LLM-бэкенд не сконфигурирован (`LLM_API` / `Chat_Model`) — только чат-режим |
+| `502` | `facade-jobs` ответил внутренней ошибкой — только 3D-режим |
+| `503` | `facade-jobs` не настроен или недоступен — только 3D-режим |
 
 В чат-режиме нефатальные проблемы приходят **внутри потока** событием `warning`
 (генерация продолжается), фатальные — событием `error` с последующим `done`. HTTP-код

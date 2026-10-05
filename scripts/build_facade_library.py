@@ -1,0 +1,479 @@
+"""Fill the facade library in MinIO and build the style preview boxes.
+
+Usage (on a machine that reaches both MinIO and the GPU host, e.g. over VPN)::
+
+    python scripts/build_facade_library.py check
+    python scripts/build_facade_library.py prewarm --styles brick glass
+    python scripts/build_facade_library.py previews
+    python scripts/build_facade_library.py all --dry-run
+
+Storage comes from the same FILESERVER_* variables as the service. The local
+HTTP(S)_PROXY is ignored for Facades-3D requests because it breaks the tunnel
+to the GPU hosts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import struct
+import sys
+import time
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import httpx
+
+from app.infrastructure.object_storage import (
+    LocalStorage,
+    MinioStorage,
+    ObjectNotFoundError,
+    ObjectStorage,
+    ObjectStorageError,
+    get_object_storage,
+)
+from app.logic.facade_library.catalog import (
+    FacadeLibraryUnavailable,
+    FacadeTemplateLibrary,
+    FacadeTemplateMiss,
+    resolve_section,
+)
+from app.logic.facade_library.models import (
+    PREVIEW_FLOOR_GROUPS,
+    REPRESENTATIVE_FLOORS,
+    FacadeLibraryManifest,
+    FacadeSection,
+    PreviewFloorGroup,
+    StylePreview,
+    StylePreviewIndex,
+    canonical_style_key,
+)
+from app.logic.facade_library.previews import (
+    PREVIEW_WIDTH_M,
+    build_preview_glb,
+    preview_etag,
+)
+from app.logic.facade_library.results import GLB_MIME_TYPE, SCENE_KEY_PREFIX
+from app.logic.facade_styles import PRESETS_BY_ID, library_prompt
+
+STYLE_IDS = sorted(PRESETS_BY_ID)
+DEFAULT_WIDTHS = (6.0, 9.0, 12.0, 18.0, 24.0)
+GENERATION_TIMEOUT_S = 2700
+BUSY_RETRIES = 5
+MAX_BACKOFF_S = 60
+SEED_BASE = 8400
+DEFAULT_SECTION_FLOORS = 8
+DEFAULT_SECTION_FLOOR_HEIGHT_M = 4.0
+DEFAULT_VARIANTS = 3
+MAX_VARIANTS = 9
+MAX_WIDTHS = 10
+
+
+def canonical_wall_obj(width_m: float, height_m: float) -> bytes:
+    # The -Z face normal makes Facades-3D's placement rotation equal to zero.
+    return (
+        "o facade_template\n"
+        "v 0.0000 0.0000 0.0000\n"
+        f"v 0.0000 {height_m:.4f} 0.0000\n"
+        f"v {width_m:.4f} {height_m:.4f} 0.0000\n"
+        f"v {width_m:.4f} 0.0000 0.0000\n"
+        "f 1 2 3 4\n"
+    ).encode()
+
+
+def validate_glb(payload: bytes) -> None:
+    if len(payload) < 12 or payload[:4] != b"glTF":
+        raise RuntimeError("Facades-3D response is not a GLB")
+    declared_length = struct.unpack_from("<I", payload, 8)[0]
+    if declared_length != len(payload):
+        raise RuntimeError(
+            f"truncated GLB: header declares {declared_length}, received {len(payload)}"
+        )
+
+
+def section_seed(style_id: str, width_index: int, variant: int) -> int:
+    return SEED_BASE + STYLE_IDS.index(style_id) * 100 + variant * 10 + width_index
+
+
+def size_key(width_m: float, height_m: float) -> str:
+    return f"w{round(width_m * 100):04d}-h{round(height_m * 100):04d}"
+
+
+def section_object_key(
+    prefix: str, style_id: str, width_m: float, height_m: float, variant: int
+) -> str:
+    # Variant 0 keeps the key the library was first filled with.
+    folder = f"{prefix}/styles/{style_id}/{size_key(width_m, height_m)}"
+    if variant == 0:
+        return f"{folder}/wall.glb"
+    return f"{folder}/v{variant}/wall.glb"
+
+
+def load_manifest(storage: ObjectStorage, key: str) -> FacadeLibraryManifest:
+    try:
+        return FacadeLibraryManifest.model_validate_json(storage.get_bytes(key))
+    except ObjectNotFoundError:
+        return FacadeLibraryManifest()
+
+
+def open_storage(local_root: str | None) -> ObjectStorage:
+    if local_root is not None:
+        return LocalStorage(local_root)
+    storage = get_object_storage()
+    if not isinstance(storage, MinioStorage):
+        raise SystemExit(
+            "FILESERVER_* variables are not set; refusing to write the library to local disk "
+            "(pass --local-root to do that on purpose)"
+        )
+    return storage
+
+
+def generate_wall(
+    client: httpx.Client,
+    *,
+    prompt: str,
+    width_m: float,
+    height_m: float,
+    pixels_per_meter: int,
+    seed: int,
+) -> bytes:
+    data = {
+        "prompt": prompt,
+        "cluster_count": "1",
+        "pixels_per_meter": str(pixels_per_meter),
+        "seed": str(seed),
+        "max_wall_aspect_ratio": "100",
+    }
+    files = {
+        "input_model": (
+            "facade-template.obj",
+            canonical_wall_obj(width_m, height_m),
+            "text/plain",
+        )
+    }
+    for attempt in range(BUSY_RETRIES):
+        response = client.post("/generate", data=data, files=files)
+        if response.status_code < 400:
+            validate_glb(response.content)
+            return response.content
+        if response.status_code != 503 or attempt == BUSY_RETRIES - 1:
+            raise RuntimeError(
+                f"Facades-3D returned {response.status_code}: {response.text[:1000]}"
+            )
+        time.sleep(min(5 * 2**attempt, MAX_BACKOFF_S))
+    raise RuntimeError("Facades-3D stayed busy")
+
+
+def run_check(storage: ObjectStorage, prefix: str) -> None:
+    """Probe write and read access; delete is optional because nothing requires it."""
+    for folder in (prefix, SCENE_KEY_PREFIX):
+        key = f"{folder}/.write-probe"
+        storage.put_bytes(b"probe", key, "application/octet-stream")
+        if storage.get_bytes(key) != b"probe":
+            raise RuntimeError(f"read-back mismatch for {key}")
+        print(f"ok: write/read under {folder}/")
+        try:
+            storage.delete(key)
+        except ObjectStorageError as exc:
+            print(f"warning: cannot delete {key}, the probe object stays: {exc}")
+
+
+def _identity(section: FacadeSection) -> tuple[str, float, int, int]:
+    return section.style_id, section.width_m, section.pixels_per_meter, section.variant
+
+
+def run_prewarm(storage: ObjectStorage, args: argparse.Namespace) -> None:
+    manifest_key = f"{args.prefix}/manifest.json"
+    manifest = load_manifest(storage, manifest_key)
+    existing = {_identity(item) for item in manifest.sections}
+    with httpx.Client(
+        base_url=args.facades_url.rstrip("/"),
+        timeout=httpx.Timeout(GENERATION_TIMEOUT_S),
+        trust_env=False,
+    ) as api:
+        for variant in range(args.variants):
+            for style_id in args.styles:
+                for width_index, width_m in enumerate(args.widths):
+                    section = _planned_section(
+                        args,
+                        style_id=style_id,
+                        width_m=width_m,
+                        variant=variant,
+                        seed=section_seed(style_id, width_index, variant),
+                    )
+                    label = f"{style_id}/{width_m:g}m/v{variant}"
+                    if _identity(section) in existing and not args.force:
+                        print(f"skip {label}: already present")
+                        continue
+                    if args.dry_run:
+                        print(
+                            f"would generate {label} "
+                            f"({width_m:g}x{section.height_m:g} m)"
+                        )
+                        continue
+                    manifest = _generate_section(
+                        api,
+                        storage,
+                        manifest,
+                        manifest_key=manifest_key,
+                        section=section,
+                    )
+                    existing.add(_identity(section))
+    print(f"manifest: {manifest_key} ({len(manifest.sections)} sections)")
+
+
+def _planned_section(
+    args: argparse.Namespace,
+    *,
+    style_id: str,
+    width_m: float,
+    variant: int,
+    seed: int,
+) -> FacadeSection:
+    preset = PRESETS_BY_ID[style_id]
+    prompt = library_prompt(preset)
+    height_m = args.section_floors * args.section_floor_height
+    return FacadeSection(
+        object_key=section_object_key(
+            args.prefix, style_id, width_m, height_m, variant
+        ),
+        style_id=style_id,
+        style_name_ru=preset.name_ru,
+        style_key=canonical_style_key(prompt),
+        prompt=prompt,
+        section_floors=args.section_floors,
+        section_floor_height_m=args.section_floor_height,
+        width_m=width_m,
+        height_m=height_m,
+        pixels_per_meter=args.pixels_per_meter,
+        seed=seed,
+        variant=variant,
+        glb_size_bytes=1,
+    )
+
+
+def _generate_section(
+    api: httpx.Client,
+    storage: ObjectStorage,
+    manifest: FacadeLibraryManifest,
+    *,
+    manifest_key: str,
+    section: FacadeSection,
+) -> FacadeLibraryManifest:
+    started = time.monotonic()
+    print(f"generate {section.object_key}")
+    payload = generate_wall(
+        api,
+        prompt=section.prompt,
+        width_m=section.width_m,
+        height_m=section.height_m,
+        pixels_per_meter=section.pixels_per_meter,
+        seed=section.seed if section.seed is not None else SEED_BASE,
+    )
+    storage.put_bytes(payload, section.object_key, GLB_MIME_TYPE)
+    now = datetime.now(timezone.utc)
+    stored = section.model_copy(
+        update={"glb_size_bytes": len(payload), "generated_at": now}
+    )
+    updated = FacadeLibraryManifest(
+        sections=[
+            *(
+                item
+                for item in manifest.sections
+                if _identity(item) != _identity(stored)
+            ),
+            stored,
+        ],
+        updated_at=now,
+    )
+    storage.put_json(updated.model_dump(mode="json"), manifest_key)
+    elapsed = time.monotonic() - started
+    print(f"uploaded {section.object_key} ({len(payload)} bytes, {elapsed:.1f}s)")
+    return updated
+
+
+def pick_preview_section(
+    sections: Sequence[FacadeSection],
+    *,
+    style_id: str,
+    args: argparse.Namespace,
+) -> FacadeSection | None:
+    try:
+        return resolve_section(
+            [section for section in sections if section.variant == 0],
+            style_id=style_id,
+            width_m=PREVIEW_WIDTH_M,
+            pixels_per_meter=args.pixels_per_meter,
+            max_width_scale=args.max_width_scale,
+            allow_nearest=False,
+            variant_key=style_id,
+        )
+    except FacadeTemplateMiss:
+        return None
+
+
+async def run_previews(storage: ObjectStorage, args: argparse.Namespace) -> None:
+    library = FacadeTemplateLibrary(
+        storage,
+        prefix=args.prefix,
+        manifest_ttl_seconds=0.0,
+        max_width_scale=args.max_width_scale,
+    )
+    try:
+        manifest = await library.manifest()
+    except FacadeLibraryUnavailable as exc:
+        raise SystemExit(f"facade library manifest is unavailable: {exc}") from exc
+
+    previews: list[StylePreview] = []
+    for style_id in args.styles:
+        section = pick_preview_section(manifest.sections, style_id=style_id, args=args)
+        if section is None:
+            print(f"skip previews of {style_id}: no section near {PREVIEW_WIDTH_M:g} m")
+            continue
+        for group in PREVIEW_FLOOR_GROUPS:
+            if args.dry_run:
+                print(
+                    f"would build preview {style_id}/{group} from {section.object_key}"
+                )
+                continue
+            previews.append(
+                await _upload_preview(storage, library, section, group, args)
+            )
+    if args.dry_run:
+        return
+    index = StylePreviewIndex(previews=_merge_previews(storage, library, previews))
+    storage.put_json(index.model_dump(mode="json"), library.preview_index_key)
+    print(
+        f"preview index: {library.preview_index_key} ({len(index.previews)} previews)"
+    )
+
+
+async def _upload_preview(
+    storage: ObjectStorage,
+    library: FacadeTemplateLibrary,
+    section: FacadeSection,
+    group: PreviewFloorGroup,
+    args: argparse.Namespace,
+) -> StylePreview:
+    pieces = (await library.load_pieces([section]))[section.cache_key]
+    payload = build_preview_glb(
+        pieces,
+        width_m=PREVIEW_WIDTH_M,
+        floors=REPRESENTATIVE_FLOORS[group],
+        floor_height_m=args.floor_height,
+        name=f"preview_{section.style_id}",
+    )
+    key = library.preview_key(section.style_id, group)
+    storage.put_bytes(payload, key, GLB_MIME_TYPE)
+    print(f"uploaded {key} ({len(payload)} bytes)")
+    return StylePreview(
+        style_id=section.style_id,
+        style_name_ru=PRESETS_BY_ID[section.style_id].name_ru,
+        floor_group=group,
+        object_key=key,
+        etag=preview_etag(payload),
+        size_bytes=len(payload),
+    )
+
+
+def _merge_previews(
+    storage: ObjectStorage, library: FacadeTemplateLibrary, fresh: list[StylePreview]
+) -> list[StylePreview]:
+    try:
+        current = StylePreviewIndex.model_validate_json(
+            storage.get_bytes(library.preview_index_key)
+        ).previews
+    except ObjectNotFoundError:
+        current = []
+    replaced = {(item.style_id, item.floor_group) for item in fresh}
+    kept = [
+        item for item in current if (item.style_id, item.floor_group) not in replaced
+    ]
+    return [*kept, *fresh]
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Fill the facade library and its previews."
+    )
+    parser.add_argument("command", choices=["check", "prewarm", "previews", "all"])
+    parser.add_argument(
+        "--prefix", default=os.getenv("FACADE_LIBRARY_PREFIX", "facade-library/v2")
+    )
+    parser.add_argument(
+        "--facades-url", default=os.getenv("FACADES_3D_API", "http://a6k4.dgx:8030")
+    )
+    parser.add_argument("--styles", nargs="+", choices=STYLE_IDS, default=STYLE_IDS)
+    parser.add_argument("--widths", nargs="+", type=float, default=list(DEFAULT_WIDTHS))
+    parser.add_argument(
+        "--section-floors",
+        type=int,
+        default=DEFAULT_SECTION_FLOORS,
+        help="Floors ordered per section; Facades-3D draws one per 4 m of wall",
+    )
+    parser.add_argument(
+        "--section-floor-height", type=float, default=DEFAULT_SECTION_FLOOR_HEIGHT_M
+    )
+    parser.add_argument(
+        "--variants",
+        type=int,
+        default=DEFAULT_VARIANTS,
+        help="Sections per style and width, each with its own seed",
+    )
+    parser.add_argument(
+        "--floor-height",
+        type=float,
+        default=3.0,
+        help="Storey height of the preview boxes",
+    )
+    parser.add_argument(
+        "--pixels-per-meter",
+        type=int,
+        default=int(os.getenv("FACADE_LIBRARY_PPM", "32")),
+    )
+    parser.add_argument(
+        "--max-width-scale",
+        type=float,
+        default=float(os.getenv("FACADE_LIBRARY_MAX_WIDTH_SCALE", "2.5")),
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Regenerate existing sections"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="List the work, write nothing"
+    )
+    parser.add_argument(
+        "--local-root", default=None, help="Use a local directory instead of MinIO"
+    )
+    args = parser.parse_args(argv)
+    args.prefix = args.prefix.strip("/")
+    if any(width <= 0 for width in args.widths):
+        parser.error("all widths must be positive")
+    if args.section_floors < 3:
+        parser.error("--section-floors must be at least 3")
+    if not 1 <= args.variants <= MAX_VARIANTS:
+        parser.error(f"--variants must be between 1 and {MAX_VARIANTS}")
+    if len(args.widths) > MAX_WIDTHS:
+        parser.error(f"at most {MAX_WIDTHS} widths keep section seeds unique")
+    return args
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    storage = open_storage(args.local_root)
+    if args.command in {"check", "all"} and not args.dry_run:
+        run_check(storage, args.prefix)
+    if args.command in {"prewarm", "all"}:
+        run_prewarm(storage, args)
+    if args.command in {"previews", "all"}:
+        asyncio.run(run_previews(storage, args))
+
+
+if __name__ == "__main__":
+    main()

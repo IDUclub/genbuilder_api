@@ -138,7 +138,8 @@ def test_unexpected_failure_still_terminates_the_stream(monkeypatch):
     assert payloads[2]["chat_id"] == "chat-42"
 
 
-def test_territory_id_reaches_the_chat_stream(monkeypatch):
+@pytest.mark.parametrize("path", ["/generate/chat/stream", "/generate/chat/stream/3d"])
+def test_territory_id_reaches_the_chat_stream(monkeypatch, path):
     received: list[dict] = []
 
     async def _stream(**kwargs):
@@ -148,7 +149,7 @@ def test_territory_id_reaches_the_chat_stream(monkeypatch):
     client = _chat_client(monkeypatch, _stream)
 
     response = client.post(
-        "/generate/chat/stream",
+        path,
         data={"user_query": "5000", "territory_id": 47},
         files={"blocks_file": ("blocks.geojson", b'{"type": "FeatureCollection", "features": []}')},
     )

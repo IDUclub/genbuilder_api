@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,9 +51,28 @@ class Settings(BaseModel):
     fileserver_access_key: str = Field(default="", alias="FILESERVER_ACCESS_KEY")
     fileserver_secret_key: str = Field(default="", alias="FILESERVER_SECRET_KEY")
     fileserver_bucket_name: str = Field(default="", alias="FILESERVER_BUCKET_NAME")
-    fileserver_secure: bool = Field(default=False, alias="FILESERVER_SECURE")
+    fileserver_secure: bool = Field(default=True, alias="FILESERVER_SECURE")
     fileserver_region: str = Field(default="us-east-1", alias="FILESERVER_REGION")
     outputs_dir: str = Field(default="outputs", alias="OUTPUTS_DIR")
+
+    facade_source_default: Literal["gpu", "library", "library_then_gpu"] = Field(
+        default="gpu", alias="FACADE_SOURCE_DEFAULT"
+    )
+    facade_library_prefix: str = Field(
+        default="facade-library/v2", min_length=1, alias="FACADE_LIBRARY_PREFIX"
+    )
+    facade_library_pixels_per_meter: int = Field(
+        default=32, ge=1, alias="FACADE_LIBRARY_PPM"
+    )
+    facade_library_max_width_scale: float = Field(
+        default=2.5, gt=1.0, alias="FACADE_LIBRARY_MAX_WIDTH_SCALE"
+    )
+    facade_library_max_walls: int = Field(
+        default=5000, ge=1, alias="FACADE_LIBRARY_MAX_WALLS"
+    )
+    facade_library_manifest_ttl_seconds: float = Field(
+        default=300.0, ge=0.0, alias="FACADE_LIBRARY_MANIFEST_TTL_SECONDS"
+    )
 
     admin_api_token: str = Field(default="", alias="ADMIN_API_TOKEN")
     runtime_config_path: str = Field(
