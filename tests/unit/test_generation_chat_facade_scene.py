@@ -144,7 +144,7 @@ def test_ready_scene_glb_is_linked_from_the_chat_history(tmp_path):
 
     message = _assistant_message(storage)
     files = _file_parts(message)
-    assert [part["name"] for part in files] == ["buildings", "facade_scene"]
+    assert [part["name"] for part in files] == ["buildings", "report", "facade_scene"]
     assert files[-1] == {
         "url": SCENE_FILE["url"],
         "name": "facade_scene",
