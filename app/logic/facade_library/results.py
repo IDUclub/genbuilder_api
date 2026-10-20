@@ -5,11 +5,15 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from app.infrastructure.object_storage import ObjectStorage
-from app.logic.facade_library.scene import LibraryScene
+
+if TYPE_CHECKING:
+    # Type-only: the scene module pulls in trimesh, and the chat stream imports
+    # this module just for the URL and MIME helpers.
+    from app.logic.facade_library.scene import LibraryScene
 
 GLB_MIME_TYPE = "model/gltf-binary"
 SCENE_URL_PREFIX = "/facade-scenes"

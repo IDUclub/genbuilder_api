@@ -14,6 +14,9 @@ the layer itself. Two kinds exist, and the difference is deliberate:
 ``download_url`` is always ``None``: object storage sits on a private network,
 so bytes are streamed through the API rather than handed out as presigned URLs.
 
+The 3D facade scene is described the same way: a GLB stored by the facade
+library and served back by ``/facade-scenes/{result_id}.glb``.
+
 ``url`` is always a path relative to this service. The frontend prepends the
 base address it knows for ``source_service``: a host baked into chat history
 would be an internal address the browser behind the external proxy can't reach.
@@ -22,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlencode
+
+from app.logic.facade_library.results import GLB_MIME_TYPE, scene_url
 
 SOURCE_SERVICE = "genbuilder"
 MIME_TYPE = "application/geo+json"
@@ -107,6 +112,27 @@ def build_zones_layer(
         "download_url": None,
         "filename": "functional_zones.geojson",
         "mime_type": MIME_TYPE,
+        "source_service": SOURCE_SERVICE,
+    }
+
+
+FACADE_SCENE_LAYER_NAME = "facade_scene"
+
+
+def build_facade_scene_layer(*, result_id: str) -> dict[str, Any]:
+    """Descriptor for a library-built 3D scene (GLB) in object storage.
+
+    ``result_id`` is the scene's own id, not the id of the 2D layers of the
+    same run: the scene is stored under the facade library's key space.
+    """
+    return {
+        "name": FACADE_SCENE_LAYER_NAME,
+        "title": "3D-модель застройки",
+        "role": "result",
+        "url": scene_url(result_id),
+        "download_url": None,
+        "filename": f"{result_id}.glb",
+        "mime_type": GLB_MIME_TYPE,
         "source_service": SOURCE_SERVICE,
     }
 

@@ -982,7 +982,7 @@ selectStyle("brick");
 `facade_style`. Стиль можно передать этим полем или написать прямо в
 `user_query`, например «сделай фасады в скандинавском стиле». Явное form-поле
 имеет приоритет. Поток остаётся совместимым с обычным и после
-`result`/текстового описания получает одно дополнительное событие перед `done`.
+`result`/текстового описания получает дополнительные события сцены перед `done`.
 
 В 3D-потоке события `status` и `result` содержат русское поле
 `facade_style`; `result` дополнительно содержит фактический английский
@@ -997,6 +997,20 @@ event: facade_scene
 data: {"status":"ready","result_id":"0123...","glb_url":"/facade-scenes/0123....glb","origin":{"lon":30.05,"lat":60.05},"facade_style":"Кирпичный","style_by_zone":{"residential":"brick"},"source":"library","stats":{...}}
 ```
 
+Сразу за ним приходит `file` с дескриптором GLB — того же вида, что у слоёв
+`buildings`/`zones`:
+
+```text
+event: file
+data: {"name":"facade_scene","title":"3D-модель застройки","role":"result","url":"/facade-scenes/0123....glb","download_url":null,"filename":"0123....glb","mime_type":"model/gltf-binary","source_service":"genbuilder"}
+```
+
+Этот дескриптор сохраняется в истории чата как `file`-part ответа ассистента
+(после слоёв), а полный payload сцены, включая `origin` для привязки к карте, —
+в `metadata.facade_scene` того же сообщения. При повторном открытии чата сцену
+можно восстановить по part с `mime_type: "model/gltf-binary"` и
+`metadata.facade_scene.origin`.
+
 `glb_url` скачивается так же, как описано выше для готовой сцены. Если в
 библиотеке нет подходящей секции или стиль задан свободным текстом, а
 `facade-jobs` настроен, вместо этого приходит задача в очереди:
@@ -1005,6 +1019,10 @@ data: {"status":"ready","result_id":"0123...","glb_url":"/facade-scenes/0123....
 event: facade_job
 data: {"status":"queued","job_id":"01K2...","status_url":"https://facades.example.com/jobs/01K2...","facade_style":"Скандинавский"}
 ```
+
+Для задачи в очереди `file` не приходит: в историю попадает только payload
+задачи (`metadata.facade_scene` с `job_id`/`status_url`), сам GLB после
+готовности в чат не дописывается.
 
 Фронтенду достаточно смотреть на имя события (или на `status` в payload).
 Без `facade-jobs` библиотека подставляет ближайшую секцию того же стиля, а
