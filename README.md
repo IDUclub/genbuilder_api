@@ -145,3 +145,23 @@ mc ilm rule add --expire-days 30 <alias>/genbuilder
 The frontend must treat a `404` from `/files/{slot}/{result_id}` as an expected
 outcome when reading an old chat. See
 [the frontend API guide](docs/frontend-api-guide.md#5-геослои-подложка-и-ссылки-в-истории).
+
+## Текстовые отчёты сервиса
+
+После выполнения операции чат дополнительно возвращает событие `file` с
+`name: "report"`, `role: "report"`, `mime_type: "text/plain"`, `filename: "report.txt"`.
+Обычный текстовый ответ остаётся в потоке. Ссылка на отчёт сохраняется рядом с ним
+в истории ChatStorage как часть `kind: "file"`; содержимое файла в историю не копируется.
+
+Дескриптор содержит две долговечные ссылки относительно базы `source_service`:
+
+- `url`: `GET /reports/id` — UTF-8 текст для просмотра (`Content-Disposition: inline`).
+- `download_url`: тот же адрес с `?download=true` — скачивание (`attachment; filename="report.txt"`).
+
+В SSE `event: file` поля дескриптора находятся непосредственно в JSON `data`.
+Отчёт включает полный ответ, сводку застройки, целевые и достигнутые показатели по зонам, дефициты, параметры и замечания. Он формируется из результата генерации даже при сбое текстового резюме LLM.
+
+Фронтенду следует читать отчёт как текст, не как GeoJSON и не как HTML. Для показа
+достаточно `fetch(url).text()` и текстового компонента с сохранением переносов строк.
+Ссылки проходят через API сервиса: доступ к внутреннему MinIO браузеру не нужен.
+Запросы отчёта требуют тот же Bearer-токен, что и запросы слоёв. При сбое хранилища приходит `warning` с `stage: store_report`.

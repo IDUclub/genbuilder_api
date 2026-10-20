@@ -27,6 +27,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from app.logic.facade_library.results import GLB_MIME_TYPE, scene_url
+from app.service_reports import file_part
 
 SOURCE_SERVICE = "genbuilder"
 MIME_TYPE = "application/geo+json"
@@ -143,6 +144,8 @@ def geo_layer_to_file_part(layer: dict[str, Any]) -> dict[str, Any]:
     Stores only the durable ``url``. ``download_url`` is dropped on principle:
     it is ephemeral by contract and must never reach permanent chat history.
     """
+    if layer.get("role") == "report":
+        return file_part(layer)
     return {
         "url": layer["url"],
         "name": layer.get("name"),
