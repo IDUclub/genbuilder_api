@@ -25,7 +25,9 @@ ZONES_LAYER = {
             "properties": {"zone": "residential", "functional_zone_id": 11},
             "geometry": {
                 "type": "Polygon",
-                "coordinates": [[[30.0, 60.0], [30.1, 60.0], [30.1, 60.1], [30.0, 60.0]]],
+                "coordinates": [
+                    [[30.0, 60.0], [30.1, 60.0], [30.1, 60.1], [30.0, 60.0]]
+                ],
             },
         }
     ],
@@ -203,6 +205,7 @@ def test_scenario_zones_are_fetched_with_the_caller_token():
 
 def test_scenario_without_business_only_requires_and_generates_residential(tmp_path):
     """A missing business zone must not create a phantom demand requirement."""
+
     async def residential_only(_llm_client, *, user_query, la_per_person, model=None):
         return ExtractedTargets(
             targets_by_zone={"residents": {"residential": 5000}},
@@ -252,9 +255,7 @@ def test_explicit_residential_scope_does_not_ask_for_business(monkeypatch):
     assert _of_type(events, "clarification") == []
     assert builder.calls[0]["functional_zone_types"] == ["residential"]
     assert builder.calls[0]["targets_by_zone"]["residents"] == {"residential": 80}
-    assert builder.calls[0]["targets_by_zone"]["buildings_count"] == {
-        "residential": 1
-    }
+    assert builder.calls[0]["targets_by_zone"]["buildings_count"] == {"residential": 1}
 
 
 def test_zones_descriptor_is_a_live_query_not_a_stored_object():
@@ -382,9 +383,7 @@ def test_blocks_file_mode_keeps_the_zones_link_in_history(tmp_path):
 
 
 def test_blocks_file_zones_storage_failure_warns_and_generation_runs(tmp_path):
-    events, _ = _blocks_file_run(
-        tmp_path, object_storage=_BrokenStorage(str(tmp_path))
-    )
+    events, _ = _blocks_file_run(tmp_path, object_storage=_BrokenStorage(str(tmp_path)))
 
     warnings = [e for e in _of_type(events, "warning") if e["stage"] == "store_layer"]
     assert warnings
@@ -419,7 +418,16 @@ def test_both_slots_share_one_result_id(tmp_path):
         object_storage=LocalStorage(str(tmp_path)),
     )
 
-    assert len({_result_id(d) for d in _of_type(events, "file")}) == 1
+    assert (
+        len(
+            {
+                _result_id(d)
+                for d in _of_type(events, "file")
+                if d.get("role") != "report"
+            }
+        )
+        == 1
+    )
 
 
 def test_storage_failure_warns_and_the_stream_still_finishes(tmp_path):
@@ -453,7 +461,12 @@ def test_history_keeps_the_answer_and_the_layer_links(tmp_path):
     )
 
     assistant = _assistant_message(storage_client)
-    assert [part["kind"] for part in assistant["parts"]] == ["text", "file", "file"]
+    assert [part["kind"] for part in assistant["parts"]] == [
+        "text",
+        "file",
+        "file",
+        "file",
+    ]
     assert assistant["parts"][0]["payload"]["text"] == ANSWER
     urls = [part["payload"]["url"] for part in assistant["parts"][1:]]
     assert urls == [d["url"] for d in _of_type(events, "file")]
@@ -471,7 +484,13 @@ def test_persisted_file_parts_never_carry_an_ephemeral_download_url(tmp_path):
 
     assistant = _assistant_message(storage_client)
     for part in assistant["parts"][1:]:
-        assert "download_url" not in part["payload"]
+        if part["payload"].get("role") == "report":
+            assert (
+                part["payload"]["download_url"]
+                == part["payload"]["url"] + "?download=true"
+            )
+        else:
+            assert "download_url" not in part["payload"]
 
 
 def test_history_falls_back_to_plain_content_without_layers():
@@ -535,7 +554,9 @@ def test_project_less_mode_asks_about_existing_buildings_before_generating():
     events = _collect(**_project_less(builder=builder))
 
     clarification = _of_type(events, "clarification")[0]
-    question = [m for m in clarification["missing"] if m["field"] == "existing_buildings"][0]
+    question = [
+        m for m in clarification["missing"] if m["field"] == "existing_buildings"
+    ][0]
     assert question["optional"] is True
     assert question["alt_fields"] == ["buildings_file", "skip_existing_buildings"]
     assert builder.calls == []
@@ -544,7 +565,9 @@ def test_project_less_mode_asks_about_existing_buildings_before_generating():
 def test_declining_existing_buildings_generates_without_exclusion():
     builder = _FakeBuilder()
 
-    events = _collect(**_project_less(builder=builder, existing_buildings_declined=True))
+    events = _collect(
+        **_project_less(builder=builder, existing_buildings_declined=True)
+    )
 
     assert _of_type(events, "clarification") == []
     assert builder.calls[0]["existing_buildings"] is None
@@ -574,10 +597,14 @@ def test_non_polygonal_existing_buildings_are_dropped_with_a_warning():
         "features": [_building(30.002), _building(30.004, "Point")],
     }
 
-    events = _collect(**_project_less(builder=builder, existing_buildings_geojson=uploaded))
+    events = _collect(
+        **_project_less(builder=builder, existing_buildings_geojson=uploaded)
+    )
 
     warnings = [
-        e for e in _of_type(events, "warning") if e["stage"] == "load_existing_buildings"
+        e
+        for e in _of_type(events, "warning")
+        if e["stage"] == "load_existing_buildings"
     ]
     assert warnings and "1" in warnings[0]["detail"]
     passed = builder.calls[0]["existing_buildings"]["features"]
@@ -588,7 +615,9 @@ def test_existing_buildings_without_polygons_warn_and_generation_continues():
     builder = _FakeBuilder()
     uploaded = {"type": "FeatureCollection", "features": [_building(30.004, "Point")]}
 
-    events = _collect(**_project_less(builder=builder, existing_buildings_geojson=uploaded))
+    events = _collect(
+        **_project_less(builder=builder, existing_buildings_geojson=uploaded)
+    )
 
     assert _of_type(events, "clarification") == []
     assert builder.calls[0]["existing_buildings"] is None
@@ -642,7 +671,9 @@ class _FakeUrbanApi:
 
 
 def _services_warnings(events):
-    return [e for e in _of_type(events, "warning") if e["stage"] == "service_normatives"]
+    return [
+        e for e in _of_type(events, "warning") if e["stage"] == "service_normatives"
+    ]
 
 
 def test_file_mode_places_services_by_the_given_region():
@@ -670,7 +701,10 @@ def test_file_mode_takes_the_region_of_the_project():
 
     _collect(
         **_project_less(
-            builder=builder, existing_buildings_declined=True, project_id=120, urban_api=urban_api
+            builder=builder,
+            existing_buildings_declined=True,
+            project_id=120,
+            urban_api=urban_api,
         )
     )
 
@@ -681,7 +715,9 @@ def test_file_mode_takes_the_region_of_the_project():
 def test_file_mode_without_a_region_warns_that_services_are_skipped():
     builder = _FakeBuilder()
 
-    events = _collect(**_project_less(builder=builder, existing_buildings_declined=True))
+    events = _collect(
+        **_project_less(builder=builder, existing_buildings_declined=True)
+    )
 
     assert builder.calls[0]["territory_id"] is None
     assert len(_services_warnings(events)) == 1
@@ -692,12 +728,16 @@ def test_file_mode_without_a_region_uses_the_default_region():
     builder = _FakeBuilder()
 
     events = _collect(
-        **_project_less(builder=builder, existing_buildings_declined=True, default_territory_id=1)
+        **_project_less(
+            builder=builder, existing_buildings_declined=True, default_territory_id=1
+        )
     )
 
     assert builder.calls[0]["territory_id"] == 1
     assert _services_warnings(events) == []
-    notices = [e for e in _of_type(events, "status") if e.get("stage") == "service_normatives"]
+    notices = [
+        e for e in _of_type(events, "status") if e.get("stage") == "service_normatives"
+    ]
     assert len(notices) == 1
     assert "territory_id=1" in notices[0]["content"]
 
@@ -758,7 +798,10 @@ def test_a_failed_project_lookup_warns_and_generation_still_runs():
 
     events = _collect(
         **_project_less(
-            builder=builder, existing_buildings_declined=True, project_id=120, urban_api=urban_api
+            builder=builder,
+            existing_buildings_declined=True,
+            project_id=120,
+            urban_api=urban_api,
         )
     )
 
@@ -771,7 +814,9 @@ def test_normatives_that_did_not_load_are_reported():
     builder = _FakeBuilder(result={**GENERATED, "service_normatives_loaded": False})
 
     events = _collect(
-        **_project_less(builder=builder, existing_buildings_declined=True, territory_id=47)
+        **_project_less(
+            builder=builder, existing_buildings_declined=True, territory_id=47
+        )
     )
 
     warnings = _services_warnings(events)
@@ -832,7 +877,11 @@ class _HistoryChatStorage(_FakeChatStorage):
     async def get_chat(self, user_id, chat_id):
         return {
             "messages": [
-                {"role": m["role"], "content": m.get("content"), "metadata": m.get("metadata")}
+                {
+                    "role": m["role"],
+                    "content": m.get("content"),
+                    "metadata": m.get("metadata"),
+                }
                 for m in self.messages
             ]
         }
@@ -876,12 +925,17 @@ def test_the_residents_split_is_not_repeated_on_the_next_turn_of_a_chat(monkeypa
 
     def split_notices(events):
         return [
-            e for e in _of_type(events, "status") if "распределён" in str(e.get("content"))
+            e
+            for e in _of_type(events, "status")
+            if "распределён" in str(e.get("content"))
         ]
 
     first = _dialog_turn(storage, blocks_geojson=blocks)
     second = _dialog_turn(
-        storage, blocks_geojson=blocks, chat_id="chat-1", existing_buildings_declined=True
+        storage,
+        blocks_geojson=blocks,
+        chat_id="chat-1",
+        existing_buildings_declined=True,
     )
 
     assert len(split_notices(first)) == 1
@@ -902,10 +956,15 @@ def test_a_changed_notice_is_shown_again():
 
     _dialog_turn(storage)
     second = _dialog_turn(
-        storage, blocks_geojson=renamed, chat_id="chat-1", existing_buildings_declined=True
+        storage,
+        blocks_geojson=renamed,
+        chat_id="chat-1",
+        existing_buildings_declined=True,
     )
 
-    assert _zone_notices(second) == ["Тип зоны взят из атрибута «functional_zone_type_name»."]
+    assert _zone_notices(second) == [
+        "Тип зоны взят из атрибута «functional_zone_type_name»."
+    ]
 
 
 def test_the_shown_notices_are_recorded_on_the_assistant_turn():
@@ -914,11 +973,19 @@ def test_the_shown_notices_are_recorded_on_the_assistant_turn():
     _dialog_turn(storage)
 
     assistant = [m for m in storage.messages if m["role"] == "assistant"][-1]
-    assert "Тип зоны взят из атрибута «zone»." in assistant["metadata"]["reported_notices"]
+    assert (
+        "Тип зоны взят из атрибута «zone»." in assistant["metadata"]["reported_notices"]
+    )
 
 
 def test_notices_are_shown_on_every_turn_without_chat_history():
     first = _collect(**_project_less())
-    second = _collect(**_project_less(chat_id="chat-1", existing_buildings_declined=True))
+    second = _collect(
+        **_project_less(chat_id="chat-1", existing_buildings_declined=True)
+    )
 
-    assert _zone_notices(first) == _zone_notices(second) == ["Тип зоны взят из атрибута «zone»."]
+    assert (
+        _zone_notices(first)
+        == _zone_notices(second)
+        == ["Тип зоны взят из атрибута «zone»."]
+    )

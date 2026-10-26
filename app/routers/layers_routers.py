@@ -11,6 +11,7 @@ Two link kinds, deliberately different:
   presigned URL: object storage sits on a private network the browser cannot
   reach.
 """
+
 from __future__ import annotations
 
 import re
@@ -23,6 +24,7 @@ from app.exceptions.http_exception_wrapper import http_exception
 from app.infrastructure.object_storage import ObjectStorage, get_object_storage
 from app.logic.functional_zones_service import FunctionalZonesService
 from app.logic.geo_layers import FILE_SLOTS, MIME_TYPE, object_key
+from app.service_reports import stored_report_response
 from app.utils import auth
 
 layers_router = APIRouter()
@@ -42,7 +44,9 @@ def get_zones_service() -> FunctionalZonesService:
     summary="Functional zones layer for a scenario, as generation sees it",
 )
 async def functional_zones_layer(
-    scenario_id: Annotated[int, Query(..., ge=1, description="Scenario ID", examples=[198])],
+    scenario_id: Annotated[
+        int, Query(..., ge=1, description="Scenario ID", examples=[198])
+    ],
     year: Annotated[int, Query(..., description="Data year", examples=[2024])],
     source: Annotated[str, Query(..., description="Data source", examples=["OSM"])],
     functional_zone_types: Annotated[
@@ -100,3 +104,18 @@ def generation_file(
             "Content-Disposition": f'attachment; filename="{slot}.geojson"',
         },
     )
+
+
+@layers_router.get(
+    "/reports/{result_id}",
+    summary="Открыть или скачать текстовый отчёт",
+    response_model=None,
+)
+def service_report(
+    result_id: str,
+    download: bool = False,
+    token: str = Depends(auth.verify_token),
+    storage=Depends(get_object_storage),
+):
+
+    return stored_report_response(storage, result_id, download)

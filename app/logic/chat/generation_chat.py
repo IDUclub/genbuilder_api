@@ -84,6 +84,7 @@ from app.logic.generation_summary import summarize_buildings
 from app.schema.dto import BlockFeatureCollection
 from app.logic.chat.zone_detection import ZONE_TYPE_LABELS, detect_zones
 from app.logic.zone_taxonomy import normalize_zone
+from app.service_reports import store_report
 
 
 _POLYGONAL = {"Polygon", "MultiPolygon"}
@@ -953,6 +954,27 @@ async def stream_generation_chat(
             "message": "Не удалось сформировать текстовое описание результата.",
         }
     answer_text = "".join(collected).strip()
+
+    async for event in store_report(
+        object_storage,
+        "genbuilder",
+        "",
+        "Отчёт о генерации застройки",
+        answer_text or "Генерация застройки завершена.",
+        {
+            "summary": summary,
+            "parameters": extracted.targets_by_zone,
+            "warnings": reported,
+            "service_normatives_loaded": (
+                result.get("service_normatives_loaded")
+                if isinstance(result, dict)
+                else None
+            ),
+        },
+    ):
+        if event["type"] == "file":
+            file_layers.append(event)
+        yield event
 
     # 6.1 3D mode: produce the facade scene after the summary, so it is the last
     # useful payload, and before persisting, so its GLB link reaches history.
