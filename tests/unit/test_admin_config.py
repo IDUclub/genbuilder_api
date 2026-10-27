@@ -18,7 +18,7 @@ def runtime_env(monkeypatch, tmp_path):
     )
     monkeypatch.setenv("RUNTIME_CONFIG_SYNC_TTL_SECONDS", "0.1")
     monkeypatch.setenv("ADMIN_API_TOKEN", "local-admin-secret")
-    monkeypatch.setenv("LLM_API", "http://original-llm:8000")
+    monkeypatch.setenv("VLLM_BASE_URL", "http://original-llm:8000")
     monkeypatch.setenv("UrbanDB_YEAR", "2024")
     runtime._applied.clear()
     runtime._baseline.clear()
@@ -34,18 +34,18 @@ def runtime_env(monkeypatch, tmp_path):
 def test_sync_applies_and_restores_deployed_value(runtime_env):
     from app.infrastructure import config_runtime as runtime
 
-    runtime.set_override("LLM_API", "http://runtime-llm:8000", "pytest")
-    assert os.environ["LLM_API"] == "http://runtime-llm:8000"
+    runtime.set_override("VLLM_BASE_URL", "http://runtime-llm:8000", "pytest")
+    assert os.environ["VLLM_BASE_URL"] == "http://runtime-llm:8000"
     assert runtime.list_overrides()[0]["updated_by"] == "pytest"
 
-    assert runtime.delete_override("LLM_API") is True
-    assert os.environ["LLM_API"] == "http://original-llm:8000"
+    assert runtime.delete_override("VLLM_BASE_URL") is True
+    assert os.environ["VLLM_BASE_URL"] == "http://original-llm:8000"
 
 
 def test_overridable_rules(runtime_env):
     from app.infrastructure import config_runtime as runtime
 
-    assert runtime.is_overridable("LLM_API") is True
+    assert runtime.is_overridable("VLLM_BASE_URL") is True
     assert runtime.is_overridable("ADMIN_API_TOKEN") is False
     assert runtime.is_overridable("KEYCLOAK_CLIENT_SECRET") is False
     assert runtime.is_overridable("UNKNOWN_CONFIG_KEY") is False
@@ -67,7 +67,7 @@ def test_admin_api_auth_masking_and_override_lifecycle(runtime_env):
     assert client.get("/admin/config/PATH", headers=headers).status_code == 404
 
     put_response = client.put(
-        "/admin/config/LLM_API",
+        "/admin/config/VLLM_BASE_URL",
         headers=headers,
         json={"value": "http://runtime-llm:8000", "updated_by": "pytest"},
     )
@@ -79,7 +79,7 @@ def test_admin_api_auth_masking_and_override_lifecycle(runtime_env):
     assert list_response.status_code == 200
     assert list_response.json()["count"] == 1
 
-    delete_response = client.delete("/admin/config/LLM_API", headers=headers)
+    delete_response = client.delete("/admin/config/VLLM_BASE_URL", headers=headers)
     assert delete_response.status_code == 200
     assert delete_response.json()["effective"] == "http://original-llm:8000"
     assert delete_response.json()["overridden"] is False

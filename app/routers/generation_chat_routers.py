@@ -258,7 +258,7 @@ async def _generate_chat_stream_response(
         raise http_exception(
             503,
             "Conversational generation is unavailable: LLM backend is not "
-            "configured (set LLM_API and Chat_Model).",
+            "configured (set VLLM_BASE_URL and CHAT_MODEL).",
         )
 
     # Territory comes either from a scenario or from an uploaded blocks file.

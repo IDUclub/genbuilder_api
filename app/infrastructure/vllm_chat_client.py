@@ -69,9 +69,9 @@ class VLLMChatClient:
         reasoning_effort: str | None = "low",
     ) -> None:
         if not base_url:
-            raise RuntimeError("LLM_API is not configured.")
+            raise RuntimeError("VLLM_BASE_URL is not configured.")
         if not default_model:
-            raise RuntimeError("a chat model must be configured (Chat_Model).")
+            raise RuntimeError("a chat model must be configured (CHAT_MODEL).")
         self._base_url = base_url.rstrip("/")
         self._chat_path = (
             "/chat/completions"

@@ -1119,7 +1119,7 @@ data: {"status":"queued","job_id":"01K2...","status_url":"https://facades.exampl
 | `422` | Нет источника территории (ни `scenario_id`, ни `blocks_file`); `scenario_id` без `year`/`source`; невалидный GeoJSON в `blocks_file` или `buildings_file` |
 | `404` | Не найдены функциональные зоны/сценарий (классические эндпоинты); слой недоступен или истёк (`/files/{slot}/{result_id}`) |
 | `401` | Битый/просроченный токен на `/layers/functional_zones` и `/files/{slot}/{result_id}` |
-| `503` | LLM-бэкенд не сконфигурирован (`LLM_API` / `Chat_Model`) — только чат-режим |
+| `503` | LLM-бэкенд не сконфигурирован (`VLLM_BASE_URL` / `CHAT_MODEL`) — только чат-режим |
 | `502` | `facade-jobs` ответил внутренней ошибкой — только 3D-режим |
 | `503` | `facade-jobs` не настроен или недоступен — только 3D-режим |
 

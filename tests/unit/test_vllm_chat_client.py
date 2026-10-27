@@ -145,7 +145,7 @@ def test_non_object_json_raises(captured):
 
 
 def test_missing_base_url_raises():
-    with pytest.raises(RuntimeError, match="LLM_API"):
+    with pytest.raises(RuntimeError, match="VLLM_BASE_URL"):
         VLLMChatClient("", default_model="gpt-oss-20b")
 
 

@@ -293,7 +293,7 @@ orchestration-функции, три REST-ручки с ответом `202`, ч
 - логика в `app/logic/generation_orchestration`, в роутерах только HTTP;
 - клиент к `facade-jobs` — в `app/infrastructure/` рядом с
   `chat_storage_client.py` / `vllm_chat_client.py`, на `httpx`;
-- конфиг через `iduconfig.Config` (как `LLM_API`): `FACADE_JOBS_API` и таймауты.
+- конфиг через `iduconfig.Config` (как `VLLM_BASE_URL`): `FACADE_JOBS_API` и таймауты.
   Не настроено → `503` с внятным текстом, как это уже сделано для чата;
 - **синхронно ждать GLB в хендлере нельзя** — минуты работы плюс общая очередь
   делают время неограниченным; отдаём `job_id`, фронт опрашивает `facade-jobs`.

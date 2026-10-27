@@ -139,14 +139,14 @@ def optional_object_storage() -> ObjectStorage | None:
 
 def chat_llm_configured() -> bool:
     """True when a vLLM backend + chat model are configured."""
-    return bool(_optional_env("LLM_API")) and bool(_optional_env("Chat_Model"))
+    return bool(_optional_env("VLLM_BASE_URL")) and bool(_optional_env("CHAT_MODEL"))
 
 
 def build_vllm_chat_client(temperature: float | None = None) -> VLLMChatClient:
     """Construct a per-request vLLM chat client (caller owns its lifetime)."""
     return VLLMChatClient(
-        _optional_env("LLM_API") or "",
-        default_model=_optional_env("Chat_Model") or "",
+        _optional_env("VLLM_BASE_URL") or "",
+        default_model=_optional_env("CHAT_MODEL") or "",
         temperature=0.3 if temperature is None else temperature,
     )
 

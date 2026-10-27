@@ -99,7 +99,7 @@ without rebuilding or restarting the container. Send the token in the
 Example:
 
 ```bash
-curl -X PUT http://localhost:8200/admin/config/LLM_API \
+curl -X PUT http://localhost:8200/admin/config/VLLM_BASE_URL \
   -H 'X-Admin-Token: <ADMIN_API_TOKEN>' \
   -H 'Content-Type: application/json' \
   -d '{"value":"http://new-llm:8001","updated_by":"operator"}'

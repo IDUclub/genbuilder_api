@@ -18,7 +18,7 @@ class Settings(BaseModel):
     """Environment variables used by GenBuilder.
 
     Aliases intentionally preserve the historic spelling of the deployed env
-    keys (``UrbanDB_API``, ``Chat_Model`` and ``ChatStorage_API`` included).
+    keys (``UrbanDB_API`` and ``ChatStorage_API`` included).
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -32,8 +32,8 @@ class Settings(BaseModel):
     )
 
     chat_storage_api: str = Field(default="", alias="ChatStorage_API")
-    chat_model: str = Field(default="", alias="Chat_Model")
-    llm_api: str = Field(default="", alias="LLM_API")
+    chat_model: str = Field(default="", alias="CHAT_MODEL")
+    vllm_base_url: str = Field(default="", alias="VLLM_BASE_URL")
 
     keycloak_url: str = Field(default="", alias="KEYCLOAK_URL")
     keycloak_realm: str = Field(default="", alias="KEYCLOAK_REALM")
