@@ -929,11 +929,13 @@ async def stream_generation_chat(
             yield event
 
     # 6. Stream a natural-language summary grounded on the result (best-effort).
+    # Qwen's chat template accepts only one system message, at the beginning.
+    # Keep both instructions and trusted generation facts in that message.
     summary_messages = [
-        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
         {
             "role": "system",
-            "content": "Сводка генерации (JSON):\n"
+            "content": _SUMMARY_SYSTEM_PROMPT
+            + "\n\nСводка генерации (JSON):\n"
             + json.dumps(summary, ensure_ascii=False),
         },
         {"role": "user", "content": user_query},

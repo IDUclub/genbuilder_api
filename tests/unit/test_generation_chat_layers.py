@@ -175,6 +175,28 @@ def _result_id(descriptor):
     return descriptor["url"].rsplit("/", 1)[-1]
 
 
+def test_summary_uses_one_leading_system_message():
+    class StrictTemplateLLM(_FakeLLM):
+        async def stream_chat(self, messages, **kwargs):
+            assert [message["role"] for message in messages] == ["system", "user"]
+            instructions, raw_summary = messages[0]["content"].split("Сводка генерации (JSON):\n", 1)
+            assert "Не выдумывай числа" in instructions
+            assert json.loads(raw_summary) == {
+                "buildings": 1,
+                "living_area_total": 120.0,
+                "residents_total": 4,
+                "buildings_by_zone": {"residential": 1},
+            }
+            assert messages[1]["content"] == "Построй жильё на 5000 человек"
+            yield ANSWER
+
+    events = _collect(llm_client=StrictTemplateLLM())
+
+    assert not [event for event in events if event["type"] == "warning" and event.get("stage") == "summary"]
+    assert _of_type(events, "token") == [{"type": "token", "content": ANSWER}]
+    assert _types(events).index("result") < _types(events).index("token") < _types(events).index("done")
+
+
 def test_scenario_mode_streams_zones_before_generation(tmp_path):
     events = _collect(
         zones_service=_FakeZones(), object_storage=LocalStorage(str(tmp_path))
