@@ -15,18 +15,23 @@ Request shape::
      "messages": [{"role", "content"}, ...]}
 
 Streamed lines are SSE frames ``data: {...}`` ending with ``data: [DONE]``; the
-answer arrives as ``choices[0].delta.content``. Reasoning models (gpt-oss) put
-their chain of thought in ``choices[0].delta.reasoning``, which is skipped.
+answer arrives as ``choices[0].delta.content``. Thinking is disabled by default
+through the chat template (including Qwen3); any reasoning deltas are skipped.
 """
+
 from __future__ import annotations
 
 import json
 from typing import Any, AsyncIterator
 
 import httpx
+from jsonschema import ValidationError as JsonSchemaValidationError
+from jsonschema import validate as validate_json_schema
+from loguru import logger
 
 _SSE_DATA_PREFIX = "data:"
 _SSE_DONE = "[DONE]"
+_EMPTY_CONTENT_ATTEMPTS = 2
 
 # Pseudo-status for a failure that never reached the server (connect error,
 # DNS failure, timeout) — there is no HTTP status to report in that case.
@@ -56,6 +61,10 @@ def _transport_error(exc: httpx.HTTPError) -> VLLMChatError:
     return VLLMChatError(TRANSPORT_ERROR, f"{type(exc).__name__}: {exc}")
 
 
+class VLLMEmptyContentError(VLLMChatError):
+    """A structured call has neither content nor a recoverable JSON answer."""
+
+
 class VLLMChatClient:
     """Thin async wrapper that streams assistant tokens from a vLLM server."""
 
@@ -66,7 +75,7 @@ class VLLMChatClient:
         default_model: str,
         timeout_seconds: float = 900.0,
         temperature: float = 0.3,
-        reasoning_effort: str | None = "low",
+        reasoning_effort: str | None = None,
     ) -> None:
         if not base_url:
             raise RuntimeError("VLLM_BASE_URL is not configured.")
@@ -107,6 +116,10 @@ class VLLMChatClient:
         effort = self._reasoning_effort if reasoning_effort is None else reasoning_effort
         if effort:
             payload["reasoning_effort"] = effort
+        else:
+            # Qwen defaults to thinking, but extraction and result summaries
+            # need a direct final answer. Do not inherit GPT-OSS's effort setting.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
 
     async def stream_chat(
@@ -169,7 +182,9 @@ class VLLMChatClient:
 
         Sends ``stream: false`` and an OpenAI-style ``response_format`` of type
         ``json_schema`` so the model must return JSON conforming to ``schema``.
-        Parses ``choices[0].message.content`` and returns it as a dict. Raises
+        Parses ``choices[0].message.content`` and returns it as a dict. A complete,
+        schema-valid JSON answer in reasoning is recovered on a normally finished
+        turn if content is empty; otherwise empty content is retried once. Raises
         ``VLLMChatError`` on a non-2xx status, a transport failure, or when the
         content is not a JSON object.
         """
@@ -184,6 +199,21 @@ class VLLMChatClient:
             "type": "json_schema",
             "json_schema": {"name": "response", "schema": schema},
         }
+        for attempt in range(1, _EMPTY_CONTENT_ATTEMPTS):
+            try:
+                return await self._complete_json_once(payload, schema)
+            except VLLMEmptyContentError as exc:
+                logger.warning(
+                    "vLLM structured call attempt {} returned no content, retrying: {}",
+                    attempt,
+                    exc,
+                )
+        return await self._complete_json_once(payload, schema)
+
+    async def _complete_json_once(
+        self, payload: dict[str, Any], schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        """One request/parse cycle; retry only empty structured answers."""
         try:
             resp = await self._client.post(self._chat_path, json=payload)
         except httpx.HTTPError as exc:
@@ -197,7 +227,33 @@ class VLLMChatClient:
         choices = body.get("choices") or []
         if not choices:
             raise VLLMChatError(resp.status_code, resp.text)
-        content = (choices[0].get("message") or {}).get("content") or ""
+        choice = choices[0]
+        message = choice.get("message") or {}
+        content = message.get("content") or ""
+        if not content.strip():
+            # Accept only a whole JSON answer, never an object embedded in a
+            # reasoning plan, and never recover from a truncated completion.
+            if choice.get("finish_reason") == "stop":
+                for field in ("reasoning", "reasoning_content"):
+                    reasoning = message.get(field)
+                    if not isinstance(reasoning, str) or not reasoning.strip():
+                        continue
+                    try:
+                        parsed = json.loads(reasoning)
+                        if not isinstance(parsed, dict):
+                            continue
+                        validate_json_schema(parsed, schema)
+                    except (ValueError, JsonSchemaValidationError):
+                        continue
+                    logger.warning(
+                        "Recovered vLLM structured answer from {} after schema validation",
+                        field,
+                    )
+                    return parsed
+            raise VLLMEmptyContentError(
+                resp.status_code,
+                f"vLLM returned no message content: finish_reason={choice.get('finish_reason')!r}",
+            )
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:

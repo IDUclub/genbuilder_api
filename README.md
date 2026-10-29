@@ -71,6 +71,16 @@ style's 12 m variant-0 section into the low, medium and high preview boxes.
 
 ## Configuration
 
+For vLLM chat, set `VLLM_BASE_URL` to the serving URL and `CHAT_MODEL` to the exact
+model ID returned by `/v1/models` (for example, `qwen3.8-27b`). Requests disable
+thinking with `chat_template_kwargs: {"enable_thinking": false}` by default;
+the old implicit `reasoning_effort=low` is no longer sent. An explicitly passed
+`reasoning_effort` still takes precedence for callers that need reasoning.
+
+When migrating from GPT-OSS to Qwen3.8-27B, configure the separately managed
+vLLM server with `--reasoning-parser qwen3`, as documented in the
+[vLLM Qwen3.8-27B recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-27B).
+
 The deployment workflow can build `.env.development` directly from GitHub
 repository settings (`Settings` → `Secrets and variables` → `Actions`):
 
