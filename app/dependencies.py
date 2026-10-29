@@ -148,6 +148,8 @@ def build_vllm_chat_client(temperature: float | None = None) -> VLLMChatClient:
         _optional_env("VLLM_BASE_URL") or "",
         default_model=_optional_env("CHAT_MODEL") or "",
         temperature=0.3 if temperature is None else temperature,
+        request_priority=int(_optional_env("VLLM_REQUEST_PRIORITY") or "-60"),
+        chat_priority=int(_optional_env("VLLM_CHAT_PRIORITY") or "-100"),
     )
 
 

@@ -81,6 +81,20 @@ When migrating from GPT-OSS to Qwen3.8-27B, configure the separately managed
 vLLM server with `--reasoning-parser qwen3`, as documented in the
 [vLLM Qwen3.8-27B recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-27B).
 
+The shared priority matrix follows PzzCompareAPI:
+
+| LLM operation | Class | Environment variable | Default |
+|---|---|---|---:|
+| Parameter extraction, zone attribute detection and mapping | live-long / blocking | `VLLM_REQUEST_PRIORITY` | `-60` |
+| New chat title | live / semi-blocking | `VLLM_REQUEST_PRIORITY` | `-60` |
+| User-facing result summary | live / blocking | `VLLM_CHAT_PRIORITY` | `-100` |
+
+Every request sends its `priority` in the JSON body, including retries. Both
+settings accept signed 64-bit integers; `0` disables prioritization. Non-zero
+values require the vLLM server to run with `--scheduling-policy priority`;
+the default `fcfs` scheduler rejects them. Lower numbers are handled first.
+See the [vLLM scheduler documentation](https://docs.vllm.ai/en/latest/cli/serve/#scheduling-policy).
+
 The deployment workflow can build `.env.development` directly from GitHub
 repository settings (`Settings` → `Secrets and variables` → `Actions`):
 
