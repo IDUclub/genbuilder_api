@@ -76,6 +76,8 @@ class VLLMChatClient:
         timeout_seconds: float = 900.0,
         temperature: float = 0.3,
         reasoning_effort: str | None = None,
+        request_priority: int = -60,
+        chat_priority: int = -100,
     ) -> None:
         if not base_url:
             raise RuntimeError("VLLM_BASE_URL is not configured.")
@@ -90,6 +92,8 @@ class VLLMChatClient:
         self._default_model = default_model
         self._temperature = temperature
         self._reasoning_effort = reasoning_effort
+        self._request_priority = request_priority
+        self._chat_priority = chat_priority
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout_seconds)
 
     async def __aenter__(self) -> "VLLMChatClient":
@@ -110,6 +114,7 @@ class VLLMChatClient:
         payload: dict[str, Any] = {
             "model": model or self._default_model,
             "stream": stream,
+            "priority": self._chat_priority if stream else self._request_priority,
             "messages": messages,
             "temperature": temperature,
         }

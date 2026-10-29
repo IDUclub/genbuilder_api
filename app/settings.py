@@ -34,6 +34,12 @@ class Settings(BaseModel):
     chat_storage_api: str = Field(default="", alias="ChatStorage_API")
     chat_model: str = Field(default="", alias="CHAT_MODEL")
     vllm_base_url: str = Field(default="", alias="VLLM_BASE_URL")
+    vllm_request_priority: int = Field(
+        default=-60, ge=-(2**63), le=2**63 - 1, alias="VLLM_REQUEST_PRIORITY"
+    )
+    vllm_chat_priority: int = Field(
+        default=-100, ge=-(2**63), le=2**63 - 1, alias="VLLM_CHAT_PRIORITY"
+    )
 
     keycloak_url: str = Field(default="", alias="KEYCLOAK_URL")
     keycloak_realm: str = Field(default="", alias="KEYCLOAK_REALM")

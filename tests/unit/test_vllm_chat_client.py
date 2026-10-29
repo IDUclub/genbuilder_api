@@ -69,6 +69,7 @@ def test_stream_chat_yields_content_and_skips_reasoning(captured):
     assert str(request.url) == "http://vllm:8001/v1/chat/completions"
     payload = _body(request)
     assert payload["stream"] is True
+    assert payload["priority"] == -100
     assert payload["model"] == "gpt-oss-20b"
     assert payload["temperature"] == 0.7
     assert "reasoning_effort" not in payload
@@ -98,6 +99,7 @@ def test_complete_json_sends_schema_and_parses_content(captured):
 
     payload = _body(requests[0])
     assert payload["stream"] is False
+    assert payload["priority"] == -60
     assert payload["temperature"] == 0.0
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
@@ -153,6 +155,26 @@ def test_explicit_reasoning_effort_remains_supported(captured):
     payload = _body(requests[0])
     assert payload["reasoning_effort"] == "low"
     assert "chat_template_kwargs" not in payload
+
+
+@pytest.mark.parametrize("request_priority,chat_priority", [(-60, -100), (-20, -80), (0, 0)])
+def test_configured_priorities_reach_both_request_types(captured, request_priority, chat_priority):
+    requests, responses = captured
+    responses["response"] = [
+        httpx.Response(200, json={"choices": [{"message": {"content": '{"zones": []}'}}]}),
+        httpx.Response(200, content=STREAM_BODY.encode("utf-8")),
+    ]
+
+    async def run():
+        async with VLLMChatClient(
+            "http://vllm:8001", default_model="qwen3.8-27b",
+            request_priority=request_priority, chat_priority=chat_priority,
+        ) as client:
+            await client.complete_json([], schema=SCHEMA)
+            assert [delta async for delta in client.stream_chat([])] == ["Итого", ": 120 зданий"]
+
+    asyncio.run(run())
+    assert [_body(request)["priority"] for request in requests] == [request_priority, chat_priority]
 
 
 def test_error_status_raises(captured):
@@ -264,6 +286,23 @@ def test_recovered_answer_reaches_generation_target_extraction(captured):
     assert targets.error is None
     assert targets.total_residents == 500
     assert len(requests) == 1
+    assert _body(requests[0])["priority"] == -60
+
+
+def test_chat_title_uses_the_semi_blocking_priority(captured):
+    from app.logic.chat.chat_title import make_chat_title
+
+    requests, responses = captured
+    responses["response"] = httpx.Response(
+        200, json={"choices": [{"message": {"content": '{"title": "Генерация жилья на 500 жителей"}'}}]}
+    )
+
+    async def run():
+        async with VLLMChatClient("http://vllm:8001", default_model="qwen3.8-27b") as client:
+            return await make_chat_title(client, user_query="количество жителей 500")
+
+    assert asyncio.run(run()) == "Генерация жилья на 500 жителей"
+    assert _body(requests[0])["priority"] == -60
 
 
 @pytest.mark.parametrize(
@@ -308,6 +347,7 @@ def test_complete_json_retries_unusable_reasoning(captured, reasoning, finish_re
     assert asyncio.run(run()) == {"zones": []}
     assert len(requests) == 2
     assert _body(requests[0]) == _body(requests[1])
+    assert [_body(request)["priority"] for request in requests] == [-60, -60]
 
 
 def test_complete_json_bounds_empty_content_retries(captured):
