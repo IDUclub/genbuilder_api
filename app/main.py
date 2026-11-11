@@ -17,6 +17,7 @@ from app.dependencies import (
     setup_logger,
 )
 from app.mcp_server import mcp_app
+from app.resumable_streams import install_resumable_streams, user_owner
 from app.routers.generation_routers import generation_router
 from app.routers.generation_chat_routers import generation_chat_router
 from app.routers.layers_routers import layers_router
@@ -25,6 +26,7 @@ from app.routers.logs_routers import logs_router
 from app.routers.admin_config_routers import router as admin_config_router
 from app.observability import OpenTelemetryAgent, PrometheusConfig
 from app.observability.metrics import setup_metrics
+from app.utils.auth import get_current_user, http_bearer
 from app.common.middlewares import (
     ExceptionHandlerMiddleware,
     ObservabilityMiddleware,
@@ -80,6 +82,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
 app.add_middleware(ExceptionHandlerMiddleware, metrics=metrics)
 app.add_middleware(ObservabilityMiddleware, metrics=metrics)
@@ -103,3 +106,12 @@ app.mount("/mcp", mcp_app)
 
 # A2A discovery (/.well-known/agent-card.json) + JSON-RPC (/a2a).
 register_a2a_routes(app)
+
+
+async def _stream_owner(request):
+    return user_owner(await get_current_user(await http_bearer(request)))
+
+
+install_resumable_streams(
+    app, service="genbuilder", prefix="", authenticate=_stream_owner
+)
