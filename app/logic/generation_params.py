@@ -34,6 +34,10 @@ class GenParams(BaseModel):
     """Upper bound for dynamic buffer (in meters)."""
     service_projects_file: str = str( Path(__file__).resolve().parent / "service_projects.geojson")
     """path to service projects file with geometry and plot/building parameters"""
+    supported_service_type_ids: tuple[int, ...] = (21, 22, 28, 34, 35, 61, 78, 89, 90)
+    """Urban API service type ids GenBuilder places; other types of a normative are out of scope"""
+    min_service_demand_share: float = 0.5
+    """share of the smallest template capacity a demand must reach to justify a building"""
     seed: Optional[int] = None
     """random seed for service placement; None - non-deterministic"""
 
