@@ -1,3 +1,5 @@
+**English** | [Русский](README.ru.md)
+
 # GenBuilder API
 API for GenBuilder. Can generate images with buildings and other objects for city blocks, vectorize and normalize them.
 
@@ -170,34 +172,39 @@ The frontend must treat a `404` from `/files/{slot}/{result_id}` as an expected
 outcome when reading an old chat. See
 [the frontend API guide](docs/frontend-api-guide.md#5-геослои-подложка-и-ссылки-в-истории).
 
-## Текстовые отчёты сервиса
+## Text reports
 
-После выполнения операции чат дополнительно возвращает событие `file` с
-`name: "report"`, `role: "report"`, `mime_type: "text/plain"`, `filename: "Отчёт.txt"`.
-Обычный текстовый ответ остаётся в потоке. Ссылка на отчёт сохраняется рядом с ним
-в истории ChatStorage как часть `kind: "file"`; содержимое файла в историю не копируется.
+After an operation completes, the chat additionally emits a `file` event with
+`name: "report"`, `role: "report"`, `mime_type: "text/plain"`, `filename: "Отчёт.txt"`
+("Report.txt"). The regular text answer stays in the stream. The link to the report is
+stored next to it in the ChatStorage history as a `kind: "file"` part; the file contents
+are not copied into the history.
 
-Дескриптор содержит две долговечные ссылки относительно базы `source_service`:
+The descriptor carries two durable links relative to the `source_service` base URL:
 
-- `url`: `GET /reports/id` — UTF-8 текст для просмотра (`Content-Disposition: inline`).
-- `download_url`: тот же адрес с `?download=true` — скачивание (`attachment; filename="report.txt"`).
+- `url`: `GET /reports/id` — UTF-8 text for viewing (`Content-Disposition: inline`).
+- `download_url`: the same address with `?download=true` — download (`attachment; filename="report.txt"`).
 
-В SSE `event: file` поля дескриптора находятся непосредственно в JSON `data`.
-Отчёт включает полный ответ, сводку застройки, целевые и достигнутые показатели по зонам, дефициты, параметры и замечания. Он формируется из результата генерации даже при сбое текстового резюме LLM.
+In the SSE `event: file`, the descriptor fields sit directly in the JSON `data`.
+The report contains the full answer, a development summary, target and achieved metrics
+per zone, shortfalls, parameters and remarks. It is built from the generation result
+even if the LLM text summary fails.
 
-Фронтенду следует читать отчёт как текст, не как GeoJSON и не как HTML. Для показа
-достаточно `fetch(url).text()` и текстового компонента с сохранением переносов строк.
-Ссылки проходят через API сервиса: доступ к внутреннему MinIO браузеру не нужен.
-Запросы отчёта требуют тот же Bearer-токен, что и запросы слоёв. При сбое хранилища приходит `warning` с `stage: store_report`.
+The frontend should read the report as text, not as GeoJSON or HTML. To display it,
+`fetch(url).text()` and a text component that preserves line breaks are enough.
+Links go through the service API, so the browser never needs access to the internal MinIO.
+Report requests require the same Bearer token as layer requests. If storage fails, a
+`warning` with `stage: store_report` is emitted.
 
+The report is written in Russian, following the layout of a regulatory compliance check:
+headings, a summary metrics table and separate detail sections. In PZZ (zoning
+regulations) reports, objects are grouped by compliance and by whether they need manual
+review; a classification result is never presented as a PZZ compliance check.
+The text is saved as UTF-8 TXT with Markdown markup suitable for rendering on the
+frontend. Internal API fields are omitted; parameter names, zone names and system
+statuses are translated. Original zone codes, VRI (permitted use type) codes, document
+codes and metric values are kept as is. These changes affect only how the report is
+presented; the JSON and SSE schemas are unchanged.
 
-Отчёт оформлен на русском языке по образцу нормативной проверки: заголовки,
-таблица сводных показателей и отдельные разделы подробностей. В отчётах ПЗЗ
-объекты сгруппированы по соответствию и необходимости ручной проверки;
-результат классификации не объявляется проверкой соответствия ПЗЗ.
-Текст сохраняется в UTF-8 TXT с разметкой Markdown, пригодной для отображения
-на фронте. Служебные поля API исключены; названия параметров, зон и системные
-статусы переведены. Исходные коды зон, ВРИ, документов и значения показателей
-сохраняются. Изменения касаются представления отчёта, схема JSON и SSE не меняется.
-
-Для скачивания используется русское имя `Отчёт.txt` через параметр заголовка `filename*`; `filename` содержит совместимое резервное имя.
+For download, the Russian file name `Отчёт.txt` is sent via the `filename*` header
+parameter; `filename` carries an ASCII-compatible fallback name.
